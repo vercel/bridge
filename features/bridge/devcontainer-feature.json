@@ -22,7 +22,7 @@
     },
     "syncSource": {
       "type": "string",
-      "description": "Local directory to sync from",
+      "description": "Local directory to sync from ",
       "default": "."
     },
     "syncTarget": {
