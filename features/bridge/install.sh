@@ -46,7 +46,7 @@ get_latest_version() {
 
 # Download and install bridge binary
 install_bridge() {
-    local version="${BRIDGEVERSION:-latest}"
+    local version="${BRIDGEVERSION:-edge}"
     local arch=$(get_arch)
     local os="linux"
 
@@ -81,17 +81,19 @@ write_env_config() {
     # Feature options are available as uppercase versions without special chars
     {
         echo "SANDBOX_URL=${SANDBOXURL:-}"
-        echo "LOCAL_TARGET=${LOCALTARGET:-127.0.0.1:8000}"
-        echo "VERCEL_FUNCTION_URL=${VERCELFUNCTIONURL:-}"
-        echo "FORWARD_DOMAINS=${FORWARDDOMAINS:-}"
+        echo "FUNCTION_URL=${FUNCTIONURL:-}"
+        echo "SANDBOX_NAME=${SANDBOXNAME:-}"
+        echo "SYNC_SOURCE=${SYNCSOURCE:-.}"
+        echo "SYNC_TARGET=${SYNCTARGET:-}"
     } >> /etc/environment
 
     # Also write to /etc/profile.d for shell login sessions
     cat > /etc/profile.d/bridge.sh << EOF
 export SANDBOX_URL="${SANDBOXURL:-}"
-export LOCAL_TARGET="${LOCALTARGET:-127.0.0.1:8000}"
-export VERCEL_FUNCTION_URL="${VERCELFUNCTIONURL:-}"
-export FORWARD_DOMAINS="${FORWARDDOMAINS:-}"
+export FUNCTION_URL="${FUNCTIONURL:-}"
+export SANDBOX_NAME="${SANDBOXNAME:-}"
+export SYNC_SOURCE="${SYNCSOURCE:-.}"
+export SYNC_TARGET="${SYNCTARGET:-}"
 EOF
 }
 

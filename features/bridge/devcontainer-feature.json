@@ -1,5 +1,5 @@
 {
-  "id": "devconfeat",
+  "id": "bridge",
   "version": "1.1.0",
   "name": "Bridge Tunnel Client",
   "description": "Connects to the bridge server running on a Vercel Sandbox to forward inbound requests to local applications and intercept outbound traffic via iptables.",
@@ -10,32 +10,38 @@
       "description": "URL of the bridge server running on the Vercel Sandbox (e.g., https://sandbox-abc123.vercel.run)",
       "default": ""
     },
-    "localTarget": {
+    "functionUrl": {
       "type": "string",
-      "description": "Local address to forward inbound requests to",
-      "default": "127.0.0.1:8000"
-    },
-    "vercelFunctionUrl": {
-      "type": "string",
-      "description": "URL of the Vercel dispatcher function this container represents (required for tunnel registration)",
+      "description": "URL of the dispatcher function (required for tunnel registration)",
       "default": ""
     },
-    "forwardDomains": {
+    "sandboxName": {
       "type": "string",
-      "description": "Comma-separated list of domain patterns to forward through the tunnel (e.g., '*.example.com,**.internal,api.service.com')",
+      "description": "Name for the sandbox (used for SSH config alias)",
+      "default": ""
+    },
+    "syncSource": {
+      "type": "string",
+      "description": "Local directory to sync from",
+      "default": "."
+    },
+    "syncTarget": {
+      "type": "string",
+      "description": "Remote directory on sandbox to sync to",
       "default": ""
     },
     "bridgeVersion": {
       "type": "string",
-      "description": "Version of bridge CLI to install (e.g., 'v1.0.0' or 'latest')",
-      "default": "latest"
+      "description": "Version of bridge CLI to install (e.g., 'v1.0.0' or 'edge')",
+      "default": "edge"
     }
   },
   "containerEnv": {
     "SANDBOX_URL": "${sandboxUrl}",
-    "LOCAL_TARGET": "${localTarget}",
-    "VERCEL_FUNCTION_URL": "${vercelFunctionUrl}",
-    "FORWARD_DOMAINS": "${forwardDomains}"
+    "FUNCTION_URL": "${functionUrl}",
+    "SANDBOX_NAME": "${sandboxName}",
+    "SYNC_SOURCE": "${syncSource}",
+    "SYNC_TARGET": "${syncTarget}"
   },
   "capAdd": [
     "NET_ADMIN"
