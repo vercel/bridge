@@ -187,14 +187,18 @@ func (s *WSServer) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		"has_bypass_secret", reg.GetProtectionBypassSecret() != "",
 	)
 
+	// Derive the public sandbox URL from the Host header so the dispatcher
+	// receives a routable URL rather than the server's bind address.
+	sandboxURL := "https://" + r.Host
+
 	if reg.GetIsServer() {
 		s.handleServerRegistration(wsConn, reg, remoteAddr)
 	} else {
-		s.handleClientRegistration(r.Context(), wsConn, reg, remoteAddr)
+		s.handleClientRegistration(r.Context(), wsConn, reg, remoteAddr, sandboxURL)
 	}
 }
 
-func (s *WSServer) handleClientRegistration(ctx context.Context, wsConn *websocket.Conn, reg *bridgev1.Message_Registration, remoteAddr string) {
+func (s *WSServer) handleClientRegistration(ctx context.Context, wsConn *websocket.Conn, reg *bridgev1.Message_Registration, remoteAddr string, sandboxURL string) {
 	deploymentID := reg.GetDeploymentId()
 	functionURL := reg.GetFunctionUrl()
 
@@ -239,7 +243,7 @@ func (s *WSServer) handleClientRegistration(ctx context.Context, wsConn *websock
 	}()
 
 	// POST to the dispatcher to trigger server connection
-	if err := s.notifyDispatcher(pairCtx, functionURL, s.addr, reg.GetProtectionBypassSecret()); err != nil {
+	if err := s.notifyDispatcher(pairCtx, functionURL, sandboxURL, reg.GetProtectionBypassSecret()); err != nil {
 		slog.Error("failed to notify dispatcher", "error", err, "function_url", functionURL, "remote", remoteAddr)
 		s.sendError(wsConn, fmt.Sprintf("failed to connect to dispatcher: %v", err))
 		return
