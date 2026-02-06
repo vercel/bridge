@@ -119,8 +119,12 @@ create_entrypoint() {
 
 # Read VERCEL_AUTOMATION_BYPASS_SECRET from env file if not already set
 if [ -z "$VERCEL_AUTOMATION_BYPASS_SECRET" ] && [ -n "$BRIDGE_ENV_FILE" ]; then
-    # Try workspace-relative path first, then absolute
-    for candidate in "/workspaces/${BRIDGE_ENV_FILE}" "${BRIDGE_ENV_FILE}"; do
+    # Search for env file in common locations
+    # Devcontainers typically mount to /workspaces/<repo-name>/
+    for candidate in \
+        "/workspaces"/*/"${BRIDGE_ENV_FILE}" \
+        "/workspaces/${BRIDGE_ENV_FILE}" \
+        "${BRIDGE_ENV_FILE}"; do
         if [ -f "$candidate" ]; then
             VERCEL_AUTOMATION_BYPASS_SECRET=$(grep -m1 '^VERCEL_AUTOMATION_BYPASS_SECRET=' "$candidate" | sed 's/^VERCEL_AUTOMATION_BYPASS_SECRET=//' | sed 's/^"//;s/"$//')
             export VERCEL_AUTOMATION_BYPASS_SECRET

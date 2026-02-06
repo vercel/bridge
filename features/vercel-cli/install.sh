@@ -51,8 +51,9 @@ cat > "$VERCEL_BIN" << 'WRAPPER'
 
 # If VERCEL_TOKEN not already set, read it from the env file
 if [ -z "$VERCEL_TOKEN" ]; then
-  # Try workspace-relative path first, then absolute
-  for candidate in "/workspaces/${ENVFILE}" "${ENVFILE}"; do
+  # Search for env file in common locations
+  # Devcontainers typically mount to /workspaces/<repo-name>/
+  for candidate in "/workspaces"/*/"${ENVFILE}" "/workspaces/${ENVFILE}" "${ENVFILE}"; do
     if [ -f "$candidate" ]; then
       VERCEL_TOKEN=$(grep -m1 '^VERCEL_TOKEN=' "$candidate" | sed 's/^VERCEL_TOKEN=//' | sed 's/^"//;s/"$//')
       break
