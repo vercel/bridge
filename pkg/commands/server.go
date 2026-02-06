@@ -73,6 +73,9 @@ func runServer(ctx context.Context, c *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("invalid addr %q: %w", addr, err)
 	}
+	if host == "" {
+		host = "0.0.0.0"
+	}
 
 	cfg := sshserver.Config{
 		Host:            host,
