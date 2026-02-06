@@ -1,6 +1,7 @@
 import type {VercelRequest, VercelResponse} from "@vercel/node";
-import {waitUntil, getEnv} from "@vercel/functions";
+import {waitUntil} from "@vercel/functions";
 import {handleRequest, type ResponseWriter} from "../src/common-handler.js";
+import {getCurrentTunnelClient} from "../src/connection.js";
 
 /**
  * Adapts VercelResponse to ResponseWriter interface
@@ -24,23 +25,43 @@ function adaptResponse(res: VercelResponse): ResponseWriter {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Use Vercel SDK for system environment variables
-  const env = getEnv();
-
   // Get body as string for POST requests
   let body: string | undefined;
   if (req.method === "POST" && req.body) {
     body = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
   }
 
-  await handleRequest(
-    {method: req.method || "GET", url: req.url || "/", body},
-    adaptResponse(res),
-    {
-      baseTunnelClientOptions: {
-        functionUrl: env.VERCEL_URL ? `https://${env.VERCEL_URL}` : undefined,
-      },
-      onBackgroundStart: (promise) => waitUntil(promise),
+  // Collect headers as flat record
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (typeof value === "string") {
+      headers[key] = value;
+    } else if (Array.isArray(value)) {
+      headers[key] = value.join(", ");
     }
+  }
+
+  // Resolve source IP from x-forwarded-for or socket
+  const forwardedFor = req.headers["x-forwarded-for"];
+  const remoteIp = typeof forwardedFor === "string"
+    ? forwardedFor.split(",")[0].trim()
+    : req.socket?.remoteAddress;
+
+  await handleRequest(
+    {
+      method: req.method || "GET",
+      url: req.url || "/",
+      headers,
+      body,
+      remoteIp,
+      remotePort: req.socket?.remotePort,
+    },
+    adaptResponse(res)
   );
+
+  // Keep the Vercel function alive while the WebSocket processes messages
+  const client = getCurrentTunnelClient();
+  if (client) {
+    waitUntil(client.runUntilDone());
+  }
 }

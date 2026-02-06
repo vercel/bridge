@@ -155,13 +155,6 @@ export declare type Message_Registration = Message$1<"bridge.v1.Message.Registra
    * @generated from field: string protection_bypass_secret = 4 [json_name = "protection_bypass_secret"];
    */
   protectionBypassSecret: string;
-
-  /**
-   * The connection key for pairing client and server tunnel connections.
-   *
-   * @generated from field: string connection_key = 5 [json_name = "connection_key"];
-   */
-  connectionKey: string;
 };
 
 /**

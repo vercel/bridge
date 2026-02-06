@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os/signal"
 	"syscall"
 	"time"
@@ -25,22 +26,16 @@ func Server() *cli.Command {
 				Sources: cli.EnvVars("REACH_NAME"),
 			},
 			&cli.StringFlag{
-				Name:    "host",
-				Usage:   "Host to bind to",
-				Value:   "0.0.0.0",
-				Sources: cli.EnvVars("SSH_HOST"),
+				Name:    "addr",
+				Usage:   "Address to bind the server to",
+				Value:   "0.0.0.0:3000",
+				Sources: cli.EnvVars("BRIDGE_ADDR"),
 			},
 			&cli.IntFlag{
-				Name:    "port",
+				Name:    "ssh-port",
 				Usage:   "SSH port to listen on",
 				Value:   2222,
 				Sources: cli.EnvVars("SSH_PORT"),
-			},
-			&cli.IntFlag{
-				Name:    "proxy-port",
-				Usage:   "HTTP CONNECT proxy port",
-				Value:   3000,
-				Sources: cli.EnvVars("PROXY_PORT"),
 			},
 			&cli.DurationFlag{
 				Name:    "idle-timeout",
@@ -70,9 +65,14 @@ func runServer(ctx context.Context, c *cli.Command) error {
 	}
 
 	name := c.String("name")
-	host := c.String("host")
-	sshPort := c.Int("port")
-	proxyPort := c.Int("proxy-port")
+	addr := c.String("addr")
+	sshPort := c.Int("ssh-port")
+
+	// Parse host from addr for SSH server binding
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid addr %q: %w", addr, err)
+	}
 
 	cfg := sshserver.Config{
 		Host:            host,
@@ -94,7 +94,7 @@ func runServer(ctx context.Context, c *cli.Command) error {
 
 	// Use WebSocket server for tunneling
 	wsServer := proxy.NewWSServer(proxy.WSServerConfig{
-		Addr:   fmt.Sprintf("%s:%d", host, proxyPort),
+		Addr:   addr,
 		Dialer: &proxy.TCPDialer{Addr: fmt.Sprintf("localhost:%d", sshPort)},
 		Name:   name,
 	})

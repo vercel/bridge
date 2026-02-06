@@ -6,14 +6,13 @@ import {
   Message_Protocol,
   type Message,
 } from "@vercel/bridge-api";
+import {randomUUID} from "crypto";
 import * as net from "net";
 import WebSocket from "ws";
 import {logger} from "./logger.js";
 
 export interface TunnelConfig {
-  sandboxUrl: string;
-  connectionKey: string;
-  functionUrl: string;
+  serverAddr: string;
 }
 
 interface PendingRequest {
@@ -42,7 +41,7 @@ export class TunnelClient {
 
   async connect(): Promise<void> {
     // Convert HTTP URL to WebSocket URL
-    let wsUrl = this.config.sandboxUrl;
+    let wsUrl = this.config.serverAddr;
     if (wsUrl.startsWith("https://")) {
       wsUrl = "wss://" + wsUrl.slice(8);
     } else if (wsUrl.startsWith("http://")) {
@@ -71,7 +70,6 @@ export class TunnelClient {
         const registration = create(Message_RegistrationSchema, {
           isServer: true,
           protocol: Message_Protocol.TCP,
-          connectionKey: this.config.connectionKey,
         });
 
         const registrationMsg = create(MessageSchema, {
@@ -333,11 +331,12 @@ export class TunnelClient {
   }
 
   async forwardRequest(
-    connectionId: string,
     data: Uint8Array,
     source: { ip: string; port: number },
     dest: { ip: string; port: number }
   ): Promise<Message> {
+    const connectionId = randomUUID();
+
     return new Promise((resolve, reject) => {
       this.pendingRequests.set(connectionId, {
         resolve,
@@ -363,16 +362,6 @@ export class TunnelClient {
         }
       }, 30000);
     });
-  }
-
-  async closeRequest(connectionId: string): Promise<void> {
-    const msg = create(MessageSchema, {
-      data: new Uint8Array(),
-      connectionId,
-      close: true,
-    });
-    this.queueMessage(msg);
-    this.pendingRequests.delete(connectionId);
   }
 
   private concatenateChunks(chunks: Uint8Array[]): Uint8Array {

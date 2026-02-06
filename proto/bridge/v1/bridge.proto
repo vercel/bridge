@@ -39,9 +39,6 @@ message Message {
 
     // The Vercel deployment protection bypass secret (optional).
     string protection_bypass_secret = 4 [json_name = "protection_bypass_secret"];
-
-    // The connection key for pairing client and server tunnel connections.
-    string connection_key = 5 [json_name = "connection_key"];
   }
 
   // Registration is only sent on the first message to register with bridge.

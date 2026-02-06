@@ -49,8 +49,25 @@ export async function handler(
     body = await readBody(req);
   }
 
+  // Collect headers as flat record
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (typeof value === "string") {
+      headers[key] = value;
+    } else if (Array.isArray(value)) {
+      headers[key] = value.join(", ");
+    }
+  }
+
   await handleRequest(
-    { method: req.method || "GET", url: req.url || "/", body },
+    {
+      method: req.method || "GET",
+      url: req.url || "/",
+      headers,
+      body,
+      remoteIp: req.socket.remoteAddress,
+      remotePort: req.socket.remotePort,
+    },
     adaptResponse(res)
   );
 }

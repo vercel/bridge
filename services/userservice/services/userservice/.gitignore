@@ -1,6 +1,0 @@
-
-# Vercel connect env
-.env.development.local
-
-# Vercel connect devcontainers
-.devcontainer/

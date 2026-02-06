@@ -1,11 +1,12 @@
-import { getTunnelClient, resetTunnelClient, getCurrentTunnelClient, type GetTunnelClientOptions } from "./connection.js";
-import { fromJson } from "@bufbuild/protobuf";
-import { ServerConnectionSchema, type ServerConnection } from "@vercel/bridge-api";
+import { getTunnelClient, resetTunnelClient, getCurrentTunnelClient } from "./connection.js";
 
 export interface RequestInfo {
   method: string;
   url: string;
+  headers?: Record<string, string>;
   body?: string;
+  remoteIp?: string;
+  remotePort?: number;
 }
 
 export interface ResponseWriter {
@@ -15,33 +16,103 @@ export interface ResponseWriter {
   json(body: object): void;
 }
 
-export interface HandlerContext {
-  /** Base options for tunnel client (functionUrl) */
-  baseTunnelClientOptions?: Omit<GetTunnelClientOptions, "sandboxUrl" | "connectionKey">;
-  /** Called when background processing should start (e.g., waitUntil) */
-  onBackgroundStart?: (promise: Promise<void>) => void;
+/**
+ * Builds a raw HTTP request buffer from request info.
+ */
+function buildHttpRequest(req: RequestInfo): Uint8Array {
+  const lines: string[] = [];
+  lines.push(`${req.method} ${req.url} HTTP/1.1`);
+
+  if (req.headers) {
+    for (const [key, value] of Object.entries(req.headers)) {
+      lines.push(`${key}: ${value}`);
+    }
+  }
+
+  if (req.body) {
+    if (!req.headers?.["content-length"] && !req.headers?.["Content-Length"]) {
+      lines.push(`Content-Length: ${Buffer.byteLength(req.body)}`);
+    }
+  }
+
+  lines.push(""); // blank line separating headers from body
+  let raw = lines.join("\r\n") + "\r\n";
+  if (req.body) {
+    raw += req.body;
+  }
+
+  return new TextEncoder().encode(raw);
 }
 
-// Track if background processing has been started
-let backgroundProcessingStarted = false;
+/**
+ * Parses a raw HTTP response buffer into status, headers, and body.
+ */
+function parseHttpResponse(data: Uint8Array): {
+  statusCode: number;
+  statusText: string;
+  headers: Record<string, string>;
+  body: Uint8Array;
+} {
+  const text = new TextDecoder().decode(data);
+  const headerEnd = text.indexOf("\r\n\r\n");
+  if (headerEnd === -1) {
+    return { statusCode: 502, statusText: "Bad Gateway", headers: {}, body: new Uint8Array() };
+  }
 
-// Default validation regex allows localhost and Vercel sandbox URLs
-const DEFAULT_SANDBOX_URL_VALIDATION = "^https?://(localhost(:\\d+)?|sb-[a-z0-9]+\\.vercel\\.run)(/.*)?$";
+  const headerSection = text.slice(0, headerEnd);
+  const bodyStart = headerEnd + 4; // skip \r\n\r\n
+  const bodyBytes = data.slice(new TextEncoder().encode(text.slice(0, bodyStart)).length);
+
+  const headerLines = headerSection.split("\r\n");
+  const statusLine = headerLines[0];
+  const statusMatch = statusLine.match(/^HTTP\/\d\.\d\s+(\d+)\s*(.*)/);
+  const statusCode = statusMatch ? parseInt(statusMatch[1], 10) : 502;
+  const statusText = statusMatch ? statusMatch[2] : "Bad Gateway";
+
+  const headers: Record<string, string> = {};
+  for (let i = 1; i < headerLines.length; i++) {
+    const colonIdx = headerLines[i].indexOf(":");
+    if (colonIdx !== -1) {
+      const key = headerLines[i].slice(0, colonIdx).trim();
+      const value = headerLines[i].slice(colonIdx + 1).trim();
+      headers[key.toLowerCase()] = value;
+    }
+  }
+
+  return { statusCode, statusText, headers, body: bodyBytes };
+}
 
 /**
- * Validates the sandbox URL against the BRIDGE_SANDBOX_URL_VALIDATION regex.
- * Returns true if valid, false otherwise.
+ * Dechunks a Transfer-Encoding: chunked body.
  */
-function validateSandboxUrl(sandboxUrl: string): boolean {
-  const validationRegex = process.env.BRIDGE_SANDBOX_URL_VALIDATION || DEFAULT_SANDBOX_URL_VALIDATION;
+function dechunkBuffer(data: Uint8Array): Uint8Array {
+  const text = new TextDecoder().decode(data);
+  const chunks: Uint8Array[] = [];
+  let pos = 0;
 
-  try {
-    const regex = new RegExp(validationRegex);
-    return regex.test(sandboxUrl);
-  } catch (error) {
-    console.error("Invalid BRIDGE_SANDBOX_URL_VALIDATION regex:", error);
-    return false;
+  while (pos < text.length) {
+    const lineEnd = text.indexOf("\r\n", pos);
+    if (lineEnd === -1) break;
+
+    const sizeStr = text.slice(pos, lineEnd).trim();
+    const size = parseInt(sizeStr, 16);
+    if (isNaN(size) || size === 0) break;
+
+    const chunkStart = lineEnd + 2;
+    const chunkData = new TextEncoder().encode(text.slice(chunkStart, chunkStart + size));
+    chunks.push(chunkData);
+
+    pos = chunkStart + size + 2; // skip chunk data + \r\n
   }
+
+  const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
 }
 
 /**
@@ -50,20 +121,13 @@ function validateSandboxUrl(sandboxUrl: string): boolean {
  */
 export async function handleRequest(
   req: RequestInfo,
-  res: ResponseWriter,
-  ctx: HandlerContext = {}
+  res: ResponseWriter
 ): Promise<boolean> {
   console.log(`Incoming request: ${req.method} ${req.url}`);
 
   // Health check endpoint
   if (req.url === "/__bridge/health") {
     res.status(200).send("dispatcher ok");
-    return true;
-  }
-
-  // Tunnel connect endpoint - receives ServerConnection from bridge server
-  if (req.url === "/__tunnel/connect" && req.method === "POST") {
-    await handleTunnelConnect(req, res, ctx);
     return true;
   }
 
@@ -84,128 +148,50 @@ export async function handleRequest(
     return true;
   }
 
-  // Default: return 404 for unknown routes
-  res.status(404).json({
-    error: "Not Found",
-    message: "Unknown endpoint. Use /__tunnel/connect to establish tunnel.",
-  });
-  return true;
-}
-
-async function handleTunnelConnect(
-  req: RequestInfo,
-  res: ResponseWriter,
-  ctx: HandlerContext
-): Promise<void> {
-  // Parse ServerConnection from request body
-  if (!req.body) {
-    res.status(400).json({
-      status: "error",
-      error: "Missing request body",
-      details: "Expected ServerConnection JSON payload",
-    });
-    return;
-  }
-
-  let serverConnection: ServerConnection;
+  // Proxy all other requests through the tunnel
   try {
-    const jsonData = JSON.parse(req.body);
-    serverConnection = fromJson(ServerConnectionSchema, jsonData);
-  } catch (error) {
-    console.error("Failed to parse ServerConnection:", error);
-    res.status(400).json({
-      status: "error",
-      error: "Invalid request body",
-      details: error instanceof Error ? error.message : String(error),
-    });
-    return;
-  }
+    const client = await getTunnelClient();
 
-  const { sandboxUrl, connectionKey } = serverConnection;
+    const rawRequest = buildHttpRequest(req);
 
-  if (!connectionKey) {
-    console.error("ServerConnection missing connection_key");
-    res.status(400).json({
-      status: "error",
-      error: "Missing connection_key",
-      details: "ServerConnection must include a connection_key for tunnel pairing",
-    });
-    return;
-  }
+    // Parse destination from the Host header
+    const host = req.headers?.["host"] ?? req.headers?.["Host"] ?? "127.0.0.1";
+    const [destIp, destPortStr] = host.includes(":") ? host.split(":") : [host, "80"];
+    const destPort = parseInt(destPortStr, 10) || 80;
 
-  // Validate sandbox URL against regex
-  if (!validateSandboxUrl(sandboxUrl)) {
-    console.error(`Sandbox URL validation failed: ${sandboxUrl}`);
-    res.status(403).json({
-      status: "error",
-      error: "Sandbox URL validation failed",
-      details: "The sandbox_url does not match the allowed pattern",
-    });
-    return;
-  }
+    const response = await client.forwardRequest(
+      rawRequest,
+      { ip: req.remoteIp ?? "127.0.0.1", port: req.remotePort ?? 0 },
+      { ip: destIp, port: destPort }
+    );
 
-  console.log(`Validated sandbox URL: ${sandboxUrl}`);
+    const parsed = parseHttpResponse(response.data);
 
-  try {
-    const clientOptions: GetTunnelClientOptions = {
-      sandboxUrl,
-      connectionKey,
-      ...ctx.baseTunnelClientOptions,
-    };
-
-    const client = await getTunnelClient(clientOptions);
-
-    // Start background processing only once per connection
-    if (!backgroundProcessingStarted && ctx.onBackgroundStart) {
-      backgroundProcessingStarted = true;
-
-      const backgroundPromise = client.runUntilDone().catch((error) => {
-        console.error("Tunnel processing error:", error);
-        resetTunnelClient();
-        backgroundProcessingStarted = false;
-      });
-
-      ctx.onBackgroundStart(backgroundPromise);
+    // Set response headers
+    for (const [key, value] of Object.entries(parsed.headers)) {
+      if (key === "transfer-encoding") continue; // we dechunk
+      res.setHeader(key, value);
     }
 
-    // Wait briefly to catch immediate connection failures
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    // Verify the client is still connected
-    if (!client.connected) {
-      resetTunnelClient();
-      backgroundProcessingStarted = false;
-      res.status(503).json({
-        status: "error",
-        error: "Failed to establish tunnel connection",
-        details: "Connection was closed immediately after connecting",
-        sandboxUrl,
-      });
-      return;
+    // Dechunk body if needed
+    let bodyBytes = parsed.body;
+    if (parsed.headers["transfer-encoding"]?.includes("chunked")) {
+      bodyBytes = dechunkBuffer(bodyBytes);
     }
 
-    res.status(200).json({
-      status: "connected",
-      message: "Tunnel connection established",
-      sandboxUrl,
-    });
+    res.status(parsed.statusCode).send(new TextDecoder().decode(bodyBytes));
   } catch (error) {
-    console.error("Tunnel connect error:", error);
+    console.error("Proxy error:", error);
     resetTunnelClient();
-    backgroundProcessingStarted = false;
 
-    res.status(503).json({
-      status: "error",
-      error: "Unable to connect to sandbox",
-      details: error instanceof Error ? error.message : String(error),
-      sandboxUrl,
+    const isConnectionError = error instanceof Error &&
+      (error.message.includes("BRIDGE_SERVER_ADDR") || error.message.includes("timed out") || error.message.includes("connect"));
+
+    res.status(isConnectionError ? 503 : 502).json({
+      error: isConnectionError ? "Service Unavailable" : "Bad Gateway",
+      message: error instanceof Error ? error.message : String(error),
     });
   }
-}
 
-/**
- * Reset the background processing state (for testing or reconnection)
- */
-export function resetBackgroundState(): void {
-  backgroundProcessingStarted = false;
+  return true;
 }
