@@ -75,22 +75,10 @@ install_bridge() {
     echo "Bridge ${version} installed successfully"
 }
 
-# Write environment configuration
+# Write environment configuration to /etc/profile.d (sourced by entrypoint)
 write_env_config() {
     local env_file="${ENVFILE:-.env.development.local}"
 
-    # Write to /etc/environment for system-wide availability (read by PAM)
-    # Feature options are available as uppercase versions without special chars
-    {
-        echo "SANDBOX_URL=${SANDBOXURL:-}"
-        echo "FUNCTION_URL=${FUNCTIONURL:-}"
-        echo "SANDBOX_NAME=${SANDBOXNAME:-}"
-        echo "SYNC_SOURCE=${SYNCSOURCE:-.}"
-        echo "SYNC_TARGET=${SYNCTARGET:-}"
-        echo "BRIDGE_ENV_FILE=${env_file}"
-    } >> /etc/environment
-
-    # Also write to /etc/profile.d for shell login sessions
     cat > /etc/profile.d/bridge.sh << EOF
 export SANDBOX_URL="${SANDBOXURL:-}"
 export FUNCTION_URL="${FUNCTIONURL:-}"
@@ -112,8 +100,17 @@ read_env_var() {
 
 # Create entrypoint script
 create_entrypoint() {
-    cat > /usr/local/bin/bridge-entrypoint.sh << 'EOF'
+    # First part: bake the workspace path at install time (unquoted heredoc
+    # so ${WORKSPACEPATH} is expanded now, not at runtime)
+    cat > /usr/local/bin/bridge-entrypoint.sh << EOF
 #!/bin/bash
+# Baked at install time from feature option "workspacePath"
+BRIDGE_WORKSPACE_PATH="${WORKSPACEPATH:-}"
+EOF
+
+    # Second part: runtime logic (quoted heredoc — no expansion at install time)
+    cat >> /usr/local/bin/bridge-entrypoint.sh << 'RUNTIME'
+
 # Source profile in case env vars aren't inherited
 [ -f /etc/profile.d/bridge.sh ] && source /etc/profile.d/bridge.sh
 
@@ -123,9 +120,9 @@ read_env_file() {
     local env_file=""
     local env_filename="${BRIDGE_ENV_FILE:-.env.development.local}"
 
-    # Try explicit path first, then fall back to find
-    if [ -n "$CONTAINER_WORKSPACE_FOLDER" ] && [ -f "${CONTAINER_WORKSPACE_FOLDER}/${env_filename}" ]; then
-        env_file="${CONTAINER_WORKSPACE_FOLDER}/${env_filename}"
+    # Try baked workspace path first, then fall back to find
+    if [ -n "$BRIDGE_WORKSPACE_PATH" ] && [ -f "${BRIDGE_WORKSPACE_PATH}/${env_filename}" ]; then
+        env_file="${BRIDGE_WORKSPACE_PATH}/${env_filename}"
     else
         env_file=$(find /workspaces -maxdepth 5 -name "$env_filename" -type f 2>/dev/null | head -1)
     fi
@@ -145,7 +142,7 @@ if [ -n "$SANDBOX_URL" ]; then
 fi
 
 exec "$@"
-EOF
+RUNTIME
     chmod +x /usr/local/bin/bridge-entrypoint.sh
 }
 
