@@ -117,25 +117,26 @@ create_entrypoint() {
 # Source profile in case env vars aren't inherited
 [ -f /etc/profile.d/bridge.sh ] && source /etc/profile.d/bridge.sh
 
-# Read VERCEL_AUTOMATION_BYPASS_SECRET from env file if not already set
-if [ -z "$VERCEL_AUTOMATION_BYPASS_SECRET" ] && [ -n "$BRIDGE_ENV_FILE" ]; then
-    # Search for env file in common locations
-    # Devcontainers typically mount to /workspaces/<repo-name>/
-    for candidate in \
-        "/workspaces"/*/"${BRIDGE_ENV_FILE}" \
-        "/workspaces/${BRIDGE_ENV_FILE}" \
-        "${BRIDGE_ENV_FILE}"; do
-        if [ -f "$candidate" ]; then
-            VERCEL_AUTOMATION_BYPASS_SECRET=$(grep -m1 '^VERCEL_AUTOMATION_BYPASS_SECRET=' "$candidate" | sed 's/^VERCEL_AUTOMATION_BYPASS_SECRET=//' | sed 's/^"//;s/"$//')
-            export VERCEL_AUTOMATION_BYPASS_SECRET
-            break
-        fi
-    done
-fi
+# Function to read a value from an env file
+read_env_file() {
+    local var_name="$1"
+    local env_file
 
-# Run bridge intercept as root (required for iptables), passing env vars explicitly
+    # Find the env file
+    env_file=$(find /workspaces -maxdepth 2 -name "${BRIDGE_ENV_FILE:-.env.development.local}" -type f 2>/dev/null | head -1)
+
+    if [ -n "$env_file" ] && [ -f "$env_file" ]; then
+        grep -m1 "^${var_name}=" "$env_file" 2>/dev/null | sed "s/^${var_name}=//" | sed 's/^"//;s/"$//'
+    fi
+}
+
+# Run bridge intercept as root (required for iptables)
 if [ -n "$SANDBOX_URL" ]; then
-    sudo -E VERCEL_AUTOMATION_BYPASS_SECRET="$VERCEL_AUTOMATION_BYPASS_SECRET" /usr/local/bin/bridge intercept &
+    BYPASS_SECRET=$(read_env_file "VERCEL_AUTOMATION_BYPASS_SECRET")
+    sudo SANDBOX_URL="$SANDBOX_URL" \
+         FUNCTION_URL="$FUNCTION_URL" \
+         VERCEL_AUTOMATION_BYPASS_SECRET="$BYPASS_SECRET" \
+         /usr/local/bin/bridge intercept &
 fi
 
 exec "$@"

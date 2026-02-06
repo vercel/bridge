@@ -184,6 +184,7 @@ func (s *WSServer) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		"deployment_id", reg.GetDeploymentId(),
 		"is_server", reg.GetIsServer(),
 		"function_url", reg.GetFunctionUrl(),
+		"has_bypass_secret", reg.GetProtectionBypassSecret() != "",
 	)
 
 	if reg.GetIsServer() {
@@ -379,6 +380,11 @@ func relayMessages(conn1, conn2 *websocket.Conn) {
 func (s *WSServer) notifyDispatcher(ctx context.Context, functionURL string, sandboxURL string, protectionBypassSecret string) error {
 	// Build the connect URL
 	connectURL := functionURL + "/__tunnel/connect"
+
+	slog.Debug("notifying dispatcher",
+		"connect_url", connectURL,
+		"has_bypass_secret", protectionBypassSecret != "",
+	)
 
 	// Create the ServerConnection payload
 	payload := &bridgev1.ServerConnection{

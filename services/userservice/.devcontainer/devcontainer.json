@@ -15,5 +15,8 @@
   ],
   "appPort": [
     3000
+  ],
+  "mounts": [
+    "source=${localWorkspaceFolder}/.env.development.local,target=${containerWorkspaceFolder}/.env.development.local,type=bind"
   ]
 }

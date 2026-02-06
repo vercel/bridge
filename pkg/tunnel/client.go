@@ -116,6 +116,7 @@ func (c *Client) connectAndServe(ctx context.Context) error {
 		"sandbox_url", c.sandboxURL,
 		"function_url", c.functionURL,
 		"deployment_id", c.deploymentID,
+		"has_bypass_secret", c.protectionBypass != "",
 	)
 
 	// Convert HTTP URL to WebSocket URL and add /tunnel path
