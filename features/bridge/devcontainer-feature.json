@@ -1,6 +1,6 @@
 {
   "id": "bridge",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "name": "Bridge Tunnel Client",
   "description": "Connects to the bridge server running on a Vercel Sandbox to forward inbound requests to local applications and intercept outbound traffic via iptables.",
   "entrypoint": "/usr/local/bin/bridge-entrypoint.sh",
