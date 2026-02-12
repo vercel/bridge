@@ -47,13 +47,23 @@ func (c *TunnelExchangeClient) ExchangeContext(ctx context.Context, msg *dns.Msg
 	}
 
 	q := msg.Question[0]
+	name := strings.ToLower(strings.TrimSuffix(q.Name, "."))
 
-	// Only intercept A queries
+	// For matched domains, handle both A and AAAA queries.
+	// musl (Alpine) sends A and AAAA in parallel; if the AAAA falls through
+	// to the system resolver and gets NXDOMAIN, musl discards the A result.
+	// Return an empty NOERROR for AAAA on matched domains so musl uses the A answer.
+	if q.Qtype == dns.TypeAAAA && c.matchesPattern(name) {
+		reply := new(dns.Msg)
+		reply.SetReply(msg)
+		return reply, false, nil
+	}
+
+	// Only intercept A queries through the tunnel
 	if q.Qtype != dns.TypeA {
 		return c.fallback.ExchangeContext(ctx, msg)
 	}
 
-	name := strings.ToLower(strings.TrimSuffix(q.Name, "."))
 	if !c.matchesPattern(name) {
 		return c.fallback.ExchangeContext(ctx, msg)
 	}
