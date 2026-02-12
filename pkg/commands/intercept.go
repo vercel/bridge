@@ -113,6 +113,12 @@ func runIntercept(ctx context.Context, c *cli.Command) error {
 		}
 	}
 
+	if len(forwardDomains) > 0 {
+		slog.Info("Forward domains configured", "domains", forwardDomains)
+	} else {
+		slog.Info("No forward domains configured, DNS interception disabled")
+	}
+
 	// Derive name from sandbox URL if not provided
 	if name == "" {
 		u, err := url.Parse(sandboxURL)
