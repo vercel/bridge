@@ -4,25 +4,17 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/url"
 	"os"
-	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 
 	"github.com/urfave/cli/v3"
-	"github.com/vercel-eddie/bridge/pkg/bidi"
-	"github.com/vercel-eddie/bridge/pkg/mutagen"
-	"github.com/vercel-eddie/bridge/pkg/sshproxy"
+	"github.com/vercel-eddie/bridge/pkg/conntrack"
+	bridgedns "github.com/vercel-eddie/bridge/pkg/dns"
+	"github.com/vercel-eddie/bridge/pkg/ippool"
 	"github.com/vercel-eddie/bridge/pkg/tunnel"
-)
-
-const (
-	// CIDR block for proxy IP allocation (used with DNS interception)
-	proxyCIDR = "10.128.0.0/16"
 )
 
 func Intercept() *cli.Command {
@@ -82,27 +74,19 @@ func Intercept() *cli.Command {
 				Value:   3000,
 				Sources: cli.EnvVars("APP_PORT"),
 			},
+			&cli.StringSliceFlag{
+				Name:    "forward-domains",
+				Usage:   "Domain patterns to intercept via DNS (e.g., '*.example.com')",
+				Sources: cli.EnvVars("FORWARD_DOMAINS"),
+			},
+			&cli.IntFlag{
+				Name:  "dns-port",
+				Usage: "DNS server listen port (default: 53)",
+				Value: 53,
+			},
 		},
 		Action: runIntercept,
 	}
-}
-
-type interceptor struct {
-	sandboxURL    string
-	functionURL   string
-	name          string
-	proxyPort     int
-	sshProxyPort  int
-	appPort       int
-	syncSource    string
-	syncTarget    string
-	noSync        bool
-	noSSHProxy    bool
-	tunnel        *tunnel.Client
-	listener      net.Listener
-	sshProxy      *sshproxy.SSHProxy
-	syncName      string
-	mutagenClient *mutagen.Client
 }
 
 func runIntercept(ctx context.Context, c *cli.Command) error {
@@ -116,6 +100,18 @@ func runIntercept(ctx context.Context, c *cli.Command) error {
 	noSync := c.Bool("no-sync")
 	noSSHProxy := c.Bool("no-ssh-proxy")
 	appPort := c.Int("app-port")
+	dnsPort := c.Int("dns-port")
+
+	// Parse forward-domains, handling comma-separated values from env vars
+	var forwardDomains []string
+	for _, d := range c.StringSlice("forward-domains") {
+		for _, part := range strings.Split(d, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				forwardDomains = append(forwardDomains, part)
+			}
+		}
+	}
 
 	// Derive name from sandbox URL if not provided
 	if name == "" {
@@ -127,22 +123,49 @@ func runIntercept(ctx context.Context, c *cli.Command) error {
 		}
 	}
 
-	i := &interceptor{
-		sandboxURL:   sandboxURL,
-		functionURL:  functionURL,
-		name:         name,
-		proxyPort:    proxyPort,
-		sshProxyPort: sshProxyPort,
-		appPort:      appPort,
-		syncSource:   syncSource,
-		syncTarget:   syncTarget,
-		noSync:       noSync,
-		noSSHProxy:   noSSHProxy,
-		syncName:     "bridge-sync",
+	// Create connection tracking registry
+	pool, err := ippool.New(proxyCIDR)
+	if err != nil {
+		return fmt.Errorf("failed to create IP pool: %w", err)
+	}
+	registry := conntrack.New(pool)
+
+	// Create tunnel client (shared by DNS exchange client and proxy)
+	tunnelClient := tunnel.NewClient(sandboxURL, functionURL, fmt.Sprintf("127.0.0.1:%d", appPort))
+
+	// Start DNS (optional)
+	var dns *DNSComponent
+	var originalResolvConf []byte
+	if len(forwardDomains) > 0 {
+		// Read the original nameserver before we modify /etc/resolv.conf
+		originalNS := readOriginalNameserver()
+		exchangeClient := bridgedns.NewTunnelExchangeClient(forwardDomains, tunnelClient, originalNS)
+		dns, err = StartDNS(DNSConfig{
+			ListenPort: dnsPort,
+			Client:     exchangeClient,
+			Registry:   registry,
+		})
+		if err != nil {
+			registry.Stop()
+			_ = tunnelClient.Close()
+			return fmt.Errorf("failed to start DNS: %w", err)
+		}
+
+		// Point /etc/resolv.conf at our DNS server
+		originalResolvConf, err = updateResolvConf("127.0.0.1")
+		if err != nil {
+			slog.Warn("Failed to update /etc/resolv.conf", "error", err)
+		}
 	}
 
-	// Start transparent proxy listener
-	if err := i.startProxyListener(); err != nil {
+	// Start proxy (transparent proxy + tunnel)
+	proxy, err := StartProxy(ProxyConfig{
+		TunnelClient: tunnelClient,
+		ProxyPort:    proxyPort,
+		Registry:     registry,
+	})
+	if err != nil {
+		_ = tunnelClient.Close()
 		return fmt.Errorf("failed to start proxy listener: %w", err)
 	}
 
@@ -150,249 +173,136 @@ func runIntercept(ctx context.Context, c *cli.Command) error {
 		"name", name,
 		"sandbox_url", sandboxURL,
 		"function_url", functionURL,
-		"proxy_port", i.proxyPort,
+		"proxy_port", proxy.Port(),
 	)
 
-	// Initialize tunnel client
-	i.tunnel = tunnel.NewClient(sandboxURL, functionURL, fmt.Sprintf("127.0.0.1:%d", i.appPort))
-
-	// Set up iptables for traffic interception
-	if err := i.setupIptables(); err != nil {
+	// Set up iptables (TCP redirect for proxy CIDR)
+	if err := proxy.SetupIptables(); err != nil {
 		slog.Warn("Failed to setup iptables",
 			"error", err,
 			"hint", "Traffic interception requires NET_ADMIN capability",
 		)
 	}
 
-	// Start SSH proxy if enabled
+	// Start SSH (optional)
+	var ssh *SSHComponent
 	if !noSSHProxy {
-		proxy, err := sshproxy.New(ctx, sshproxy.Config{
-			Name:      name,
-			TunnelURL: sandboxURL,
-			LocalPort: sshProxyPort,
+		ssh, err = StartSSH(ctx, SSHConfig{
+			Name:       name,
+			SandboxURL: sandboxURL,
+			LocalPort:  sshProxyPort,
 		})
 		if err != nil {
 			slog.Warn("Failed to start SSH proxy", "error", err)
 		} else {
-			i.sshProxy = proxy
-			fmt.Printf("SSH: ssh %s\n", proxy.Host())
+			fmt.Printf("SSH: ssh %s\n", ssh.Host())
 		}
 	}
 
 	// Create cancellable context
 	ctx, cancel := context.WithCancel(ctx)
 
-	// Handle cleanup on shutdown
+	// Signal handler (stops components in reverse order)
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	var fileSync *FileSyncComponent
+
 	go func() {
 		<-sigChan
 		slog.Info("Shutting down...")
 		cancel()
-		i.cleanup()
+		if fileSync != nil {
+			fileSync.Stop()
+		}
+		if ssh != nil {
+			ssh.Stop()
+		}
+		if dns != nil {
+			dns.Stop()
+		}
+		restoreResolvConf(originalResolvConf)
+		if registry != nil {
+			registry.Stop()
+		}
+		proxy.Stop()
+		_ = tunnelClient.Close()
 		os.Exit(0)
 	}()
 
-	// Start SSH proxy accept loop in background BEFORE starting sync
-	// This ensures the proxy is accepting connections when mutagen tries to connect
-	if i.sshProxy != nil {
+	// Start SSH serve loop
+	if ssh != nil {
 		sshProxyReady := make(chan struct{})
 		go func() {
-			close(sshProxyReady) // Signal that we're about to start accepting
-			if err := i.sshProxy.Serve(ctx); err != nil && ctx.Err() == nil {
+			close(sshProxyReady)
+			if err := ssh.Serve(ctx); err != nil && ctx.Err() == nil {
 				slog.Error("SSH proxy error", "error", err)
 			}
 		}()
-		<-sshProxyReady // Wait for goroutine to start
+		<-sshProxyReady
 	}
 
 	// Derive sync target from SSH proxy if not explicitly provided
-	// Use SSH host alias which is configured in ~/.bridge/ssh_config
-	if i.syncTarget == "" && i.sshProxy != nil {
-		i.syncTarget = fmt.Sprintf("vercel-sandbox@%s:/vercel/sandbox", i.sshProxy.Host())
+	if syncTarget == "" && ssh != nil {
+		syncTarget = fmt.Sprintf("vercel-sandbox@%s:/vercel/sandbox", ssh.Host())
 	}
 
-	// Start file sync if enabled
-	if !noSync && i.syncTarget != "" {
-		if err := i.startSync(); err != nil {
+	// Start file sync (optional, depends on SSH for target)
+	if !noSync && syncTarget != "" {
+		fileSync, err = StartFileSync(FileSyncConfig{
+			SyncName:   "bridge-sync",
+			SyncSource: syncSource,
+			SyncTarget: syncTarget,
+		})
+		if err != nil {
 			slog.Error("Failed to start file sync", "error", err)
 		}
 	}
 
-	// Start accepting connections on the transparent proxy
-	go i.runTransparentProxy()
-
-	// Connect to bridge server and serve
-	i.tunnel.ConnectWithReconnect(ctx)
+	// Run proxy (blocking)
+	proxy.Run(ctx)
 
 	return nil
 }
 
-func (i *interceptor) cleanup() {
-	i.stopSync()
-	i.cleanupIptables()
-	if i.listener != nil {
-		_ = i.listener.Close()
-	}
-	if i.tunnel != nil {
-		_ = i.tunnel.Close()
-	}
-	if i.sshProxy != nil {
-		_ = i.sshProxy.Close()
-	}
-}
-
-func (i *interceptor) startProxyListener() error {
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", i.proxyPort))
+// readOriginalNameserver reads the first nameserver from /etc/resolv.conf.
+func readOriginalNameserver() string {
+	data, err := os.ReadFile("/etc/resolv.conf")
 	if err != nil {
-		return fmt.Errorf("failed to listen: %w", err)
+		return "8.8.8.8:53"
 	}
-
-	addr := listener.Addr().(*net.TCPAddr)
-	i.proxyPort = addr.Port
-	i.listener = listener
-
-	return nil
-}
-
-func (i *interceptor) runTransparentProxy() {
-	slog.Info("Transparent proxy listening", "port", i.proxyPort)
-
-	for {
-		conn, err := i.listener.Accept()
-		if err != nil {
-			slog.Error("Accept error", "error", err)
-			return
-		}
-
-		go i.handleOutbound(conn)
-	}
-}
-
-func (i *interceptor) handleOutbound(clientConn net.Conn) {
-	defer clientConn.Close()
-
-	// Get source address
-	sourceAddr := clientConn.RemoteAddr().String()
-
-	// Get original destination using SO_ORIGINAL_DST
-	origDst, err := getOriginalDst(clientConn)
-	if err != nil {
-		slog.Error("Failed to get original destination", "error", err)
-		return
-	}
-
-	slog.Debug("Intercepted outbound connection", "source", sourceAddr, "destination", origDst)
-
-	// Dial through the tunnel
-	targetConn, err := i.tunnel.DialThroughTunnel(sourceAddr, origDst)
-	if err != nil {
-		slog.Error("Failed to dial through tunnel", "source", sourceAddr, "destination", origDst, "error", err)
-		return
-	}
-	defer targetConn.Close()
-
-	slog.Info("Proxying connection", "source", sourceAddr, "destination", origDst)
-
-	// Bidirectional copy
-	bidi.New(clientConn, targetConn).Wait(context.Background())
-}
-
-func (i *interceptor) setupIptables() error {
-	// Check if iptables exists
-	if _, err := exec.LookPath("iptables"); err != nil {
-		return fmt.Errorf("iptables not found: %w", err)
-	}
-
-	// Get our own UID to exclude our traffic from interception
-	uid := fmt.Sprintf("%d", os.Getuid())
-
-	cmds := [][]string{
-		// Create a new chain for our rules
-		{"iptables", "-t", "nat", "-N", "BRIDGE_INTERCEPT"},
-
-		// TCP interception: redirect traffic to our proxy CIDR
-		{"iptables", "-t", "nat", "-A", "BRIDGE_INTERCEPT", "-d", proxyCIDR, "-p", "tcp", "-m", "owner", "!", "--uid-owner", uid, "-j", "REDIRECT", "--to-ports", fmt.Sprintf("%d", i.proxyPort)},
-
-		// Jump to our chain from OUTPUT
-		{"iptables", "-t", "nat", "-A", "OUTPUT", "-d", proxyCIDR, "-p", "tcp", "-j", "BRIDGE_INTERCEPT"},
-	}
-
-	for _, args := range cmds {
-		cmd := exec.Command(args[0], args[1:]...)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			slog.Debug("iptables command failed",
-				"command", args,
-				"error", err,
-				"output", string(output),
-			)
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) >= 2 && fields[0] == "nameserver" {
+			return fields[1] + ":53"
 		}
 	}
-
-	slog.Info("iptables rules configured", "proxy_port", i.proxyPort, "proxy_cidr", proxyCIDR)
-	return nil
+	return "8.8.8.8:53"
 }
 
-func (i *interceptor) cleanupIptables() {
-	cmds := [][]string{
-		{"iptables", "-t", "nat", "-D", "OUTPUT", "-d", proxyCIDR, "-p", "tcp", "-j", "BRIDGE_INTERCEPT"},
-		{"iptables", "-t", "nat", "-F", "BRIDGE_INTERCEPT"},
-		{"iptables", "-t", "nat", "-X", "BRIDGE_INTERCEPT"},
-	}
-
-	for _, args := range cmds {
-		cmd := exec.Command(args[0], args[1:]...)
-		_ = cmd.Run()
-	}
-	slog.Info("iptables rules cleaned up")
-}
-
-func (i *interceptor) startSync() error {
-	// Install mutagen if not already installed
-	slog.Info("Checking mutagen installation...")
-	if err := mutagen.Install(); err != nil {
-		return fmt.Errorf("failed to install mutagen: %w", err)
-	}
-	slog.Info("Mutagen installed", "path", mutagen.BinaryPath())
-
-	// Create mutagen client
-	client, err := mutagen.NewClient()
+// updateResolvConf prepends a nameserver entry to /etc/resolv.conf and returns
+// the original content for later restoration.
+func updateResolvConf(nameserverIP string) ([]byte, error) {
+	original, err := os.ReadFile("/etc/resolv.conf")
 	if err != nil {
-		return fmt.Errorf("failed to create mutagen client: %w", err)
+		return nil, err
 	}
-	i.mutagenClient = client
-
-	// Resolve absolute path for sync source
-	absSource, err := filepath.Abs(i.syncSource)
-	if err != nil {
-		return fmt.Errorf("failed to resolve sync source: %w", err)
+	newContent := fmt.Sprintf("nameserver %s\n%s", nameserverIP, string(original))
+	if err := os.WriteFile("/etc/resolv.conf", []byte(newContent), 0644); err != nil {
+		return original, err
 	}
-	slog.Info("Starting mutagen sync", "source", i.syncSource, "abs_source", absSource, "target", i.syncTarget)
-
-	// Create sync session
-	if err := client.CreateSyncSession(mutagen.SyncConfig{
-		Name:      i.syncName,
-		Source:    absSource,
-		Target:    i.syncTarget,
-		IgnoreVCS: true,
-		SyncMode:  "two-way-resolved",
-	}); err != nil {
-		return fmt.Errorf("failed to create mutagen sync: %w", err)
-	}
-
-	slog.Info("Mutagen sync started", "name", i.syncName)
-
-	return nil
+	slog.Info("Updated /etc/resolv.conf", "nameserver", nameserverIP)
+	return original, nil
 }
 
-func (i *interceptor) stopSync() {
-	if i.mutagenClient == nil || i.syncName == "" {
+// restoreResolvConf restores /etc/resolv.conf to its original content.
+func restoreResolvConf(original []byte) {
+	if original == nil {
 		return
 	}
-
-	if err := i.mutagenClient.TerminateSyncSession(i.syncName); err != nil {
-		slog.Error("Failed to terminate mutagen sync", "error", err)
+	if err := os.WriteFile("/etc/resolv.conf", original, 0644); err != nil {
+		slog.Warn("Failed to restore /etc/resolv.conf", "error", err)
 	} else {
-		slog.Info("Mutagen sync terminated", "name", i.syncName)
+		slog.Info("Restored /etc/resolv.conf")
 	}
 }

@@ -2,6 +2,8 @@ package tunnel
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -36,6 +38,9 @@ type Client struct {
 
 	// Connection management
 	connections sync.Map // map[string]*Conn
+
+	// Pending DNS resolution requests: map[requestID]chan *bridgev1.ResolveDNSQueryResponse
+	dnsRequests sync.Map
 }
 
 // NewClient creates a new tunnel client.
@@ -90,6 +95,13 @@ func (c *Client) ConnectWithReconnect(ctx context.Context) {
 				_ = conn.Close()
 			}
 			c.connections.Delete(key)
+			return true
+		})
+
+		// Fail all pending DNS requests
+		c.dnsRequests.Range(func(key, value any) bool {
+			close(value.(chan *bridgev1.ResolveDNSQueryResponse))
+			c.dnsRequests.Delete(key)
 			return true
 		})
 
@@ -195,6 +207,14 @@ func (c *Client) handleMessage(msg *bridgev1.Message) {
 	// Handle error messages from the server
 	if errMsg := msg.GetError(); errMsg != "" {
 		slog.Error("Received error from bridge server", "error", errMsg)
+		return
+	}
+
+	// Handle DNS resolution responses
+	if resp := msg.GetDnsResponse(); resp != nil {
+		if ch, ok := c.dnsRequests.LoadAndDelete(resp.GetRequestId()); ok {
+			ch.(chan *bridgev1.ResolveDNSQueryResponse) <- resp
+		}
 		return
 	}
 
@@ -424,6 +444,46 @@ func (c *Client) sendClose(connID string) error {
 		ConnectionId: connID,
 		Close:        true,
 	})
+}
+
+// ResolveDNS sends a DNS resolution request through the tunnel and waits for
+// the response. The context controls the timeout for the round-trip.
+func (c *Client) ResolveDNS(ctx context.Context, hostname string) (*bridgev1.ResolveDNSQueryResponse, error) {
+	if !c.isConnected.Load() {
+		return nil, fmt.Errorf("tunnel not connected")
+	}
+
+	// Generate a unique request ID
+	id := make([]byte, 8)
+	_, _ = rand.Read(id)
+	requestID := hex.EncodeToString(id)
+
+	// Register a channel for the response before sending
+	ch := make(chan *bridgev1.ResolveDNSQueryResponse, 1)
+	c.dnsRequests.Store(requestID, ch)
+
+	// Send the request
+	if err := c.sendMessage(&bridgev1.Message{
+		DnsRequest: &bridgev1.ResolveDNSQueryRequest{
+			RequestId: requestID,
+			Hostname:  hostname,
+		},
+	}); err != nil {
+		c.dnsRequests.Delete(requestID)
+		return nil, fmt.Errorf("failed to send DNS request: %w", err)
+	}
+
+	// Wait for the response or context cancellation
+	select {
+	case resp, ok := <-ch:
+		if !ok {
+			return nil, fmt.Errorf("tunnel disconnected while waiting for DNS response")
+		}
+		return resp, nil
+	case <-ctx.Done():
+		c.dnsRequests.Delete(requestID)
+		return nil, ctx.Err()
+	}
 }
 
 // Close closes the tunnel connection.

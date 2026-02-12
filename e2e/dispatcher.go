@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -32,6 +33,8 @@ type DispatcherConfig struct {
 	Network string
 	// NetworkAliases are DNS aliases for this container on the network
 	NetworkAliases []string
+	// ExtraHosts are additional /etc/hosts entries (format: "hostname:ip")
+	ExtraHosts []string
 }
 
 // NewDispatcher creates and starts a new dispatcher container.
@@ -57,6 +60,12 @@ func NewDispatcher(ctx context.Context, cfg DispatcherConfig) (*DispatcherContai
 		ExposedPorts: []string{DispatcherPort},
 		Env:          env,
 		WaitingFor:   wait.ForHTTP("/__bridge/health").WithPort(DispatcherPort).WithStartupTimeout(120 * time.Second),
+	}
+
+	if len(cfg.ExtraHosts) > 0 {
+		req.HostConfigModifier = func(hc *container.HostConfig) {
+			hc.ExtraHosts = append(hc.ExtraHosts, cfg.ExtraHosts...)
+		}
 	}
 
 	if cfg.Network != "" {

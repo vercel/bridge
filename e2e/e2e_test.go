@@ -2,6 +2,9 @@ package e2e
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"testing"
@@ -14,9 +17,10 @@ import (
 // E2ESuite is the base test suite for e2e tests
 type E2ESuite struct {
 	suite.Suite
-	ctx    context.Context
-	cancel context.CancelFunc
-	env    *Environment
+	ctx          context.Context
+	cancel       context.CancelFunc
+	env          *Environment
+	testHostname string
 }
 
 // SetupSuite runs once before all tests in the suite
@@ -27,9 +31,31 @@ func (s *E2ESuite) SetupSuite() {
 
 	s.ctx, s.cancel = context.WithTimeout(context.Background(), 5*time.Minute)
 
+	// Generate a unique hostname for DNS forwarding tests
+	id := make([]byte, 4)
+	_, _ = rand.Read(id)
+	s.testHostname = fmt.Sprintf("vercel-bridge-test-%s.com", hex.EncodeToString(id))
+
 	var err error
-	s.env, err = SetupEnvironment(s.ctx, EnvironmentConfig{})
+	s.env, err = SetupEnvironment(s.ctx, EnvironmentConfig{
+		ForwardDomains:         []string{s.testHostname},
+		DevcontainerPrivileged: true,
+	})
 	require.NoError(s.T(), err, "failed to setup environment")
+
+	// Add the test hostname to the dispatcher's /etc/hosts pointing to itself.
+	dispatcherIP, err := s.env.Dispatcher.ContainerIP(s.ctx, s.env.Network.Name)
+	require.NoError(s.T(), err, "failed to get dispatcher container IP")
+
+	addHostCmd := []string{"sh", "-c",
+		fmt.Sprintf("echo '%s %s' >> /etc/hosts", dispatcherIP, s.testHostname),
+	}
+	exitCode, reader, err := s.env.Dispatcher.Container.Exec(s.ctx, addHostCmd)
+	require.NoError(s.T(), err, "failed to add /etc/hosts entry to dispatcher")
+	_, _ = io.ReadAll(reader)
+	require.Equal(s.T(), 0, exitCode, "failed to add /etc/hosts entry to dispatcher")
+
+	s.T().Logf("Test hostname: %s -> %s (dispatcher)", s.testHostname, dispatcherIP)
 }
 
 // TearDownSuite runs once after all tests in the suite
@@ -144,6 +170,37 @@ func (s *E2ESuite) TestDispatcherForward() {
 
 	s.Equal(http.StatusOK, resp.StatusCode)
 	s.Contains(string(body), "hello from devcontainer app")
+}
+
+// TestDNSForwarding verifies that an HTTP request from the devcontainer to a
+// hostname that only resolves on the dispatcher reaches the dispatcher's health
+// endpoint through the tunnel.
+func (s *E2ESuite) TestDNSForwarding() {
+	url := fmt.Sprintf("http://%s:8080/__bridge/health", s.testHostname)
+	cmd := []string{"wget", "-q", "-O", "-", "-T", "5", url}
+
+	var exitCode int
+	var output string
+	var err error
+
+	for attempt := 1; attempt <= 10; attempt++ {
+		exitCode, output, err = s.env.Devcontainer.Exec(s.ctx, cmd)
+		if err == nil && exitCode == 0 {
+			break
+		}
+		s.T().Logf("Attempt %d: exitCode=%d err=%v output=%s", attempt, exitCode, err, output)
+
+		if attempt == 10 {
+			logs, _ := s.env.InterceptLogs(s.ctx)
+			s.T().Logf("Intercept logs:\n%s", logs)
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	s.Require().NoError(err)
+	s.Require().Equal(0, exitCode, "wget to %s failed: %s", url, output)
+	s.T().Logf("DNS forward health response: %s", output)
 }
 
 // TestE2ESuite runs the e2e test suite

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +19,11 @@ type Environment struct {
 	Sandbox      *SandboxContainer
 	Dispatcher   *DispatcherContainer
 	Devcontainer *DevcontainerContainer
+
+	// DispatcherHosts maps custom hostnames to their generated 192.x.x.x IPs.
+	// These hostnames are added to the dispatcher's /etc/hosts so they only
+	// resolve inside the dispatcher container.
+	DispatcherHosts map[string]string
 }
 
 // EnvironmentConfig configures the E2E environment.
@@ -28,6 +34,12 @@ type EnvironmentConfig struct {
 	AppPort int
 	// DevcontainerPrivileged runs the devcontainer in privileged mode for iptables (default: false)
 	DevcontainerPrivileged bool
+	// ForwardDomains is a list of domain patterns to intercept via DNS (e.g., "*.example.com")
+	ForwardDomains []string
+	// DispatcherHosts is a list of custom hostnames to add to the dispatcher's
+	// /etc/hosts. Each hostname is assigned a random 192.x.x.x IP. These
+	// hostnames only resolve inside the dispatcher container.
+	DispatcherHosts []string
 }
 
 func (cfg *EnvironmentConfig) setDefaults() {
@@ -70,6 +82,14 @@ func SetupEnvironment(ctx context.Context, cfg EnvironmentConfig) (*Environment,
 	}
 	env.Network = network
 
+	// Generate random 192.x.x.x IPs for custom dispatcher hostnames.
+	if len(cfg.DispatcherHosts) > 0 {
+		env.DispatcherHosts = make(map[string]string, len(cfg.DispatcherHosts))
+		for _, hostname := range cfg.DispatcherHosts {
+			env.DispatcherHosts[hostname] = randomPrivateIP()
+		}
+	}
+
 	// 2. Start sandbox and dispatcher in parallel.
 	// Network aliases let the dispatcher reference the sandbox by hostname.
 	sandboxURL := fmt.Sprintf("http://%s:3000", sandboxAlias)
@@ -99,13 +119,18 @@ func SetupEnvironment(ctx context.Context, cfg EnvironmentConfig) (*Environment,
 
 	go func() {
 		defer wg.Done()
-		dispatcher, err := NewDispatcher(ctx, DispatcherConfig{
+		dispatcherCfg := DispatcherConfig{
 			Env: map[string]string{
 				"BRIDGE_SERVER_ADDR": sandboxURL,
 			},
 			Network:        network.Name,
 			NetworkAliases: []string{dispatcherAlias},
-		})
+		}
+		for hostname, ip := range env.DispatcherHosts {
+			dispatcherCfg.ExtraHosts = append(dispatcherCfg.ExtraHosts,
+				fmt.Sprintf("%s:%s", hostname, ip))
+		}
+		dispatcher, err := NewDispatcher(ctx, dispatcherCfg)
 		if err != nil {
 			dispatchErr = fmt.Errorf("failed to start dispatcher: %w", err)
 			return
@@ -134,20 +159,23 @@ func SetupEnvironment(ctx context.Context, cfg EnvironmentConfig) (*Environment,
 	env.Devcontainer = devcontainer
 
 	// 4. Start bridge intercept in the background.
+	interceptArgs := fmt.Sprintf(
+		"bridge intercept "+
+			"--sandbox-url %s "+
+			"--function-url %s "+
+			"--name %s "+
+			"--app-port %d",
+		sandboxURL,
+		functionURL,
+		cfg.SandboxName,
+		cfg.AppPort,
+	)
+	for _, d := range cfg.ForwardDomains {
+		interceptArgs += fmt.Sprintf(" --forward-domains %s", d)
+	}
 	interceptCmd := []string{
 		"sh", "-c",
-		fmt.Sprintf(
-			"bridge intercept "+
-				"--sandbox-url %s "+
-				"--function-url %s "+
-				"--name %s "+
-				"--app-port %d "+
-				"> /tmp/intercept.log 2>&1 &",
-			sandboxURL,
-			functionURL,
-			cfg.SandboxName,
-			cfg.AppPort,
-		),
+		interceptArgs + " > /tmp/intercept.log 2>&1 &",
 	}
 
 	exitCode, _, err := devcontainer.Exec(ctx, interceptCmd)
@@ -248,6 +276,15 @@ func (e *Environment) TearDown(ctx context.Context, t *testing.T) {
 	if e.Network != nil {
 		e.Network.Terminate(ctx)
 	}
+}
+
+// randomPrivateIP generates a random IP in the 192.x.x.x range.
+func randomPrivateIP() string {
+	b := func() int {
+		n, _ := rand.Int(rand.Reader, big.NewInt(254))
+		return int(n.Int64()) + 1
+	}
+	return fmt.Sprintf("192.%d.%d.%d", b(), b(), b())
 }
 
 // InterceptLogs returns the bridge intercept log output from the devcontainer.

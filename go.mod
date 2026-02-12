@@ -7,12 +7,13 @@ require (
 	github.com/charmbracelet/wish v1.4.7
 	github.com/creack/pty v1.1.21
 	github.com/gorilla/websocket v1.5.3
+	github.com/miekg/dns v1.1.72
 	github.com/puzpuzpuz/xsync/v3 v3.5.1
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.40.0
 	github.com/urfave/cli/v3 v3.6.2
 	github.com/vercel-eddie/bridge/api/go v0.0.0-00010101000000-000000000000
-	golang.org/x/crypto v0.43.0
+	golang.org/x/crypto v0.46.0
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -94,8 +95,11 @@ require (
 	go.opentelemetry.io/otel/trace v1.40.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
-	golang.org/x/sync v0.17.0 // indirect
+	golang.org/x/mod v0.31.0 // indirect
+	golang.org/x/net v0.48.0 // indirect
+	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
-	golang.org/x/text v0.30.0 // indirect
+	golang.org/x/text v0.32.0 // indirect
+	golang.org/x/tools v0.40.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

@@ -133,6 +133,21 @@ export async function handleRequest(
     return true;
   }
 
+  // Tunnel connect endpoint - called by the bridge server to trigger tunnel connection
+  if (req.url === "/__tunnel/connect" && req.method === "POST") {
+    try {
+      await getTunnelClient();
+      res.status(200).json({ status: "connected" });
+    } catch (error) {
+      console.error("Failed to establish tunnel connection:", error);
+      res.status(503).json({
+        error: "Service Unavailable",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return true;
+  }
+
   // Status endpoint - check if tunnel is connected
   if (req.url === "/__tunnel/status") {
     const client = getCurrentTunnelClient();

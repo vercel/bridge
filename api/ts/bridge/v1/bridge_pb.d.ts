@@ -92,6 +92,20 @@ export declare type Message = Message$1<"bridge.v1.Message"> & {
    * @generated from field: string error = 7;
    */
   error: string;
+
+  /**
+   * DNS query resolution request, sent from intercept to dispatcher via the tunnel.
+   *
+   * @generated from field: optional bridge.v1.ResolveDNSQueryRequest dns_request = 8 [json_name = "dns_request"];
+   */
+  dnsRequest?: ResolveDNSQueryRequest;
+
+  /**
+   * DNS query resolution response, sent from dispatcher back to intercept via the tunnel.
+   *
+   * @generated from field: optional bridge.v1.ResolveDNSQueryResponse dns_response = 9 [json_name = "dns_response"];
+   */
+  dnsResponse?: ResolveDNSQueryResponse;
 };
 
 /**
@@ -187,4 +201,67 @@ export enum Message_Protocol {
  * Describes the enum bridge.v1.Message.Protocol.
  */
 export declare const Message_ProtocolSchema: GenEnum<Message_Protocol>;
+
+/**
+ * ResolveDNSQueryRequest is sent by the intercept client through the tunnel
+ * to ask the dispatcher to resolve a hostname.
+ *
+ * @generated from message bridge.v1.ResolveDNSQueryRequest
+ */
+export declare type ResolveDNSQueryRequest = Message$1<"bridge.v1.ResolveDNSQueryRequest"> & {
+  /**
+   * Unique ID to correlate this request with its response.
+   *
+   * @generated from field: string request_id = 1 [json_name = "request_id"];
+   */
+  requestId: string;
+
+  /**
+   * The hostname to resolve (e.g., "api.example.com").
+   *
+   * @generated from field: string hostname = 2;
+   */
+  hostname: string;
+};
+
+/**
+ * Describes the message bridge.v1.ResolveDNSQueryRequest.
+ * Use `create(ResolveDNSQueryRequestSchema)` to create a new message.
+ */
+export declare const ResolveDNSQueryRequestSchema: GenMessage<ResolveDNSQueryRequest>;
+
+/**
+ * ResolveDNSQueryResponse is sent by the dispatcher back through the tunnel
+ * with the resolved IP addresses for a DNS query.
+ *
+ * @generated from message bridge.v1.ResolveDNSQueryResponse
+ */
+export declare type ResolveDNSQueryResponse = Message$1<"bridge.v1.ResolveDNSQueryResponse"> & {
+  /**
+   * The request_id from the corresponding ResolveDNSQueryRequest.
+   *
+   * @generated from field: string request_id = 1 [json_name = "request_id"];
+   */
+  requestId: string;
+
+  /**
+   * The resolved IPv4 addresses.
+   *
+   * @generated from field: repeated string addresses = 2;
+   */
+  addresses: string[];
+
+  /**
+   * Error message if resolution failed.
+   *
+   * @generated from field: string error = 3;
+   */
+  error: string;
+};
+
+/**
+ * Describes the message bridge.v1.ResolveDNSQueryResponse.
+ * Use `create(ResolveDNSQueryResponseSchema)` to create a new message.
+ */
+export declare const ResolveDNSQueryResponseSchema: GenMessage<ResolveDNSQueryResponse>;
 

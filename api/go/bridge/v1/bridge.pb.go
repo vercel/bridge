@@ -143,7 +143,11 @@ type Message struct {
 	// Set to true when the connection should be closed.
 	Close bool `protobuf:"varint,6,opt,name=close,proto3" json:"close,omitempty"`
 	// Error message if something went wrong.
-	Error         string `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
+	Error string `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
+	// DNS query resolution request, sent from intercept to dispatcher via the tunnel.
+	DnsRequest *ResolveDNSQueryRequest `protobuf:"bytes,8,opt,name=dns_request,proto3,oneof" json:"dns_request,omitempty"`
+	// DNS query resolution response, sent from dispatcher back to intercept via the tunnel.
+	DnsResponse   *ResolveDNSQueryResponse `protobuf:"bytes,9,opt,name=dns_response,proto3,oneof" json:"dns_response,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -227,6 +231,141 @@ func (x *Message) GetError() string {
 	return ""
 }
 
+func (x *Message) GetDnsRequest() *ResolveDNSQueryRequest {
+	if x != nil {
+		return x.DnsRequest
+	}
+	return nil
+}
+
+func (x *Message) GetDnsResponse() *ResolveDNSQueryResponse {
+	if x != nil {
+		return x.DnsResponse
+	}
+	return nil
+}
+
+// ResolveDNSQueryRequest is sent by the intercept client through the tunnel
+// to ask the dispatcher to resolve a hostname.
+type ResolveDNSQueryRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Unique ID to correlate this request with its response.
+	RequestId string `protobuf:"bytes,1,opt,name=request_id,proto3" json:"request_id,omitempty"`
+	// The hostname to resolve (e.g., "api.example.com").
+	Hostname      string `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveDNSQueryRequest) Reset() {
+	*x = ResolveDNSQueryRequest{}
+	mi := &file_bridge_v1_bridge_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveDNSQueryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveDNSQueryRequest) ProtoMessage() {}
+
+func (x *ResolveDNSQueryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_v1_bridge_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveDNSQueryRequest.ProtoReflect.Descriptor instead.
+func (*ResolveDNSQueryRequest) Descriptor() ([]byte, []int) {
+	return file_bridge_v1_bridge_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ResolveDNSQueryRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ResolveDNSQueryRequest) GetHostname() string {
+	if x != nil {
+		return x.Hostname
+	}
+	return ""
+}
+
+// ResolveDNSQueryResponse is sent by the dispatcher back through the tunnel
+// with the resolved IP addresses for a DNS query.
+type ResolveDNSQueryResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The request_id from the corresponding ResolveDNSQueryRequest.
+	RequestId string `protobuf:"bytes,1,opt,name=request_id,proto3" json:"request_id,omitempty"`
+	// The resolved IPv4 addresses.
+	Addresses []string `protobuf:"bytes,2,rep,name=addresses,proto3" json:"addresses,omitempty"`
+	// Error message if resolution failed.
+	Error         string `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveDNSQueryResponse) Reset() {
+	*x = ResolveDNSQueryResponse{}
+	mi := &file_bridge_v1_bridge_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveDNSQueryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveDNSQueryResponse) ProtoMessage() {}
+
+func (x *ResolveDNSQueryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_v1_bridge_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveDNSQueryResponse.ProtoReflect.Descriptor instead.
+func (*ResolveDNSQueryResponse) Descriptor() ([]byte, []int) {
+	return file_bridge_v1_bridge_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ResolveDNSQueryResponse) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ResolveDNSQueryResponse) GetAddresses() []string {
+	if x != nil {
+		return x.Addresses
+	}
+	return nil
+}
+
+func (x *ResolveDNSQueryResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 type Message_Address struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ip            string                 `protobuf:"bytes,1,opt,name=ip,proto3" json:"ip,omitempty"`
@@ -237,7 +376,7 @@ type Message_Address struct {
 
 func (x *Message_Address) Reset() {
 	*x = Message_Address{}
-	mi := &file_bridge_v1_bridge_proto_msgTypes[2]
+	mi := &file_bridge_v1_bridge_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -249,7 +388,7 @@ func (x *Message_Address) String() string {
 func (*Message_Address) ProtoMessage() {}
 
 func (x *Message_Address) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_v1_bridge_proto_msgTypes[2]
+	mi := &file_bridge_v1_bridge_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -298,7 +437,7 @@ type Message_Registration struct {
 
 func (x *Message_Registration) Reset() {
 	*x = Message_Registration{}
-	mi := &file_bridge_v1_bridge_proto_msgTypes[3]
+	mi := &file_bridge_v1_bridge_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -310,7 +449,7 @@ func (x *Message_Registration) String() string {
 func (*Message_Registration) ProtoMessage() {}
 
 func (x *Message_Registration) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_v1_bridge_proto_msgTypes[3]
+	mi := &file_bridge_v1_bridge_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -361,7 +500,7 @@ const file_bridge_v1_bridge_proto_rawDesc = "" +
 	"\x16bridge/v1/bridge.proto\x12\tbridge.v1\"\\\n" +
 	"\x10ServerConnection\x12 \n" +
 	"\vsandbox_url\x18\x01 \x01(\tR\vsandbox_url\x12&\n" +
-	"\x0econnection_key\x18\x02 \x01(\tR\x0econnection_key\"\xef\x04\n" +
+	"\x0econnection_key\x18\x02 \x01(\tR\x0econnection_key\"\xa7\x06\n" +
 	"\aMessage\x12H\n" +
 	"\fregistration\x18\x01 \x01(\v2\x1f.bridge.v1.Message.RegistrationH\x00R\fregistration\x88\x01\x01\x122\n" +
 	"\x06source\x18\x02 \x01(\v2\x1a.bridge.v1.Message.AddressR\x06source\x12.\n" +
@@ -369,7 +508,9 @@ const file_bridge_v1_bridge_proto_rawDesc = "" +
 	"\x04data\x18\x04 \x01(\fR\x04data\x12$\n" +
 	"\rconnection_id\x18\x05 \x01(\tR\rconnection_id\x12\x14\n" +
 	"\x05close\x18\x06 \x01(\bR\x05close\x12\x14\n" +
-	"\x05error\x18\a \x01(\tR\x05error\x1a-\n" +
+	"\x05error\x18\a \x01(\tR\x05error\x12H\n" +
+	"\vdns_request\x18\b \x01(\v2!.bridge.v1.ResolveDNSQueryRequestH\x01R\vdns_request\x88\x01\x01\x12K\n" +
+	"\fdns_response\x18\t \x01(\v2\".bridge.v1.ResolveDNSQueryResponseH\x02R\fdns_response\x88\x01\x01\x1a-\n" +
 	"\aAddress\x12\x0e\n" +
 	"\x02ip\x18\x01 \x01(\tR\x02ip\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\x1a\xc5\x01\n" +
@@ -382,7 +523,20 @@ const file_bridge_v1_bridge_proto_rawDesc = "" +
 	"\x14PROTOCOL_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fPROTOCOL_TCP\x10\x01\x12\x10\n" +
 	"\fPROTOCOL_UDP\x10\x02B\x0f\n" +
-	"\r_registrationB\x9b\x01\n" +
+	"\r_registrationB\x0e\n" +
+	"\f_dns_requestB\x0f\n" +
+	"\r_dns_response\"T\n" +
+	"\x16ResolveDNSQueryRequest\x12\x1e\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\n" +
+	"request_id\x12\x1a\n" +
+	"\bhostname\x18\x02 \x01(\tR\bhostname\"m\n" +
+	"\x17ResolveDNSQueryResponse\x12\x1e\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\n" +
+	"request_id\x12\x1c\n" +
+	"\taddresses\x18\x02 \x03(\tR\taddresses\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05errorB\x9b\x01\n" +
 	"\rcom.bridge.v1B\vBridgeProtoP\x01Z8github.com/vercel-eddie/bridge/api/go/bridge/v1;bridgev1\xa2\x02\x03BXX\xaa\x02\tBridge.V1\xca\x02\tBridge\\V1\xe2\x02\x15Bridge\\V1\\GPBMetadata\xea\x02\n" +
 	"Bridge::V1b\x06proto3"
 
@@ -399,24 +553,28 @@ func file_bridge_v1_bridge_proto_rawDescGZIP() []byte {
 }
 
 var file_bridge_v1_bridge_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_bridge_v1_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_bridge_v1_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_bridge_v1_bridge_proto_goTypes = []any{
-	(Message_Protocol)(0),        // 0: bridge.v1.Message.Protocol
-	(*ServerConnection)(nil),     // 1: bridge.v1.ServerConnection
-	(*Message)(nil),              // 2: bridge.v1.Message
-	(*Message_Address)(nil),      // 3: bridge.v1.Message.Address
-	(*Message_Registration)(nil), // 4: bridge.v1.Message.Registration
+	(Message_Protocol)(0),           // 0: bridge.v1.Message.Protocol
+	(*ServerConnection)(nil),        // 1: bridge.v1.ServerConnection
+	(*Message)(nil),                 // 2: bridge.v1.Message
+	(*ResolveDNSQueryRequest)(nil),  // 3: bridge.v1.ResolveDNSQueryRequest
+	(*ResolveDNSQueryResponse)(nil), // 4: bridge.v1.ResolveDNSQueryResponse
+	(*Message_Address)(nil),         // 5: bridge.v1.Message.Address
+	(*Message_Registration)(nil),    // 6: bridge.v1.Message.Registration
 }
 var file_bridge_v1_bridge_proto_depIdxs = []int32{
-	4, // 0: bridge.v1.Message.registration:type_name -> bridge.v1.Message.Registration
-	3, // 1: bridge.v1.Message.source:type_name -> bridge.v1.Message.Address
-	3, // 2: bridge.v1.Message.dest:type_name -> bridge.v1.Message.Address
-	0, // 3: bridge.v1.Message.Registration.protocol:type_name -> bridge.v1.Message.Protocol
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	6, // 0: bridge.v1.Message.registration:type_name -> bridge.v1.Message.Registration
+	5, // 1: bridge.v1.Message.source:type_name -> bridge.v1.Message.Address
+	5, // 2: bridge.v1.Message.dest:type_name -> bridge.v1.Message.Address
+	3, // 3: bridge.v1.Message.dns_request:type_name -> bridge.v1.ResolveDNSQueryRequest
+	4, // 4: bridge.v1.Message.dns_response:type_name -> bridge.v1.ResolveDNSQueryResponse
+	0, // 5: bridge.v1.Message.Registration.protocol:type_name -> bridge.v1.Message.Protocol
+	6, // [6:6] is the sub-list for method output_type
+	6, // [6:6] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_bridge_v1_bridge_proto_init() }
@@ -431,7 +589,7 @@ func file_bridge_v1_bridge_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bridge_v1_bridge_proto_rawDesc), len(file_bridge_v1_bridge_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

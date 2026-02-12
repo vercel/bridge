@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -178,7 +179,7 @@ func (s *WSServer) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	if reg.GetIsServer() {
 		s.handleServerRegistration(wsConn, remoteAddr)
 	} else {
-		s.handleClientRegistration(r.Context(), wsConn, remoteAddr)
+		s.handleClientRegistration(r.Context(), wsConn, remoteAddr, reg.GetFunctionUrl(), reg.GetProtectionBypassSecret())
 	}
 }
 
@@ -200,7 +201,12 @@ func (s *WSServer) handleServerRegistration(wsConn *websocket.Conn, remoteAddr s
 	}
 }
 
-func (s *WSServer) handleClientRegistration(ctx context.Context, wsConn *websocket.Conn, remoteAddr string) {
+func (s *WSServer) handleClientRegistration(ctx context.Context, wsConn *websocket.Conn, remoteAddr, functionURL, bypassSecret string) {
+	// Invoke the dispatcher so it connects back as the server side of the tunnel.
+	if functionURL != "" {
+		go s.invokeDispatcher(functionURL, bypassSecret)
+	}
+
 	// Wait for a server (dispatcher) to be available
 	select {
 	case entry := <-s.pendingServer:
@@ -217,6 +223,38 @@ func (s *WSServer) handleClientRegistration(ctx context.Context, wsConn *websock
 	case <-ctx.Done():
 		slog.Error("timeout waiting for server connection", "remote", remoteAddr)
 		s.sendError(wsConn, "timeout waiting for server connection")
+	}
+}
+
+// invokeDispatcher POSTs to the dispatcher's /__tunnel/connect endpoint to
+// trigger it to establish the server-side tunnel connection.
+func (s *WSServer) invokeDispatcher(functionURL, bypassSecret string) {
+	connectURL := strings.TrimSuffix(functionURL, "/") + "/__tunnel/connect"
+
+	slog.Info("invoking dispatcher", "url", connectURL)
+
+	req, err := http.NewRequest("POST", connectURL, nil)
+	if err != nil {
+		slog.Error("failed to create dispatcher invoke request", "error", err)
+		return
+	}
+
+	if bypassSecret != "" {
+		req.Header.Set("x-vercel-protection-bypass", bypassSecret)
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Error("failed to invoke dispatcher", "error", err, "url", connectURL)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		slog.Error("dispatcher invoke returned non-200", "status", resp.StatusCode, "url", connectURL)
+	} else {
+		slog.Info("dispatcher invoked successfully", "url", connectURL)
 	}
 }
 

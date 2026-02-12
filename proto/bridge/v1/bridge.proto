@@ -62,4 +62,33 @@ message Message {
 
   // Error message if something went wrong.
   string error = 7;
+
+  // DNS query resolution request, sent from intercept to dispatcher via the tunnel.
+  optional ResolveDNSQueryRequest dns_request = 8 [json_name = "dns_request"];
+
+  // DNS query resolution response, sent from dispatcher back to intercept via the tunnel.
+  optional ResolveDNSQueryResponse dns_response = 9 [json_name = "dns_response"];
+}
+
+// ResolveDNSQueryRequest is sent by the intercept client through the tunnel
+// to ask the dispatcher to resolve a hostname.
+message ResolveDNSQueryRequest {
+  // Unique ID to correlate this request with its response.
+  string request_id = 1 [json_name = "request_id"];
+
+  // The hostname to resolve (e.g., "api.example.com").
+  string hostname = 2;
+}
+
+// ResolveDNSQueryResponse is sent by the dispatcher back through the tunnel
+// with the resolved IP addresses for a DNS query.
+message ResolveDNSQueryResponse {
+  // The request_id from the corresponding ResolveDNSQueryRequest.
+  string request_id = 1 [json_name = "request_id"];
+
+  // The resolved IPv4 addresses.
+  repeated string addresses = 2;
+
+  // Error message if resolution failed.
+  string error = 3;
 }

@@ -4,9 +4,11 @@ import {
   Message_RegistrationSchema,
   Message_AddressSchema,
   Message_Protocol,
+  ResolveDNSQueryResponseSchema,
   type Message,
 } from "@vercel/bridge-api";
 import {randomUUID} from "crypto";
+import * as dns from "dns";
 import * as net from "net";
 import WebSocket from "ws";
 import {logger} from "./logger.js";
@@ -191,6 +193,12 @@ export class TunnelClient {
   }
 
   private handleIncomingMessage(message: Message): void {
+    // Handle DNS resolution requests
+    if (message.dnsRequest) {
+      this.handleDNSRequest(message.dnsRequest.requestId, message.dnsRequest.hostname);
+      return;
+    }
+
     const connectionId = message.connectionId;
 
     logger.debug(
@@ -327,6 +335,24 @@ export class TunnelClient {
     if (message.data.length > 0) {
       conn.socket.write(Buffer.from(message.data));
     }
+  }
+
+  private handleDNSRequest(requestId: string, hostname: string): void {
+    logger.debug(`DNS resolution request: requestId=${requestId} hostname=${hostname}`);
+
+    // Use dns.lookup() instead of dns.resolve4() so /etc/hosts entries are checked
+    dns.lookup(hostname, {family: 4, all: true}, (err, results) => {
+      const addresses = err ? [] : (results as dns.LookupAddress[]).map(r => r.address);
+      const response = create(MessageSchema, {
+        dnsResponse: create(ResolveDNSQueryResponseSchema, {
+          requestId,
+          addresses,
+          error: err ? err.message : "",
+        }),
+      });
+      this.queueMessage(response);
+      logger.debug(`DNS resolution response: requestId=${requestId} addresses=${addresses} error=${err?.message ?? ""}`);
+    });
   }
 
   async forwardRequest(
