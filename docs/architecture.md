@@ -1,81 +1,93 @@
 # Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                             Developer Machine                                │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                              Devcontainer                              │  │
-│  │  ┌─────────────┐    ┌──────────────────┐    ┌───────────────────────┐  │  │
-│  │  │ Local Code  │───▶│ bridge intercept │───▶│    Local TCP Proxy    │  │  │
-│  │  │  Workspace  │    │   (CLI command)  │    │      (SSH port)       │  │  │
-│  │  └──────┬──────┘    └──────────────────┘    └───────────┬───────────┘  │  │
-│  │         │                                               │              │  │
-│  │         │ file sync                                     │              │  │
-│  │         │ (mutagen)                                     │              │  │
-│  │         │                                               │              │  │
-│  └─────────┼───────────────────────────────────────────────┼──────────────┘  │
-│            │                                               │                 │
-└────────────┼───────────────────────────────────────────────┼─────────────────┘
-             │                                               │
-             │ SSH over WebSocket (/ssh)                     │ WebSocket
-             │                                               │
-             ▼                                               ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                              Vercel Sandbox                                  │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                            bridge server                               │  │
-│  │  ┌───────────────┐    ┌──────────────────┐    ┌─────────────────────┐  │  │
-│  │  │  SSH Server   │◀──▶│ WebSocket Server │◀──▶│    HTTP CONNECT     │  │  │
-│  │  │  (port 2222)  │    │  /health, /ssh   │    │       Proxy         │  │  │
-│  │  └───────────────┘    │     /tunnel      │    └─────────────────────┘  │  │
-│  │                       └─────────┬────────┘                             │  │
-│  └─────────────────────────────────┼──────────────────────────────────────┘  │
-│          ▲                         │                                         │
-│          │ file sync (mutagen)     │ WebSocket tunnel                        │
-│          │                         ▼                                         │
-│  ┌───────┴───────┐                                                           │
-│  │    Sandbox    │                                                           │
-│  │   Workspace   │                                                           │
-│  └───────────────┘                                                           │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                     │
-                                     │ WebSocket
-                                     ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                         Vercel Preview Deployment                            │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                          Dispatcher Service                            │  │
-│  │  ┌─────────────────┐    ┌─────────────────┐    ┌────────────────────┐  │  │
-│  │  │  Incoming HTTP  │───▶│  Tunnel Client  │───▶│      Forward       │  │  │
-│  │  │    Requests     │    │   (Singleton)   │    │      Response      │  │  │
-│  │  └─────────────────┘    └─────────────────┘    └────────────────────┘  │  │
-│  └────────────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                     ▲
-                                     │
-                                     │ HTTPS
-                                     │
-                            ┌────────┴────────┐
-                            │   End Users /   │
-                            │   API Clients   │
-                            └─────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                               Developer Machine                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────┐  │
+│  │                               Devcontainer                                 │  │
+│  │                                                                            │  │
+│  │  ┌─────────────┐    ┌──────────────────────────────────────────────────┐   │  │
+│  │  │             │    │              bridge intercept                    │   │  │
+│  │  │ Local Code  │    │                                                 │   │  │
+│  │  │  Workspace  │    │  ┌──────────┐  ┌─────────────┐  ┌───────────┐  │   │  │
+│  │  │             │    │  │   DNS    │  │ Transparent │  │    SSH    │  │   │  │
+│  │  │             │    │  │  Server  │  │    Proxy    │  │   Proxy   │  │   │  │
+│  │  │             │    │  │ :53      │  │ (iptables)  │  │          │  │   │  │
+│  │  └──────┬──────┘    └──┴─────┬────┴──┴──────┬──────┴──┴─────┬────┴──┘   │  │
+│  │         │                    │              │               │            │  │
+│  │         │ file sync          │              │               │            │  │
+│  │         │ (mutagen)          │ /etc/        │ TCP to        │            │  │
+│  │         │                    │ resolv.conf  │ 10.128.0.0/16 │            │  │
+│  └─────────┼────────────────────┼──────────────┼───────────────┼────────────┘  │
+│            │                    │              │               │               │
+└────────────┼────────────────────┼──────────────┼───────────────┼───────────────┘
+             │                    │              │               │
+             │                    │              │  WebSocket    │ WebSocket
+             │                    │              │  (/tunnel)    │ (/ssh)
+             │                    │              │               │
+             ▼                    │              ▼               ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                                Vercel Sandbox                                    │
+│  ┌────────────────────────────────────────────────────────────────────────────┐  │
+│  │                              bridge server                                 │  │
+│  │                                                                            │  │
+│  │  ┌───────────────┐    ┌──────────────────────────────────────────┐         │  │
+│  │  │  SSH Server   │◀──▶│            WebSocket Server              │         │  │
+│  │  │  (port 2222)  │    │                                          │         │  │
+│  │  └───────────────┘    │  /health    /ssh    /tunnel              │         │  │
+│  │                       │                     (relay between       │         │  │
+│  │                       │                      client ◀▶ server)   │         │  │
+│  │                       └──────────────────────┬───────────────────┘         │  │
+│  └──────────────────────────────────────────────┼────────────────────────────┘  │
+│          ▲                                      │                               │
+│          │ file sync (mutagen)                  │ WebSocket                      │
+│          │                                      ▼                               │
+│  ┌───────┴───────┐                                                              │
+│  │    Sandbox    │                                                              │
+│  │   Workspace   │                                                              │
+│  └───────────────┘                                                              │
+└──────────────────────────────────────────────────────────────────────────────────┘
+                                                  │
+                                                  │ WebSocket
+                                                  ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                           Vercel Preview Deployment                               │
+│  ┌────────────────────────────────────────────────────────────────────────────┐  │
+│  │                            Dispatcher Service                              │  │
+│  │                                                                            │  │
+│  │  ┌─────────────────┐    ┌──────────────────┐    ┌──────────────────────┐  │  │
+│  │  │  Incoming HTTP  │───▶│  Tunnel Client   │───▶│  Forward Response   │  │  │
+│  │  │    Requests     │    │   (Singleton)    │    │   + Resolve DNS     │  │  │
+│  │  └─────────────────┘    └──────────────────┘    └──────────────────────┘  │  │
+│  └────────────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────────────┘
+                                                  ▲
+                                                  │
+                                                  │ HTTPS
+                                                  │
+                                         ┌────────┴────────┐
+                                         │   End Users /   │
+                                         │   API Clients   │
+                                         └─────────────────┘
 ```
 
 ### Component Overview
 
-| Component         | Description                                                  |
-|-------------------|--------------------------------------------------------------|
-| **bridge CLI**    | Go CLI with `create`, `connect`, and `server` commands       |
-| **Devcontainer**  | Local development container with `bridge intercept` injected |
-| **bridge server** | SSH + WebSocket server running in the Sandbox                |
-| **Dispatcher**    | Node.js service on Preview deployment that tunnels requests  |
-| **Mutagen**       | File synchronization between local and Sandbox workspaces    |
+| Component              | Description                                                           |
+|------------------------|-----------------------------------------------------------------------|
+| **bridge CLI**         | Go CLI with `intercept` and `server` commands                         |
+| **bridge intercept**   | Runs in devcontainer: DNS server, transparent proxy, SSH proxy        |
+| **bridge server**      | Runs in sandbox: SSH server + WebSocket relay (`/health /ssh /tunnel`)|
+| **Dispatcher**         | Service on Preview deployment that tunnels requests and resolves DNS  |
+| **Mutagen**            | File synchronization between devcontainer and sandbox workspaces      |
 
 ### Data Flow
 
-1. **File Sync**: Local code ←→ Sandbox workspace via SSH + Mutagen
-2. **SSH Access**: Developer SSH → Local TCP Proxy → WebSocket → Sandbox SSH Server
-3. **Request Forwarding**: End User → Preview Deployment → Dispatcher → Tunnel → Sandbox → Local Dev
+1. **File Sync**: Local workspace ←→ Sandbox workspace via SSH + Mutagen
+2. **SSH Access**: Developer SSH → SSH Proxy → WebSocket `/ssh` → Sandbox SSH Server
+3. **Inbound Requests**: End User → Dispatcher → Tunnel → Sandbox → Devcontainer app
+4. **Outbound DNS**: App DNS query → Bridge DNS → matched: tunnel to dispatcher / unmatched: Docker DNS
+5. **Outbound TCP**: App connects to proxy IP → iptables redirect → Transparent Proxy → Tunnel → Dispatcher
 
 ## Order of operations
 
@@ -154,3 +166,142 @@ client and server connections.
 - Begin piping data bidirectionally between client and server
 
 5. On timeout or error, clean up connection
+
+## DNS Interception
+
+When `--forward-domains` is configured, `bridge intercept` runs a local DNS server that intercepts matching queries and routes them through the tunnel. This allows the devcontainer to reach services that only resolve from the dispatcher's network.
+
+DNS interception is done by prepending the bridge DNS server to `/etc/resolv.conf`. No iptables rules are needed for DNS — iptables are only used for TCP redirect of proxy CIDR traffic.
+
+### Components
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                            Devcontainer                                 │
+│                                                                         │
+│  /etc/resolv.conf                                                       │
+│  ┌──────────────────────────┐                                           │
+│  │ nameserver 127.0.0.1     │ ◀── bridge DNS (added at startup)        │
+│  │ nameserver 127.0.0.11    │ ◀── original Docker DNS (kept)           │
+│  └──────────────────────────┘                                           │
+│                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                      Bridge DNS Server (127.0.0.1:53)             │  │
+│  │                                                                    │  │
+│  │  ┌────────────────────────┐     ┌───────────────────────────────┐ │  │
+│  │  │  TunnelExchangeClient  │     │    SystemExchangeClient       │ │  │
+│  │  │                        │     │                               │ │  │
+│  │  │  Matched patterns:     │     │  Everything else:             │ │  │
+│  │  │  resolve via tunnel,   │     │  forward to original NS,     │ │  │
+│  │  │  return intercepted=   │     │  return intercepted=false     │ │  │
+│  │  │  true                  │     │                               │ │  │
+│  │  └───────────┬────────────┘     └──────────────┬────────────────┘ │  │
+│  └──────────────┼─────────────────────────────────┼──────────────────┘  │
+│                 │                                  │                     │
+│                 │ WebSocket tunnel                 │ UDP to 127.0.0.11   │
+│                 ▼                                  ▼                     │
+│  ┌──────────────────────┐             ┌──────────────────────────────┐  │
+│  │    Tunnel Client     │             │  Docker Embedded DNS         │  │
+│  └──────────┬───────────┘             │  (resolves container names   │  │
+│             │                         │   and external domains)      │  │
+│             │                         └──────────────────────────────┘  │
+└─────────────┼──────────────────────────────────────────────────────────┘
+              │ WebSocket
+              ▼
+     ┌─────────────────┐
+     │  Bridge Server   │
+     │   (Sandbox)      │──▶ Dispatcher resolves DNS
+     └─────────────────┘
+```
+
+### Matched Domain Query
+
+An app queries a hostname that matches a `--forward-domains` pattern (e.g., `*.example.com`):
+
+```
+App                Bridge DNS           Tunnel             Dispatcher
+ │                 (127.0.0.1:53)       Exchange           (resolves DNS)
+ │                  │                    │                   │
+ │ A? api.example.com                   │                   │
+ │─────────────────▶│                    │                   │
+ │                  │                    │                   │
+ │                  │ ExchangeContext()   │                   │
+ │                  │───────────────────▶│                   │
+ │                  │                    │                   │
+ │                  │                    │ pattern match     │
+ │                  │                    │                   │
+ │                  │                    │ ResolveDNS("api.example.com")
+ │                  │                    │──── WebSocket ───▶│
+ │                  │                    │                   │ resolve
+ │                  │                    │◀── 93.184.1.1 ───│
+ │                  │                    │                   │
+ │                  │ intercepted=true    │                   │
+ │                  │ A: 93.184.1.1      │                   │
+ │                  │◀───────────────────│                   │
+ │                  │                    │                   │
+ │                  │ Registry.Register("api.example.com", 93.184.1.1)
+ │                  │ → proxy IP 10.128.0.1
+ │                  │
+ │ A: 10.128.0.1    │
+ │◀─────────────────│
+```
+
+The app connects to `10.128.0.1`. Iptables redirects TCP destined for `10.128.0.0/16` to the transparent proxy:
+
+```
+App              iptables           Proxy              Registry           Tunnel
+ │                (nat)              │                   │                  │
+ │ connect 10.128.0.1:443           │                   │                  │
+ │───────────────▶│                  │                   │                  │
+ │                │ REDIRECT         │                   │                  │
+ │                │─────────────────▶│                   │                  │
+ │                │                  │                   │                  │
+ │                │                  │ getOriginalDst()  │                  │
+ │                │                  │ → 10.128.0.1:443  │                  │
+ │                │                  │                   │                  │
+ │                │                  │ Lookup(10.128.0.1) │                  │
+ │                │                  │──────────────────▶│                  │
+ │                │                  │                   │                  │
+ │                │                  │ api.example.com   │                  │
+ │                │                  │◀──────────────────│                  │
+ │                │                  │                   │                  │
+ │                │                  │ DialThroughTunnel("api.example.com:443")
+ │                │                  │─────────────────────────────────────▶│
+ │                │                  │                   │                  │
+ │◀═════════════════════════════════▶│◀═══════════════════════════════════▶│
+ │          bidirectional copy       │            WebSocket tunnel          │
+```
+
+### Unmatched Domain Query
+
+An app queries a hostname that does not match any `--forward-domains` pattern:
+
+```
+App                Bridge DNS           System             Docker DNS
+ │                 (127.0.0.1:53)       Exchange           (127.0.0.11)
+ │                  │                    │                   │
+ │ A? google.com    │                    │                   │
+ │─────────────────▶│                    │                   │
+ │                  │                    │                   │
+ │                  │ ExchangeContext()   │                   │
+ │                  │───────────────────▶│                   │
+ │                  │                    │                   │
+ │                  │                    │ no match          │
+ │                  │                    │ → fallback        │
+ │                  │                    │                   │
+ │                  │                    │ UDP query         │
+ │                  │                    │──────────────────▶│
+ │                  │                    │                   │
+ │                  │                    │ A: 142.250.x.x    │
+ │                  │                    │◀──────────────────│
+ │                  │                    │                   │
+ │                  │ intercepted=false   │                   │
+ │                  │◀───────────────────│                   │
+ │                  │
+ │                  │ pass through as-is (no proxy IP)
+ │                  │
+ │ A: 142.250.x.x  │
+ │◀─────────────────│
+ │
+ │ connect directly (not in proxy CIDR, no iptables intercept)
+```
