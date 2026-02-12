@@ -192,10 +192,12 @@ export class TunnelClient {
     }
 
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      logger.debug(`sendMessage failed: WebSocket not open connId=${msg.connectionId} dataLen=${msg.data?.length ?? 0} close=${msg.close}`);
       return false;
     }
 
     const binary = toBinary(MessageSchema, msg);
+    logger.debug(`sendMessage: connId=${msg.connectionId} dataLen=${msg.data?.length ?? 0} close=${msg.close} dnsResponse=${!!msg.dnsResponse}`);
     this.ws.send(binary);
     return true;
   }
