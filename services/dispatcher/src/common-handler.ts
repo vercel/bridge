@@ -173,13 +173,16 @@ export async function handleRequest(
 
       const rawRequest = buildHttpRequest(req);
 
+      console.log(`[DEBUG] Forwarding request: ${req.method} ${req.url}`);
       const response = await client.forwardRequest(
         rawRequest,
         { ip: req.remoteIp ?? "127.0.0.1", port: req.remotePort ?? 0 },
         { ip: req.localIp ?? "127.0.0.1", port: req.localPort ?? 0 }
       );
 
+      console.log(`[DEBUG] Got tunnel response: dataLen=${response.data.length}`);
       const parsed = parseHttpResponse(response.data);
+      console.log(`[DEBUG] Parsed HTTP response: status=${parsed.statusCode} bodyLen=${parsed.body.length} headers=${JSON.stringify(parsed.headers)}`);
 
       // Set response headers
       for (const [key, value] of Object.entries(parsed.headers)) {
@@ -193,7 +196,9 @@ export async function handleRequest(
         bodyBytes = dechunkBuffer(bodyBytes);
       }
 
+      console.log(`[DEBUG] Sending response: status=${parsed.statusCode} bodyLen=${bodyBytes.length}`);
       res.status(parsed.statusCode).send(new TextDecoder().decode(bodyBytes));
+      console.log(`[DEBUG] Response sent successfully`);
       break;
     } catch (error) {
       console.error(`Proxy error (attempt ${attempt}/${maxAttempts}):`, error);

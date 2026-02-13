@@ -256,12 +256,15 @@ export class TunnelClient {
       const pending = this.pendingRequests.get(connectionId);
       if (pending) {
         const fullData = this.concatenateChunks(pending.chunks);
+        logger.debug(`Resolving pending request: connId=${connectionId} chunks=${pending.chunks.length} totalBytes=${fullData.length}`);
         const finalMessage = create(MessageSchema, {
           ...message,
           data: fullData,
         });
         pending.resolve(finalMessage);
         this.pendingRequests.delete(connectionId);
+      } else {
+        logger.debug(`Close received but no pending request: connId=${connectionId}`);
       }
 
       // Clean up the outgoing connection if it exists
@@ -434,10 +437,18 @@ export class TunnelClient {
     // Ensure connected before setting up the request
     await this.ensureConnected();
 
+    logger.debug(`forwardRequest: connId=${connectionId} dataLen=${data.length} src=${source.ip}:${source.port} dst=${dest.ip}:${dest.port}`);
+
     return new Promise((resolve, reject) => {
       this.pendingRequests.set(connectionId, {
-        resolve,
-        reject,
+        resolve: (msg) => {
+          logger.debug(`forwardRequest resolved: connId=${connectionId} dataLen=${msg.data.length}`);
+          resolve(msg);
+        },
+        reject: (err) => {
+          logger.debug(`forwardRequest rejected: connId=${connectionId} error=${err.message}`);
+          reject(err);
+        },
         chunks: [],
       });
 
@@ -454,6 +465,8 @@ export class TunnelClient {
         reject(new Error("WebSocket not connected"));
         return;
       }
+
+      logger.debug(`forwardRequest sent: connId=${connectionId}`);
 
       // Set timeout for request
       setTimeout(() => {
