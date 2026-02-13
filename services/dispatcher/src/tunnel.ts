@@ -7,7 +7,6 @@ import {
   ResolveDNSQueryResponseSchema,
   type Message,
 } from "@vercel/bridge-api";
-import {randomUUID} from "crypto";
 import * as dns from "dns";
 import * as net from "net";
 import WebSocket from "ws";
@@ -401,10 +400,6 @@ export class TunnelClient {
       this.pendingRequests.delete(connectionId);
     });
 
-    // Send initial data to the destination
-    if (message.data.length > 0) {
-      socket.write(Buffer.from(message.data));
-    }
   }
 
   private handleDNSRequest(requestId: string, hostname: string): void {
@@ -432,7 +427,7 @@ export class TunnelClient {
     source: { ip: string; port: number },
     dest: { ip: string; port: number }
   ): Promise<Message> {
-    const connectionId = randomUUID();
+    const connectionId = `${source.ip}:${source.port}->${dest.ip}:${dest.port}`;
 
     // Ensure connected before setting up the request
     await this.ensureConnected();
