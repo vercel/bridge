@@ -26,8 +26,8 @@ const (
 	// TestServerName is the deployment/service name for the test server.
 	TestServerName = "test-api-server"
 
-	// TestServerPort is the port the test server listens on.
-	TestServerPort = 8080
+	// TestServerPort is the Kubernetes Service port for the test server.
+	TestServerPort = 80
 )
 
 // DeployAdministrator applies the administrator manifests and waits for the
@@ -48,7 +48,7 @@ func DeployAdministrator(ctx context.Context, cfg *rest.Config, clientset kubern
 
 	slog.Info("Administrator deployed", "namespace", AdministratorNamespace, "image", imageRef)
 
-	if err := WaitForDeploymentReady(ctx, clientset, AdministratorNamespace, "administrator", 3*time.Minute); err != nil {
+	if err := WaitForDeploymentReady(ctx, clientset, AdministratorNamespace, "administrator", 1*time.Minute); err != nil {
 		return nil, fmt.Errorf("administrator not ready: %w", err)
 	}
 
@@ -82,7 +82,7 @@ func DeployTestServer(ctx context.Context, cfg *rest.Config, clientset kubernete
 
 	slog.Info("Test server deployed", "namespace", TestServerNamespace, "image", imageRef)
 
-	if err := WaitForDeploymentReady(ctx, clientset, TestServerNamespace, TestServerName, 3*time.Minute); err != nil {
+	if err := WaitForDeploymentReady(ctx, clientset, TestServerNamespace, TestServerName, 1*time.Minute); err != nil {
 		return fmt.Errorf("test server not ready: %w", err)
 	}
 

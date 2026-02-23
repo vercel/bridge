@@ -270,8 +270,9 @@ func currentKubeNamespace() string {
 // configureDevMounts adds host bind mounts needed for local development:
 // the linux bridge binary (dev mode), KUBECONFIG, and Docker network access.
 func configureDevMounts(cfg *devcontainer.Config) error {
-	// In dev mode, bind-mount the linux bridge binary into the container.
-	if Version == "dev" {
+	// In dev mode, bind-mount the linux bridge binary into the container,
+	// unless the base config already provides one (e.g. in e2e tests).
+	if Version == "dev" && !hasMountTarget(cfg, "/usr/local/bin/bridge") {
 		binPath, err := filepath.Abs(filepath.Join("dist", "bridge-linux"))
 		if err != nil {
 			return fmt.Errorf("failed to resolve bridge binary path: %w", err)
@@ -358,6 +359,17 @@ func configureKubeconfig(cfg *devcontainer.Config) error {
 
 	cfg.EnsureContainerEnv("KUBECONFIG", mountTarget)
 	return nil
+}
+
+// hasMountTarget returns true if any existing mount in cfg targets the given path.
+func hasMountTarget(cfg *devcontainer.Config, target string) bool {
+	needle := "target=" + target
+	for _, m := range cfg.Mounts {
+		if strings.Contains(m, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // ensureGitignore adds a pattern to the .gitignore file in dir if not already present.

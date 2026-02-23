@@ -86,7 +86,7 @@ func (s *CreateSuite) SetupSuite() {
 		s.T().Skip("skipping e2e test in short mode")
 	}
 
-	s.ctx, s.cancel = context.WithTimeout(context.Background(), 20*time.Minute)
+	s.ctx, s.cancel = context.WithTimeout(context.Background(), 5*time.Minute)
 
 	var err error
 
@@ -258,7 +258,7 @@ func (s *CreateSuite) TestFullstackCreate() {
 		}
 		t.Logf("[diag] intercept log: %s", out)
 		return strings.Contains(out, "Bridge intercept starting")
-	}, 5*time.Minute, 2*time.Second, "intercept not ready")
+	}, 1*time.Minute, 1*time.Second, "intercept not ready")
 	t.Log("Bridge intercept is ready")
 
 	// --- Verify network access with a single wget ---
@@ -283,7 +283,7 @@ func (s *CreateSuite) TestFullstackCreate() {
 	warmupOut, _ := dcExec.ExecOutput(s.ctx, []string{"sh", "-c", "nslookup " + testutil.TestServerName + "." + testutil.TestServerNamespace + ".svc.cluster.local 127.0.0.1 2>&1 || true"})
 	t.Logf("[warmup nslookup] %s", strings.TrimSpace(warmupOut))
 
-	wgetOut, wgetErr := dcExec.ExecOutput(s.ctx, []string{"wget", "-O", "-", "-T", "30", targetURL})
+	wgetOut, wgetErr := dcExec.ExecOutput(s.ctx, []string{"wget", "-O", "-", "-T", "10", targetURL})
 	t.Logf("[wget] output: %s", strings.TrimSpace(wgetOut))
 	require.NoError(t, wgetErr, "wget failed")
 	require.Contains(t, wgetOut, "ok", "expected test server response")
