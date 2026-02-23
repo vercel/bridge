@@ -481,7 +481,7 @@ const file_bridge_v1_administrator_proto_rawDesc = "" +
 	"\fCreateBridge\x12\x1e.bridge.v1.CreateBridgeRequest\x1a\x1f.bridge.v1.CreateBridgeResponse\x12L\n" +
 	"\vListBridges\x12\x1d.bridge.v1.ListBridgesRequest\x1a\x1e.bridge.v1.ListBridgesResponse\x12O\n" +
 	"\fDeleteBridge\x12\x1e.bridge.v1.DeleteBridgeRequest\x1a\x1f.bridge.v1.DeleteBridgeResponseB\xa2\x01\n" +
-	"\rcom.bridge.v1B\x12AdministratorProtoP\x01Z8github.com/vercel-eddie/bridge/api/go/bridge/v1;bridgev1\xa2\x02\x03BXX\xaa\x02\tBridge.V1\xca\x02\tBridge\\V1\xe2\x02\x15Bridge\\V1\\GPBMetadata\xea\x02\n" +
+	"\rcom.bridge.v1B\x12AdministratorProtoP\x01Z8github.com/vercel/bridge/api/go/bridge/v1;bridgev1\xa2\x02\x03BXX\xaa\x02\tBridge.V1\xca\x02\tBridge\\V1\xe2\x02\x15Bridge\\V1\\GPBMetadata\xea\x02\n" +
 	"Bridge::V1b\x06proto3"
 
 var (

@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/urfave/cli/v3"
-	"github.com/vercel-eddie/bridge/pkg/identity"
+	"github.com/vercel/bridge/pkg/identity"
 )
 
 var Version = "dev"

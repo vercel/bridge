@@ -9,9 +9,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/vercel-eddie/bridge/pkg/plumbing"
+	"github.com/vercel/bridge/pkg/plumbing"
 
-	bridgev1 "github.com/vercel-eddie/bridge/api/go/bridge/v1"
+	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

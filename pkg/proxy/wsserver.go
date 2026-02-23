@@ -10,8 +10,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/puzpuzpuz/xsync/v3"
-	bridgev1 "github.com/vercel-eddie/bridge/api/go/bridge/v1"
-	"github.com/vercel-eddie/bridge/pkg/bidi"
+	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
+	"github.com/vercel/bridge/pkg/bidi"
 	"google.golang.org/protobuf/proto"
 )
 

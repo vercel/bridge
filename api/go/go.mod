@@ -1,4 +1,4 @@
-module github.com/vercel-eddie/bridge/api/go
+module github.com/vercel/bridge/api/go
 
 go 1.24.0
 

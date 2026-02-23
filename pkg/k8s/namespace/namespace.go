@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/vercel-eddie/bridge/pkg/k8s/meta"
+	"github.com/vercel/bridge/pkg/k8s/meta"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"

@@ -537,7 +537,7 @@ const file_bridge_v1_bridge_proto_rawDesc = "" +
 	"request_id\x12\x1c\n" +
 	"\taddresses\x18\x02 \x03(\tR\taddresses\x12\x14\n" +
 	"\x05error\x18\x03 \x01(\tR\x05errorB\x9b\x01\n" +
-	"\rcom.bridge.v1B\vBridgeProtoP\x01Z8github.com/vercel-eddie/bridge/api/go/bridge/v1;bridgev1\xa2\x02\x03BXX\xaa\x02\tBridge.V1\xca\x02\tBridge\\V1\xe2\x02\x15Bridge\\V1\\GPBMetadata\xea\x02\n" +
+	"\rcom.bridge.v1B\vBridgeProtoP\x01Z8github.com/vercel/bridge/api/go/bridge/v1;bridgev1\xa2\x02\x03BXX\xaa\x02\tBridge.V1\xca\x02\tBridge\\V1\xe2\x02\x15Bridge\\V1\\GPBMetadata\xea\x02\n" +
 	"Bridge::V1b\x06proto3"
 
 var (

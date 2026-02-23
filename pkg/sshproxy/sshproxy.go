@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/vercel-eddie/bridge/pkg/netutil"
-	"github.com/vercel-eddie/bridge/pkg/proxy"
+	"github.com/vercel/bridge/pkg/netutil"
+	"github.com/vercel/bridge/pkg/proxy"
 )
 
 // SSHProxy manages a local TCP proxy for SSH connections tunneled through WebSocket.

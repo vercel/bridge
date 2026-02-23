@@ -3,7 +3,7 @@ package commands
 import (
 	"context"
 
-	"github.com/vercel-eddie/bridge/pkg/sshproxy"
+	"github.com/vercel/bridge/pkg/sshproxy"
 )
 
 // SSHComponent wraps an SSH proxy for tunneled SSH connections.

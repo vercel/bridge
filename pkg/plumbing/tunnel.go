@@ -10,7 +10,7 @@ import (
 	"sync"
 
 	"github.com/puzpuzpuz/xsync/v3"
-	bridgev1 "github.com/vercel-eddie/bridge/api/go/bridge/v1"
+	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 )
 
 // TunnelStream abstracts a bidirectional gRPC stream. Both the server-side

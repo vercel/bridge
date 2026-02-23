@@ -15,7 +15,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/vercel-eddie/bridge/e2e/testutil"
+	"github.com/vercel/bridge/e2e/testutil"
 )
 
 // InterceptSuite exercises the core intercept → proxy → DNS → tunnel data path

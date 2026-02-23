@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vercel-eddie/bridge/pkg/ippool"
+	"github.com/vercel/bridge/pkg/ippool"
 
 	"github.com/puzpuzpuz/xsync/v3"
 )

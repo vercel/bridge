@@ -1,4 +1,4 @@
-module github.com/vercel-eddie/bridge
+module github.com/vercel/bridge
 
 go 1.25.0
 
@@ -16,7 +16,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/k3s v0.40.0
 	github.com/testcontainers/testcontainers-go/modules/registry v0.40.0
 	github.com/urfave/cli/v3 v3.6.2
-	github.com/vercel-eddie/bridge/api/go v0.0.0-00010101000000-000000000000
+	github.com/vercel/bridge/api/go v0.0.0-00010101000000-000000000000
 	golang.org/x/crypto v0.46.0
 	google.golang.org/grpc v1.79.1
 	google.golang.org/protobuf v1.36.11
@@ -25,7 +25,7 @@ require (
 	k8s.io/client-go v0.35.1
 )
 
-replace github.com/vercel-eddie/bridge/api/go => ./api/go
+replace github.com/vercel/bridge/api/go => ./api/go
 
 require (
 	dario.cat/mergo v1.0.2 // indirect

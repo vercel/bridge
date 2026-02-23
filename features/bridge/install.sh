@@ -2,7 +2,7 @@
 set -e
 
 # GitHub repository for bridge releases
-REPO="vercel-eddie/bridge"
+REPO="vercel/bridge"
 
 # Install required tools
 install_dependencies() {

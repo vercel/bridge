@@ -7,9 +7,9 @@ import (
 	"net"
 	"os/exec"
 
-	"github.com/vercel-eddie/bridge/pkg/conntrack"
-	"github.com/vercel-eddie/bridge/pkg/netutil"
-	"github.com/vercel-eddie/bridge/pkg/plumbing"
+	"github.com/vercel/bridge/pkg/conntrack"
+	"github.com/vercel/bridge/pkg/netutil"
+	"github.com/vercel/bridge/pkg/plumbing"
 )
 
 const (

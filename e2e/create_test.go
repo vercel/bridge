@@ -16,10 +16,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/vercel-eddie/bridge/e2e/testutil"
-	"github.com/vercel-eddie/bridge/pkg/commands"
-	"github.com/vercel-eddie/bridge/pkg/devcontainer"
-	"github.com/vercel-eddie/bridge/pkg/identity"
+	"github.com/vercel/bridge/e2e/testutil"
+	"github.com/vercel/bridge/pkg/commands"
+	"github.com/vercel/bridge/pkg/devcontainer"
+	"github.com/vercel/bridge/pkg/identity"
 )
 
 // CreateSuite exercises the full bridge create --connect flow.

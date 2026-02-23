@@ -14,12 +14,12 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	bridgev1 "github.com/vercel-eddie/bridge/api/go/bridge/v1"
-	"github.com/vercel-eddie/bridge/pkg/identity"
-	"github.com/vercel-eddie/bridge/pkg/k8s/kube"
-	"github.com/vercel-eddie/bridge/pkg/k8s/meta"
-	"github.com/vercel-eddie/bridge/pkg/k8s/namespace"
-	"github.com/vercel-eddie/bridge/pkg/k8s/resources"
+	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
+	"github.com/vercel/bridge/pkg/identity"
+	"github.com/vercel/bridge/pkg/k8s/kube"
+	"github.com/vercel/bridge/pkg/k8s/meta"
+	"github.com/vercel/bridge/pkg/k8s/namespace"
+	"github.com/vercel/bridge/pkg/k8s/resources"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -41,7 +41,7 @@ func Administrator() *cli.Command {
 			&cli.StringFlag{
 				Name:    "proxy-image",
 				Usage:   "Bridge proxy container image",
-				Value:   "ghcr.io/vercel-eddie/bridge:edge",
+				Value:   "ghcr.io/vercel/bridge:edge",
 				Sources: cli.EnvVars("BRIDGE_PROXY_IMAGE"),
 			},
 			&cli.StringFlag{

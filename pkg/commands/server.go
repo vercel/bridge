@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/urfave/cli/v3"
-	"github.com/vercel-eddie/bridge/pkg/mutagen"
-	"github.com/vercel-eddie/bridge/pkg/proxy"
-	"github.com/vercel-eddie/bridge/pkg/sshserver"
+	"github.com/vercel/bridge/pkg/mutagen"
+	"github.com/vercel/bridge/pkg/proxy"
+	"github.com/vercel/bridge/pkg/sshserver"
 )
 
 func Server() *cli.Command {

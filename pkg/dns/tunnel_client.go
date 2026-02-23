@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/vercel-eddie/bridge/pkg/tunnel"
+	"github.com/vercel/bridge/pkg/tunnel"
 )
 
 // tunnelDNSResolver is the subset of tunnel.TunnelDialer needed by TunnelExchangeClient.

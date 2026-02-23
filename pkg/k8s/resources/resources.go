@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 
-	"github.com/vercel-eddie/bridge/pkg/k8s/meta"
+	"github.com/vercel/bridge/pkg/k8s/meta"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"

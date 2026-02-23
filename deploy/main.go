@@ -19,8 +19,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/vercel-eddie/bridge/pkg/k8s/kube"
-	"github.com/vercel-eddie/bridge/pkg/k8s/manifests"
+	"github.com/vercel/bridge/pkg/k8s/kube"
+	"github.com/vercel/bridge/pkg/k8s/manifests"
 )
 
 const (

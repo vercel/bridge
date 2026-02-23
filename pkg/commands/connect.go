@@ -10,8 +10,8 @@ import (
 	"syscall"
 
 	"github.com/urfave/cli/v3"
-	"github.com/vercel-eddie/bridge/pkg/sessions"
-	"github.com/vercel-eddie/bridge/pkg/sshproxy"
+	"github.com/vercel/bridge/pkg/sessions"
+	"github.com/vercel/bridge/pkg/sshproxy"
 )
 
 func Connect() *cli.Command {

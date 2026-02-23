@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/vercel-eddie/bridge/pkg/conntrack"
-	bridgedns "github.com/vercel-eddie/bridge/pkg/dns"
+	"github.com/vercel/bridge/pkg/conntrack"
+	bridgedns "github.com/vercel/bridge/pkg/dns"
 )
 
 // DNSComponent manages the DNS server for domain interception.

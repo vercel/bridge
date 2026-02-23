@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/vercel-eddie/bridge/pkg/commands"
+	"github.com/vercel/bridge/pkg/commands"
 )
 
 var version = "dev"

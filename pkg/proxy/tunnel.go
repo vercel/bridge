@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/vercel-eddie/bridge/pkg/bidi"
+	"github.com/vercel/bridge/pkg/bidi"
 )
 
 // Tunnel handles forwarding a proxy connection to a target.

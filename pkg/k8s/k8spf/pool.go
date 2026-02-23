@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/puzpuzpuz/xsync/v3"
-	"github.com/vercel-eddie/bridge/pkg/k8s/portforward"
+	"github.com/vercel/bridge/pkg/k8s/portforward"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )

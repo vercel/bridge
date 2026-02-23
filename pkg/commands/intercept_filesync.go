@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"path/filepath"
 
-	"github.com/vercel-eddie/bridge/pkg/mutagen"
+	"github.com/vercel/bridge/pkg/mutagen"
 )
 
 // FileSyncComponent manages a mutagen file sync session.

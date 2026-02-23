@@ -10,7 +10,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/vercel-eddie/bridge/pkg/k8s/kube"
+	"github.com/vercel/bridge/pkg/k8s/kube"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/resolver"
 	"k8s.io/client-go/kubernetes"

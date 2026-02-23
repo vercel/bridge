@@ -14,14 +14,14 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	pb "github.com/vercel-eddie/bridge/api/go/bridge/v1"
-	"github.com/vercel-eddie/bridge/pkg/devcontainer"
-	"github.com/vercel-eddie/bridge/pkg/identity"
-	"github.com/vercel-eddie/bridge/pkg/k8s/k8spf"
+	pb "github.com/vercel/bridge/api/go/bridge/v1"
+	"github.com/vercel/bridge/pkg/devcontainer"
+	"github.com/vercel/bridge/pkg/identity"
+	"github.com/vercel/bridge/pkg/k8s/k8spf"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-const defaultFeatureRef = "ghcr.io/vercel-eddie/bridge/features/bridge:edge"
+const defaultFeatureRef = "ghcr.io/vercel/bridge/features/bridge:edge"
 const devFeatureRef = "../local-features/bridge"
 
 const defaultAdminAddr = "k8spf:///administrator.bridge:9090?workload=deployment"

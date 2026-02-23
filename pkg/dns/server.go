@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/vercel-eddie/bridge/pkg/conntrack"
+	"github.com/vercel/bridge/pkg/conntrack"
 
 	"github.com/miekg/dns"
 )

@@ -8,7 +8,7 @@ import (
 	"net"
 	"sync/atomic"
 
-	"github.com/vercel-eddie/bridge/pkg/bidi"
+	"github.com/vercel/bridge/pkg/bidi"
 )
 
 // Dialer establishes connections to a remote server.

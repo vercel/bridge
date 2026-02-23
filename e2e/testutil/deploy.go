@@ -13,7 +13,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
-	"github.com/vercel-eddie/bridge/pkg/k8s/manifests"
+	"github.com/vercel/bridge/pkg/k8s/manifests"
 )
 
 const (
