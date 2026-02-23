@@ -1,7 +1,6 @@
 # Bridge
 
-A set of applications that empowers developers on the Vercel platform to write their code locally, sync their
-files to Vercel Sandbox, and forward/recieve traffic made from/to a Vercel Preview deployment.
+A CLI that enables developers to run their code locally within the context of a Dev/Staging K8s environment.
 
 ## API
 
@@ -30,7 +29,8 @@ make
 k3d cluster create bridge --registry-create bridge-registry:0.0.0.0:5111
 ```
 
-This creates a lightweight k3s cluster with a local container registry at `k3d-bridge-registry.localhost:5111`. Your kubeconfig context is automatically switched to `k3d-bridge`.
+This creates a lightweight k3s cluster with a local container registry at `k3d-bridge-registry.localhost:5111`. Your
+kubeconfig context is automatically switched to `k3d-bridge`.
 
 ### 2. Seed the cluster
 
@@ -40,7 +40,8 @@ Build images, push to the registry, and apply the Kubernetes manifests:
 go run deploy/main.go
 ```
 
-This deploys the bridge administrator (namespace `bridge`) and a test HTTP server (namespace `test-workloads`). Re-run to pick up code changes — images are pushed and deployments are restarted automatically.
+This deploys the bridge administrator (namespace `bridge`) and a test HTTP server (namespace `test-workloads`). Re-run
+to pick up code changes — images are pushed and deployments are restarted automatically.
 
 ### 3. Build the CLI
 
