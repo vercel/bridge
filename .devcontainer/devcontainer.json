@@ -1,11 +1,17 @@
 {
   "name": "bridge",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {
+    "ghcr.io/devcontainers/features/aws-cli:1": {}
+  },
   "mounts": [
-    "source=bridge-bashhistory,target=/commandhistory,type=volume"
+    "source=bridge-bashhistory,target=/commandhistory,type=volume",
+    "source=${localEnv:HOME}/.aws,target=/tmp/aws,type=bind,readonly"
   ],
   "postCreateCommand": "sudo chown $(id -u) /commandhistory",
   "remoteEnv": {
-    "HISTFILE": "/commandhistory/.shell_history"
+    "HISTFILE": "/commandhistory/.shell_history",
+    "AWS_CONFIG_FILE": "/tmp/aws/config",
+    "AWS_SHARED_CREDENTIALS_FILE": "/tmp/aws/credentials"
   }
 }

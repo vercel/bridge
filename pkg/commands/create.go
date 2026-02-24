@@ -159,9 +159,8 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 		featureRef = devFeatureRef
 	}
 
-	w := c.Root().Writer
 	r := c.Root().Reader
-	p := interact.NewPrinter(w)
+	p := interact.NewPrinter(c.Root().Writer)
 
 	// Step 1: Resolve device identity.
 	deviceID, err := identity.GetDeviceID()
@@ -176,117 +175,95 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	var adm admin.Admin
 	var existingBridges []*admin.BridgeInfo
 
-	err = interact.RunSteps(ctx, []interact.Step{
-		{
-			Title: "Connecting to bridge administrator...",
-			Run: func(ctx context.Context) error {
-				remote, dialErr := admin.NewRemote(adminAddr)
-				if dialErr != nil {
-					return errAdminUnavailable{}
-				}
-				// Probe with a quick ListBridges call to verify the admin is up.
-				probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				defer cancel()
-				bridges, probeErr := remote.ListBridges(probeCtx, deviceID)
-				if probeErr != nil {
-					remote.Close()
-					return errAdminUnavailable{}
-				}
-				existingBridges = bridges
-				adm = remote
-				return nil
-			},
-		},
-	})
+	sp := interact.NewSpinner("Connecting to bridge administrator...")
+	go sp.Start(ctx)
 
-	if _, ok := err.(errAdminUnavailable); ok {
-		err = nil
+	remote, dialErr := admin.NewRemote(adminAddr)
+	if dialErr == nil {
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		bridges, probeErr := remote.ListBridges(probeCtx, deviceID)
+		cancel()
+		if probeErr == nil {
+			existingBridges = bridges
+			adm = remote
+		} else {
+			remote.Close()
+		}
+	}
+	sp.Stop()
 
+	if adm == nil {
 		// Remote admin not available — offer local fallback.
 		if !yes {
 			p.Newline()
 			p.Warn("No bridge administrator found in the cluster.")
 			p.Info(fmt.Sprintf("Should Bridge use your local credentials for cluster %q instead.", kubeContext))
-			fmt.Fprintf(w, "Continue? [y/N] ")
+			p.Prompt("Continue? [y/N] ")
 
-			answer := promptYN(r)
-			if answer != "y" && answer != "yes" {
-				fmt.Fprintf(w, "Aborted.\n")
+			if answer := promptYN(r); answer != "y" && answer != "yes" {
+				p.Println("Aborted.")
 				return nil
 			}
 		}
 
-		err = interact.RunSteps(ctx, []interact.Step{
-			{
-				Title: "Initializing local administrator...",
-				Run: func(ctx context.Context) error {
-					localAdm, localErr := admin.NewLocal(admin.LocalConfig{
-						ProxyImage: proxyImage,
-					})
-					if localErr != nil {
-						return fmt.Errorf("failed to initialize: %w", localErr)
-					}
-					adm = localAdm
-					bridges, listErr := localAdm.ListBridges(ctx, deviceID)
-					if listErr != nil {
-						slog.Warn("Failed to list existing bridges", "error", listErr)
-					} else {
-						existingBridges = bridges
-					}
-					return nil
-				},
-			},
+		sp = interact.NewSpinner("Initializing local administrator...")
+		go sp.Start(ctx)
+
+		localAdm, localErr := admin.NewLocal(admin.LocalConfig{
+			ProxyImage: proxyImage,
 		})
-		if err != nil {
-			return err
+		if localErr != nil {
+			sp.Stop()
+			return fmt.Errorf("failed to initialize: %w", localErr)
 		}
-	} else if err != nil {
-		return err
+		adm = localAdm
+		bridges, listErr := localAdm.ListBridges(ctx, deviceID)
+		if listErr != nil {
+			slog.Warn("Failed to list existing bridges", "error", listErr)
+		} else {
+			existingBridges = bridges
+		}
+
+		sp.Stop()
 	}
 	defer adm.Close()
 
 	// Step 3: Check for existing bridges.
-	var conflictingBridge *admin.BridgeInfo
 	if !yes {
 		for _, bridge := range existingBridges {
 			if bridge.SourceDeployment == deploymentName {
-				conflictingBridge = bridge
+				p.Newline()
+				p.Warn("An existing bridge already exists:")
+				p.KeyValue("Name", bridge.SourceDeployment)
+				p.KeyValue("Created", bridge.CreatedAt)
+				p.KeyValue("Context", kubeContext)
+				p.Newline()
+				p.Muted("This will tear down the existing bridge and recreate it.")
+				p.Prompt("Continue? [y/N] ")
+
+				if answer := promptYN(r); answer != "y" && answer != "yes" {
+					p.Println("Aborted.")
+					return nil
+				}
+				yes = true
 				break
 			}
 		}
 	}
 
-	if conflictingBridge != nil {
-		p.Newline()
-		p.Warn("An existing bridge already exists:")
-		p.KeyValue("Name", conflictingBridge.SourceDeployment)
-		p.KeyValue("Created", conflictingBridge.CreatedAt)
-		p.KeyValue("Context", kubeContext)
-		p.Newline()
-		p.Muted("This will tear down the existing bridge and recreate it.")
-		fmt.Fprintf(w, "Continue? [y/N] ")
-
-		answer := promptYN(r)
-		if answer != "y" && answer != "yes" {
-			fmt.Fprintf(w, "Aborted.\n")
-			return nil
-		}
-		yes = true
-	}
-
 	// Step 4: Create bridge.
 	var createResp *admin.CreateResponse
 
-	err = interact.RunWithSpinner(ctx, "Creating bridge...", func(ctx context.Context) error {
-		var createErr error
-		createResp, createErr = adm.CreateBridge(ctx, admin.CreateRequest{
-			DeviceID:         deviceID,
-			SourceDeployment: deploymentName,
-			SourceNamespace:  sourceNamespace,
-			Force:            yes,
-		})
-		return createErr
+	sp = interact.NewSpinner("Creating bridge...")
+	go sp.Start(ctx)
+
+	createResp, err = adm.CreateBridge(ctx, admin.CreateRequest{
+		DeviceID:         deviceID,
+		SourceDeployment: deploymentName,
+		SourceNamespace:  sourceNamespace,
+		Force:            yes,
 	})
+	sp.Stop()
 	if err != nil {
 		return err
 	}
@@ -306,12 +283,12 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 		if err != nil {
 			return err
 		}
-		dcConfigPath, err := generateDevcontainerConfig(p, w, deploymentName, baseConfig, featureRef, c.Int("listen"), createResp)
+		dcConfigPath, err := generateDevcontainerConfig(p, baseConfig, featureRef, c.Int("listen"), createResp)
 		if err != nil {
 			return err
 		}
 		if connectFlag {
-			return startDevcontainer(ctx, dcConfigPath, r, w)
+			return startDevcontainer(ctx, p, dcConfigPath, r)
 		}
 	}
 
@@ -329,11 +306,8 @@ func promptYN(r io.Reader) string {
 // It respects the KUBECONFIG env var by bind-mounting it into the container,
 // unless the base config already sets containerEnv.KUBECONFIG.
 // Returns the path to the generated config.
-func generateDevcontainerConfig(p *interact.Printer, w io.Writer, deploymentName, baseConfigPath, featureRef string, appPort int, resp *admin.CreateResponse) (string, error) {
-	dcName := deploymentName
-	if dcName == "" {
-		dcName = "proxy"
-	}
+func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef string, appPort int, resp *admin.CreateResponse) (string, error) {
+	dcName := resp.DeploymentName
 
 	// Place the generated config under the .devcontainer/ directory that contains
 	// the base config. If the base config isn't already in a .devcontainer/ folder,
@@ -581,21 +555,24 @@ func currentKubeContext() string {
 }
 
 // startDevcontainer starts the devcontainer and attaches an interactive shell.
-func startDevcontainer(ctx context.Context, dcConfigPath string, r io.Reader, w io.Writer) error {
+func startDevcontainer(ctx context.Context, p interact.Printer, dcConfigPath string, r io.Reader) error {
 	// <workspace>/.devcontainer/bridge-<name>/devcontainer.json → <workspace>
 	workspaceFolder := filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath)))
 	dcClient := &devcontainer.Client{
 		WorkspaceFolder: workspaceFolder,
 		ConfigPath:      dcConfigPath,
 		Stdin:           r,
-		Stdout:          w,
-		Stderr:          w,
+		Stdout:          os.Stdout,
+		Stderr:          os.Stderr,
 	}
 
 	slog.Debug("Starting devcontainer", "config", dcConfigPath, "workspace", workspaceFolder)
-	err := interact.RunWithSpinner(ctx, "Starting devcontainer...", func(ctx context.Context) error {
-		return dcClient.Up(ctx)
-	})
+
+	sp := interact.NewSpinner("Starting devcontainer...")
+	go sp.Start(ctx)
+
+	err := dcClient.Up(ctx)
+	sp.Stop()
 	if err != nil {
 		return fmt.Errorf("failed to start devcontainer: %w", err)
 	}

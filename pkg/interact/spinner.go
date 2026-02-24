@@ -43,105 +43,94 @@ var bridgeFrames = bubbles.Spinner{
 	FPS: time.Second / 8,
 }
 
-// RunWithSpinner runs fn while displaying a themed spinner with the given title.
-// The spinner is guaranteed to display for at least minSpinnerDuration to avoid flashing.
-func RunWithSpinner(ctx context.Context, title string, fn func(ctx context.Context) error) error {
-	return RunSteps(ctx, []Step{{Title: title, Run: fn}})
+// Spinner displays an animated spinner with a title in the terminal.
+type Spinner struct {
+	title *atomic.Value
+	prog  *tea.Program
+	done  chan spinnerResult
 }
 
-// Step is a named unit of work for a StepSpinner.
-type Step struct {
-	Title string
-	Run   func(ctx context.Context) error
+type spinnerResult struct {
+	err error
 }
 
-// RunSteps runs multiple steps sequentially under a single spinner, updating
-// the title between steps to avoid terminal jitter from re-creating the spinner.
-func RunSteps(ctx context.Context, steps []Step) error {
-	if len(steps) == 0 {
-		return nil
-	}
+// NewSpinner creates a new spinner. Call Start to display it.
+func NewSpinner(title string) *Spinner {
+	t := &atomic.Value{}
+	t.Store(title)
+	return &Spinner{title: t}
+}
 
+// SetTitle updates the spinner title while it is running.
+func (s *Spinner) SetTitle(title string) {
+	s.title.Store(title)
+}
+
+// Start begins displaying the spinner. It blocks until Stop is called.
+// Typically run in a goroutine.
+func (s *Spinner) Start(ctx context.Context) error {
 	theme := NewTheme()
-	title := &atomic.Value{}
-	title.Store(steps[0].Title)
-
-	model := &stepModel{
+	model := &spinnerModel{
 		spinner:    bubbles.New(bubbles.WithSpinner(bridgeFrames), bubbles.WithStyle(theme.Spinner)),
-		title:      title,
+		title:      s.title,
 		titleStyle: theme.Muted,
-		ctx:        ctx,
 	}
 
-	model.action = func(actionCtx context.Context) error {
-		for _, s := range steps {
-			title.Store(s.Title)
-			if err := s.Run(actionCtx); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
+	s.done = make(chan spinnerResult, 1)
+	s.prog = tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(nil))
 
-	p := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(nil))
-	if _, err := p.Run(); err != nil {
+	if _, err := s.prog.Run(); err != nil {
 		return err
-	}
-	if model.doneErr != nil {
-		return *model.doneErr
 	}
 	return nil
 }
 
-// stepModel is a bubbletea model that reads the title from an atomic value,
-// allowing the action goroutine to update the title mid-run.
-type stepModel struct {
-	spinner        bubbles.Model
-	title          *atomic.Value
-	titleStyle     lipgloss.Style
-	action         func(context.Context) error
-	ctx            context.Context
-	doneErr        *error // non-nil once the action has finished
-	minTimeElapsed bool   // true once minSpinnerDuration has passed
+// Stop stops the spinner. Safe to call from any goroutine.
+func (s *Spinner) Stop() {
+	if s.prog != nil {
+		s.prog.Send(stopMsg{})
+	}
 }
 
-type stepDoneMsg struct{ err error }
-type minTimeMsg struct{}
+type stopMsg struct{}
 
 const minSpinnerDuration = 500 * time.Millisecond
 
-func (m *stepModel) Init() tea.Cmd {
+type minTimeMsg struct{}
+
+type spinnerModel struct {
+	spinner        bubbles.Model
+	title          *atomic.Value
+	titleStyle     lipgloss.Style
+	stopped        bool
+	minTimeElapsed bool
+}
+
+func (m *spinnerModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
-		func() tea.Msg {
-			if m.action != nil {
-				err := m.action(m.ctx)
-				return stepDoneMsg{err}
-			}
-			return nil
-		},
 		tea.Tick(minSpinnerDuration, func(time.Time) tea.Msg {
 			return minTimeMsg{}
 		}),
 	)
 }
 
-func (m *stepModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case stepDoneMsg:
-		m.doneErr = &msg.err
+func (m *spinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg.(type) {
+	case stopMsg:
+		m.stopped = true
 		if m.minTimeElapsed {
 			return m, tea.Quit
 		}
 		return m, nil
 	case minTimeMsg:
 		m.minTimeElapsed = true
-		if m.doneErr != nil {
+		if m.stopped {
 			return m, tea.Quit
 		}
 		return m, nil
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
+		if msg.(tea.KeyMsg).String() == "ctrl+c" {
 			return m, tea.Interrupt
 		}
 	}
@@ -150,7 +139,7 @@ func (m *stepModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *stepModel) View() string {
+func (m *spinnerModel) View() string {
 	t, _ := m.title.Load().(string)
 	return m.spinner.View() + m.titleStyle.Render(t)
 }

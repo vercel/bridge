@@ -98,13 +98,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: actions/checkout@v4
+
       - name: Determine tags
         id: tags
         run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${GITHUB_REF#refs/tags/},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_OUTPUT
+            VERSION="${GITHUB_REF#refs/tags/}"
+            echo "tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${SHORT_SHA}" >> $GITHUB_OUTPUT
           else
-            echo "tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:edge" >> $GITHUB_OUTPUT
+            echo "tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:edge,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${SHORT_SHA}" >> $GITHUB_OUTPUT
           fi
 
       - name: Create manifest list and push
