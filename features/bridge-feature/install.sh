@@ -67,11 +67,6 @@ install_bridge() {
     local arch=$(get_arch)
     local os="linux"
 
-    # Versions like "edge-abc1234" map to the "edge" release tag.
-    if [[ "$version" == edge-* ]]; then
-        version="edge"
-    fi
-
     # Resolve 'latest' to actual version
     if [ "$version" = "latest" ]; then
         version=$(get_latest_version)

@@ -357,8 +357,14 @@ func generateDevcontainerConfig(p *interact.Printer, w io.Writer, deploymentName
 
 	cfg.Name = "bridge-" + dcName
 	bridgeServerAddr := fmt.Sprintf("k8spf:///%s.%s:%d?workload=deployment", resp.DeploymentName, resp.Namespace, resp.Port)
+	// Normalize "edge-<commit>" to "edge" so the feature install script
+	// downloads from the correct GitHub release tag.
+	featureVersion := Version
+	if strings.HasPrefix(featureVersion, "edge-") {
+		featureVersion = "edge"
+	}
 	cfg.SetFeature(featureRef, map[string]any{
-		"bridgeVersion":    Version,
+		"bridgeVersion":    featureVersion,
 		"bridgeServerAddr": bridgeServerAddr,
 		"forwardDomains":   "*",
 		"appPort":          fmt.Sprintf("%d", appPort),
