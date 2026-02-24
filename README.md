@@ -2,6 +2,8 @@
 
 A CLI that enables developers to run their code locally within the context of a Dev/Staging K8s environment.
 
+<img src="docs/assets/create.gif" alt="bridge create demo" width="900" />
+
 ## Installation
 
 ```sh
