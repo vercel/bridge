@@ -229,12 +229,14 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	defer adm.Close()
 
 	// Step 3: Check for existing bridges.
+	// Compute the expected bridge deployment name so we can match by name.
+	expectedName := deploymentName
 	if !yes {
 		for _, bridge := range existingBridges {
-			if bridge.SourceDeployment == deploymentName {
+			if bridge.DeploymentName == expectedName {
 				p.Newline()
 				p.Warn("An existing bridge already exists:")
-				p.KeyValue("Name", bridge.SourceDeployment)
+				p.KeyValue("Name", bridge.DeploymentName)
 				p.KeyValue("Created", bridge.CreatedAt)
 				p.KeyValue("Context", kubeContext)
 				p.Newline()

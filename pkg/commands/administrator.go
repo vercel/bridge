@@ -146,12 +146,12 @@ func (s *administratorServer) CreateBridge(ctx context.Context, req *bridgev1.Cr
 		"source_namespace", req.SourceNamespace,
 	)
 
-	// If force is set and there's an existing bridge for the same deployment, tear it down
+	// If force is set and there's an existing bridge with the same name, tear it down
 	if req.Force {
-		existing, err := s.findExistingBridge(ctx, nsName, req.SourceDeployment)
-		if err == nil && existing != "" {
-			slog.Info("Tearing down existing bridge", "deployment", existing, "namespace", nsName)
-			_ = s.client.AppsV1().Deployments(nsName).Delete(ctx, existing, metav1.DeleteOptions{})
+		deployName := req.SourceDeployment
+		if _, err := s.client.AppsV1().Deployments(nsName).Get(ctx, deployName, metav1.GetOptions{}); err == nil {
+			slog.Info("Tearing down existing bridge", "name", deployName, "namespace", nsName)
+			_ = resources.DeleteBridgeResources(ctx, s.client, nsName, deployName)
 		}
 	}
 
@@ -269,9 +269,8 @@ func (s *administratorServer) DeleteBridge(ctx context.Context, req *bridgev1.De
 
 	slog.Info("Deleting bridge", "device_id", req.DeviceId, "namespace", nsName, "name", req.Name)
 
-	err := s.client.AppsV1().Deployments(nsName).Delete(ctx, req.Name, metav1.DeleteOptions{})
-	if err != nil {
-		return nil, except.GRPCFromK8s(err, "failed to delete deployment")
+	if err := resources.DeleteBridgeResources(ctx, s.client, nsName, req.Name); err != nil {
+		return nil, except.GRPCFromK8s(err, "failed to delete bridge")
 	}
 
 	return &bridgev1.DeleteBridgeResponse{}, nil
@@ -295,27 +294,4 @@ func fetchProxyMetadata(ctx context.Context, addr string) (map[string]string, er
 		return nil, fmt.Errorf("GetMetadata: %w", err)
 	}
 	return resp.GetEnvVars(), nil
-}
-
-// findExistingBridge finds an existing bridge deployment in the namespace.
-func (s *administratorServer) findExistingBridge(ctx context.Context, ns, deployName string) (string, error) {
-	if deployName != "" {
-		bridgeName := resources.BridgeDeployName(deployName)
-		_, err := s.client.AppsV1().Deployments(ns).Get(ctx, bridgeName, metav1.GetOptions{})
-		if err != nil {
-			return "", err
-		}
-		return bridgeName, nil
-	}
-
-	deploys, err := s.client.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: meta.ProxySelector,
-	})
-	if err != nil {
-		return "", err
-	}
-	if len(deploys.Items) > 0 {
-		return deploys.Items[0].Name, nil
-	}
-	return "", fmt.Errorf("no existing bridge found")
 }

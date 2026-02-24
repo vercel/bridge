@@ -36,11 +36,6 @@ func (e *DeploymentNotFoundError) Error() string {
 	return fmt.Sprintf("no deployment found named '%s' in namespace '%s'", e.Name, e.Namespace)
 }
 
-// BridgeDeployName returns the bridge deployment name for a source deployment.
-func BridgeDeployName(sourceDeployment string) string {
-	return "bridge-" + sourceDeployment
-}
-
 var adjectives = []string{
 	"bold", "calm", "cool", "dark", "fair", "fast", "keen", "kind",
 	"live", "neat", "pure", "rare", "safe", "slim", "soft", "warm",
@@ -96,10 +91,20 @@ func CopyAndTransform(ctx context.Context, client kubernetes.Interface, cfg Copy
 		return nil, fmt.Errorf("failed to get source deployment %s/%s: %w", cfg.SourceNamespace, cfg.SourceDeployment, err)
 	}
 
+	deployName := srcDeploy.Name
+
 	// Extract and copy config dependencies with prefixed names.
-	nameMap, err := copyConfigDependencies(ctx, client, srcDeploy, cfg.SourceNamespace, cfg.TargetNamespace)
+	nameMap, err := copyConfigDependencies(ctx, client, srcDeploy, cfg.SourceNamespace, cfg.TargetNamespace, deployName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to copy config dependencies: %w", err)
+	}
+
+	// Copy the source deployment's service account so init containers and
+	// sidecars retain the same workload identity (e.g. IRSA role).
+	if saName := srcDeploy.Spec.Template.Spec.ServiceAccountName; saName != "" {
+		if err := copyServiceAccount(ctx, client, cfg.SourceNamespace, cfg.TargetNamespace, saName, deployName); err != nil {
+			slog.Warn("Failed to copy service account", "name", saName, "error", err)
+		}
 	}
 
 	// Collect all ports from the source deployment's first container.
@@ -115,8 +120,7 @@ func CopyAndTransform(ctx context.Context, client kubernetes.Interface, cfg Copy
 	grpcPort := chooseGRPCPort(appPorts)
 
 	// Create the transformed deployment
-	deployName, err := createBridgedDeployment(ctx, client, srcDeploy, cfg.TargetNamespace, cfg.ProxyImage, grpcPort, appPorts, nameMap)
-	if err != nil {
+	if err := createBridgedDeployment(ctx, client, srcDeploy, cfg.TargetNamespace, cfg.ProxyImage, deployName, grpcPort, appPorts, nameMap); err != nil {
 		return nil, fmt.Errorf("failed to create bridged deployment: %w", err)
 	}
 
@@ -168,7 +172,10 @@ func CreateSimpleDeployment(ctx context.Context, client kubernetes.Interface, na
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
-			Labels:    map[string]string{meta.LabelBridgeType: meta.BridgeTypeProxy},
+			Labels: map[string]string{
+				meta.LabelBridgeType:       meta.BridgeTypeProxy,
+				meta.LabelBridgeDeployment: name,
+			},
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
@@ -229,9 +236,13 @@ type configRef struct {
 // Deployment's pod spec, copies each resource to the target namespace with a
 // deployment-scoped prefix to avoid name collisions, and returns a name map
 // (original → prefixed) so callers can rewrite references on the pod spec.
-func copyConfigDependencies(ctx context.Context, client kubernetes.Interface, deploy *appsv1.Deployment, srcNS, targetNS string) (nameMap map[string]string, err error) {
+func copyConfigDependencies(ctx context.Context, client kubernetes.Interface, deploy *appsv1.Deployment, srcNS, targetNS, bridgeDeployName string) (nameMap map[string]string, err error) {
 	podSpec := &deploy.Spec.Template.Spec
 	prefix := deploy.Name + "-"
+	ownerLabels := map[string]string{
+		meta.LabelBridgeType:       meta.BridgeTypeProxy,
+		meta.LabelBridgeDeployment: bridgeDeployName,
+	}
 
 	// Collect every unique Secret/ConfigMap name referenced by the pod.
 	secretRefs := make(map[string]configRef)
@@ -303,7 +314,7 @@ func copyConfigDependencies(ctx context.Context, client kubernetes.Interface, de
 		dstName := prefix + ref.name
 		nameMap[ref.name] = dstName
 		dst := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: dstName, Namespace: targetNS},
+			ObjectMeta: metav1.ObjectMeta{Name: dstName, Namespace: targetNS, Labels: ownerLabels},
 			Type:       src.Type,
 			Data:       src.Data,
 		}
@@ -325,7 +336,7 @@ func copyConfigDependencies(ctx context.Context, client kubernetes.Interface, de
 		dstName := prefix + ref.name
 		nameMap[ref.name] = dstName
 		dst := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: dstName, Namespace: targetNS},
+			ObjectMeta: metav1.ObjectMeta{Name: dstName, Namespace: targetNS, Labels: ownerLabels},
 			Data:       src.Data,
 		}
 		if err := createOrUpdateConfigMap(ctx, client, targetNS, dst); err != nil {
@@ -338,7 +349,7 @@ func copyConfigDependencies(ctx context.Context, client kubernetes.Interface, de
 
 // createBridgedDeployment creates a new Deployment in the target namespace with the
 // application container replaced by the bridge proxy.
-func createBridgedDeployment(ctx context.Context, client kubernetes.Interface, src *appsv1.Deployment, targetNS, proxyImage string, grpcPort int32, listenPorts []int32, nameMap map[string]string) (string, error) {
+func createBridgedDeployment(ctx context.Context, client kubernetes.Interface, src *appsv1.Deployment, targetNS, proxyImage, deployName string, grpcPort int32, listenPorts []int32, nameMap map[string]string) error {
 	replicas := int32(1)
 
 	// Clone containers from the source, modifying only the first (primary app)
@@ -374,17 +385,24 @@ func createBridgedDeployment(ctx context.Context, client kubernetes.Interface, s
 		c.StartupProbe = nil
 	}
 
-	deployName := BridgeDeployName(src.Name)
 	podLabels := map[string]string{
 		meta.LabelBridgeType:       meta.BridgeTypeProxy,
 		meta.LabelBridgeDeployment: deployName,
 	}
+
+	// Use the prefixed service account if the source specifies one.
+	saName := ""
+	if src.Spec.Template.Spec.ServiceAccountName != "" {
+		saName = deployName + "-" + src.Spec.Template.Spec.ServiceAccountName
+	}
+
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      deployName,
 			Namespace: targetNS,
 			Labels: map[string]string{
 				meta.LabelBridgeType:              meta.BridgeTypeProxy,
+				meta.LabelBridgeDeployment:        deployName,
 				meta.LabelWorkloadSource:          src.Name,
 				meta.LabelWorkloadSourceNamespace: src.Namespace,
 			},
@@ -399,9 +417,10 @@ func createBridgedDeployment(ctx context.Context, client kubernetes.Interface, s
 					Labels: podLabels,
 				},
 				Spec: corev1.PodSpec{
-					Containers:     containers,
-					InitContainers: src.Spec.Template.Spec.InitContainers,
-					Volumes:        src.Spec.Template.Spec.Volumes,
+					ServiceAccountName: saName,
+					Containers:         containers,
+					InitContainers:     src.Spec.Template.Spec.InitContainers,
+					Volumes:            src.Spec.Template.Spec.Volumes,
 				},
 			},
 		},
@@ -413,19 +432,19 @@ func createBridgedDeployment(ctx context.Context, client kubernetes.Interface, s
 	existing, err := client.AppsV1().Deployments(targetNS).Get(ctx, deploy.Name, metav1.GetOptions{})
 	if errors.IsNotFound(err) {
 		if _, err := client.AppsV1().Deployments(targetNS).Create(ctx, deploy, metav1.CreateOptions{}); err != nil {
-			return "", fmt.Errorf("failed to create bridged deployment: %w", err)
+			return fmt.Errorf("failed to create bridged deployment: %w", err)
 		}
 	} else if err != nil {
-		return "", err
+		return err
 	} else {
 		existing.Spec = deploy.Spec
 		existing.Labels = deploy.Labels
 		if _, err := client.AppsV1().Deployments(targetNS).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
-			return "", fmt.Errorf("failed to update bridged deployment: %w", err)
+			return fmt.Errorf("failed to update bridged deployment: %w", err)
 		}
 	}
 
-	return deploy.Name, nil
+	return nil
 }
 
 // rewriteConfigRefs rewrites all Secret/ConfigMap references in the pod spec
@@ -483,7 +502,10 @@ func ensureService(ctx context.Context, client kubernetes.Interface, namespace, 
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
-			Labels:    map[string]string{meta.LabelBridgeType: meta.BridgeTypeProxy},
+			Labels: map[string]string{
+				meta.LabelBridgeType:       meta.BridgeTypeProxy,
+				meta.LabelBridgeDeployment: name,
+			},
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{meta.LabelBridgeType: meta.BridgeTypeProxy},
@@ -535,4 +557,74 @@ func createOrUpdateConfigMap(ctx context.Context, client kubernetes.Interface, n
 	existing.Data = cm.Data
 	_, err = client.CoreV1().ConfigMaps(ns).Update(ctx, existing, metav1.UpdateOptions{})
 	return err
+}
+
+// copyServiceAccount copies a ServiceAccount from the source namespace into
+// the target namespace with a deployment-scoped prefix. Annotations (e.g. IRSA
+// role ARN) are preserved so the pod retains the same workload identity.
+func copyServiceAccount(ctx context.Context, client kubernetes.Interface, srcNS, targetNS, saName, deployName string) error {
+	src, err := client.CoreV1().ServiceAccounts(srcNS).Get(ctx, saName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get service account %s/%s: %w", srcNS, saName, err)
+	}
+
+	dstName := deployName + "-" + saName
+	dst := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dstName,
+			Namespace: targetNS,
+			Labels: map[string]string{
+				meta.LabelBridgeType:       meta.BridgeTypeProxy,
+				meta.LabelBridgeDeployment: deployName,
+			},
+			Annotations: src.Annotations,
+		},
+	}
+
+	existing, err := client.CoreV1().ServiceAccounts(targetNS).Get(ctx, dstName, metav1.GetOptions{})
+	if errors.IsNotFound(err) {
+		_, err = client.CoreV1().ServiceAccounts(targetNS).Create(ctx, dst, metav1.CreateOptions{})
+		return err
+	} else if err != nil {
+		return err
+	}
+	existing.Annotations = dst.Annotations
+	existing.Labels = dst.Labels
+	_, err = client.CoreV1().ServiceAccounts(targetNS).Update(ctx, existing, metav1.UpdateOptions{})
+	return err
+}
+
+// DeleteBridgeResources deletes all resources associated with a bridge deployment
+// in the given namespace, identified by the bridge deployment label.
+func DeleteBridgeResources(ctx context.Context, client kubernetes.Interface, namespace, deployName string) error {
+	sel := meta.LabelBridgeDeployment + "=" + deployName
+	listOpts := metav1.ListOptions{LabelSelector: sel}
+	delOpts := metav1.DeleteOptions{}
+
+	// Delete deployment
+	if err := client.AppsV1().Deployments(namespace).DeleteCollection(ctx, delOpts, listOpts); err != nil && !errors.IsNotFound(err) {
+		slog.Warn("Failed to delete deployments", "bridge", deployName, "error", err)
+	}
+	// Delete services
+	if svcs, err := client.CoreV1().Services(namespace).List(ctx, listOpts); err == nil {
+		for _, svc := range svcs.Items {
+			if err := client.CoreV1().Services(namespace).Delete(ctx, svc.Name, delOpts); err != nil && !errors.IsNotFound(err) {
+				slog.Warn("Failed to delete service", "name", svc.Name, "error", err)
+			}
+		}
+	}
+	// Delete secrets
+	if err := client.CoreV1().Secrets(namespace).DeleteCollection(ctx, delOpts, listOpts); err != nil && !errors.IsNotFound(err) {
+		slog.Warn("Failed to delete secrets", "bridge", deployName, "error", err)
+	}
+	// Delete configmaps
+	if err := client.CoreV1().ConfigMaps(namespace).DeleteCollection(ctx, delOpts, listOpts); err != nil && !errors.IsNotFound(err) {
+		slog.Warn("Failed to delete configmaps", "bridge", deployName, "error", err)
+	}
+	// Delete service accounts
+	if err := client.CoreV1().ServiceAccounts(namespace).DeleteCollection(ctx, delOpts, listOpts); err != nil && !errors.IsNotFound(err) {
+		slog.Warn("Failed to delete service accounts", "bridge", deployName, "error", err)
+	}
+
+	return nil
 }

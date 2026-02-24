@@ -71,9 +71,10 @@ func (l *localAdmin) CreateBridge(ctx context.Context, req CreateRequest) (*Crea
 
 	// Tear down existing bridge if force is set.
 	if req.Force {
-		if existing := l.findExistingBridge(ctx, nsName, req.SourceDeployment); existing != "" {
-			logger.Info("Tearing down existing bridge", "deployment", existing)
-			_ = l.client.AppsV1().Deployments(nsName).Delete(ctx, existing, metav1.DeleteOptions{})
+		deployName := req.SourceDeployment
+		if _, err := l.client.AppsV1().Deployments(nsName).Get(ctx, deployName, metav1.GetOptions{}); err == nil {
+			logger.Info("Tearing down existing bridge", "name", deployName)
+			_ = resources.DeleteBridgeResources(ctx, l.client, nsName, deployName)
 		}
 	}
 
@@ -170,24 +171,6 @@ func (l *localAdmin) ListBridges(ctx context.Context, deviceID string) ([]*Bridg
 
 func (l *localAdmin) Close() error {
 	return nil
-}
-
-func (l *localAdmin) findExistingBridge(ctx context.Context, ns, deployName string) string {
-	if deployName != "" {
-		bridgeName := resources.BridgeDeployName(deployName)
-		_, err := l.client.AppsV1().Deployments(ns).Get(ctx, bridgeName, metav1.GetOptions{})
-		if err != nil {
-			return ""
-		}
-		return bridgeName
-	}
-	deploys, err := l.client.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: meta.ProxySelector,
-	})
-	if err != nil || len(deploys.Items) == 0 {
-		return ""
-	}
-	return deploys.Items[0].Name
 }
 
 func (l *localAdmin) fetchProxyMetadata(ctx context.Context, ns, podName string, port int) (map[string]string, error) {
