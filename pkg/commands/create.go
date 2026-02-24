@@ -22,7 +22,7 @@ import (
 	"github.com/vercel/bridge/pkg/interact"
 )
 
-const defaultFeatureRef = "ghcr.io/vercel/bridge/bridge-feature:edge"
+const defaultFeatureRef = "ghcr.io/vercel/bridge/bridge-feature:latest"
 const devFeatureRef = "../local-features/bridge-feature"
 
 const defaultAdminAddr = "k8spf:///administrator.bridge:9090?workload=deployment"
