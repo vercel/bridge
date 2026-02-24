@@ -26,6 +26,16 @@ const (
 	defaultProxyPort int32 = 3000
 )
 
+// DeploymentNotFoundError is returned when the source deployment does not exist.
+type DeploymentNotFoundError struct {
+	Name      string
+	Namespace string
+}
+
+func (e *DeploymentNotFoundError) Error() string {
+	return fmt.Sprintf("no deployment found named '%s' in namespace '%s'", e.Name, e.Namespace)
+}
+
 // BridgeDeployName returns the bridge deployment name for a source deployment.
 func BridgeDeployName(sourceDeployment string) string {
 	return "bridge-" + sourceDeployment
@@ -80,6 +90,9 @@ func CopyAndTransform(ctx context.Context, client kubernetes.Interface, cfg Copy
 	// Get the source deployment
 	srcDeploy, err := client.AppsV1().Deployments(cfg.SourceNamespace).Get(ctx, cfg.SourceDeployment, metav1.GetOptions{})
 	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil, &DeploymentNotFoundError{Name: cfg.SourceDeployment, Namespace: cfg.SourceNamespace}
+		}
 		return nil, fmt.Errorf("failed to get source deployment %s/%s: %w", cfg.SourceNamespace, cfg.SourceDeployment, err)
 	}
 

@@ -2,6 +2,14 @@
 
 A CLI that enables developers to run their code locally within the context of a Dev/Staging K8s environment.
 
+## Installation
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/vercel/bridge/main/install-edge.sh | sh
+```
+
+This downloads the latest edge binary for your platform (macOS/Linux, amd64/arm64) and installs it to `/usr/local/bin`.
+
 ## API
 
 The API is defined using protocol buffers. Currently, all messages are sent/received via websocket/HTTP but the payloads

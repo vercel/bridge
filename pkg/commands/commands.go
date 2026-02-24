@@ -2,14 +2,12 @@ package commands
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/urfave/cli/v3"
 	"github.com/vercel/bridge/pkg/identity"
+	"github.com/vercel/bridge/pkg/logging"
 )
 
 var Version = "dev"
@@ -27,23 +25,20 @@ func NewApp() *cli.Command {
 				Value:   "info",
 				Sources: cli.EnvVars("LOG_LEVEL"),
 			},
+			&cli.StringSliceFlag{
+				Name:    "log-path",
+				Usage:   "Additional log destinations: \"stdout\", \"stderr\", or a file path (repeatable)",
+				Sources: cli.EnvVars("LOG_PATH"),
+			},
 		},
 		Before: func(ctx context.Context, command *cli.Command) (context.Context, error) {
 			level := parseLogLevel(command.String("log-level"))
-			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-				Level:     level,
-				AddSource: true,
-				ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-					if a.Key == slog.SourceKey {
-						if src, ok := a.Value.Any().(*slog.Source); ok {
-							dir := filepath.Base(filepath.Dir(src.File))
-							file := filepath.Base(src.File)
-							a.Value = slog.StringValue(fmt.Sprintf("%s/%s:%d", dir, file, src.Line))
-						}
-					}
-					return a
-				},
-			})))
+			logPaths := command.StringSlice("log-path")
+			cleanup, err := logging.Setup(level, logPaths)
+			if err != nil {
+				slog.Warn("Failed to set up log file", "error", err)
+			}
+			_ = cleanup
 
 			// Ensure device identity exists on every command invocation.
 			deviceID, err := identity.EnsureDeviceID()

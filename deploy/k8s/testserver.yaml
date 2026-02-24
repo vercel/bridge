@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: test-workloads
+  name: userservice
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: app-config
-  namespace: test-workloads
+  namespace: userservice
 data:
   LOG_LEVEL: "debug"
   FEATURE_FLAGS: "new-ui,dark-mode"
@@ -16,7 +16,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: app-secrets
-  namespace: test-workloads
+  namespace: userservice
 type: Opaque
 stringData:
   DATABASE_URL: "postgres://user:pass@db.internal:5432/myapp"
@@ -26,7 +26,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: unused-credentials
-  namespace: test-workloads
+  namespace: userservice
 type: Opaque
 stringData:
   STRIPE_KEY: "sk-stripe-unused-9999"
@@ -36,7 +36,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: unused-config
-  namespace: test-workloads
+  namespace: userservice
 data:
   ANALYTICS_ID: "UA-000000-1"
   DEPRECATED_FLAG: "true"
@@ -44,23 +44,23 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: test-api-server
-  namespace: test-workloads
+  name: userservice
+  namespace: userservice
   labels:
-    app: test-api-server
+    app: userservice
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: test-api-server
+      app: userservice
   template:
     metadata:
       labels:
-        app: test-api-server
+        app: userservice
     spec:
       containers:
-        - name: testserver
-          image: "{{TESTSERVER_IMAGE}}"
+        - name: userservice
+          image: "{{USERSERVICE_IMAGE}}"
           imagePullPolicy: Always
           env:
             - name: PORT
@@ -85,11 +85,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: test-api-server
-  namespace: test-workloads
+  name: svc
+  namespace: userservice
 spec:
   selector:
-    app: test-api-server
+    app: userservice
   ports:
     - name: http
       port: 80

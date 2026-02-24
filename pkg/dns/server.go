@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/vercel/bridge/pkg/conntrack"
 
@@ -84,7 +85,8 @@ func (s *Server) Shutdown() error {
 
 // handleDNS processes incoming DNS queries by delegating to the exchange client.
 func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	resp, intercepted, err := s.exchangeClient.ExchangeContext(ctx, r)
 	if err != nil {

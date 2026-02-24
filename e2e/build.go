@@ -111,16 +111,16 @@ func findProjectRoot() (string, error) {
 	}
 }
 
-// BuildTestServerImage builds the test server Docker image from e2e/testserver/Dockerfile.
+// BuildUserserviceImage builds the userservice Docker image from e2e/testserver/Dockerfile.
 // The build context is the e2e/testserver directory.
-func BuildTestServerImage(ctx context.Context, tag string) error {
+func BuildUserserviceImage(ctx context.Context, tag string) error {
 	projectRoot, err := findProjectRoot()
 	if err != nil {
 		return fmt.Errorf("find project root: %w", err)
 	}
 
 	buildCtx := filepath.Join(projectRoot, "e2e", "testserver")
-	slog.Info("Building test server image", "tag", tag, "context", buildCtx)
+	slog.Info("Building userservice image", "tag", tag, "context", buildCtx)
 
 	cmd := exec.CommandContext(ctx, "docker", "build",
 		"-t", tag,

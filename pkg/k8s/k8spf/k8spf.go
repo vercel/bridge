@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/vercel/bridge/pkg/k8s/kube"
 	"google.golang.org/grpc"
@@ -16,6 +17,10 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
+
+// dialTimeout caps the total time for pod resolution + SPDY setup per dial
+// attempt. This prevents the CLI from hanging when the cluster is unreachable.
+const dialTimeout = 30 * time.Second
 
 const Scheme = "k8spf"
 
@@ -83,10 +88,14 @@ func (b *Builder) Build(target resolver.Target, cc resolver.ClientConn, _ resolv
 func (b *Builder) DialContext(ctx context.Context, addr string) (net.Conn, error) {
 	t, err := ParseAddr(addr)
 	if err != nil {
-		// Not a k8spf address — fall back to plain TCP.
+		// Not a k8spf address — fall back to plain TCP with a timeout.
 		var d net.Dialer
 		return d.DialContext(ctx, "tcp", addr)
 	}
+
+	// Enforce a dial timeout so the CLI doesn't hang when the cluster is unreachable.
+	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
+	defer cancel()
 
 	kubectx := t.Context
 	if kubectx == "" {

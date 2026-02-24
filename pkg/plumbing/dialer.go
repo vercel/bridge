@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"time"
 )
 
 // ContextDialer matches the DialContext method on net.Dialer.
@@ -21,7 +22,7 @@ type StaticPortDialer struct {
 // to use port and delegates to the provided dialer (or &net.Dialer{} if nil).
 func NewStaticPortDialer(port int, dialer ContextDialer) *StaticPortDialer {
 	if dialer == nil {
-		dialer = &net.Dialer{}
+		dialer = &net.Dialer{Timeout: 10 * time.Second}
 	}
 	return &StaticPortDialer{Port: port, Dialer: dialer}
 }

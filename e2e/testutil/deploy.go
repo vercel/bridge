@@ -20,14 +20,17 @@ const (
 	// AdministratorNamespace is where the administrator runs.
 	AdministratorNamespace = "bridge"
 
-	// TestServerNamespace is where the test workload runs.
-	TestServerNamespace = "test-workloads"
+	// UserserviceNamespace is where the userservice workload runs.
+	UserserviceNamespace = "userservice"
 
-	// TestServerName is the deployment/service name for the test server.
-	TestServerName = "test-api-server"
+	// UserserviceName is the deployment name for the userservice.
+	UserserviceName = "userservice"
 
-	// TestServerPort is the Kubernetes Service port for the test server.
-	TestServerPort = 80
+	// UserserviceServiceName is the Kubernetes Service name for the userservice.
+	UserserviceServiceName = "svc"
+
+	// UserservicePort is the Kubernetes Service port for the userservice.
+	UserservicePort = 80
 )
 
 // DeployAdministrator applies the administrator manifests and waits for the
@@ -65,9 +68,9 @@ func DeployAdministrator(ctx context.Context, cfg *rest.Config, clientset kubern
 	return &pods.Items[0], nil
 }
 
-// DeployTestServer applies the test server manifests and waits for the pod
+// DeployUserservice applies the userservice manifests and waits for the pod
 // to be ready. The image must already be pushed to the test registry.
-func DeployTestServer(ctx context.Context, cfg *rest.Config, clientset kubernetes.Interface, imageRef string) error {
+func DeployUserservice(ctx context.Context, cfg *rest.Config, clientset kubernetes.Interface, imageRef string) error {
 	projectRoot, err := FindProjectRoot()
 	if err != nil {
 		return err
@@ -75,15 +78,15 @@ func DeployTestServer(ctx context.Context, cfg *rest.Config, clientset kubernete
 
 	manifestPath := filepath.Join(projectRoot, "deploy", "k8s", "testserver.yaml")
 	if err := manifests.Apply(ctx, cfg, manifestPath, map[string]string{
-		"{{TESTSERVER_IMAGE}}": imageRef,
+		"{{USERSERVICE_IMAGE}}": imageRef,
 	}); err != nil {
-		return fmt.Errorf("apply test server manifests: %w", err)
+		return fmt.Errorf("apply userservice manifests: %w", err)
 	}
 
-	slog.Info("Test server deployed", "namespace", TestServerNamespace, "image", imageRef)
+	slog.Info("Userservice deployed", "namespace", UserserviceNamespace, "image", imageRef)
 
-	if err := WaitForDeploymentReady(ctx, clientset, TestServerNamespace, TestServerName, 1*time.Minute); err != nil {
-		return fmt.Errorf("test server not ready: %w", err)
+	if err := WaitForDeploymentReady(ctx, clientset, UserserviceNamespace, UserserviceName, 1*time.Minute); err != nil {
+		return fmt.Errorf("userservice not ready: %w", err)
 	}
 
 	return nil

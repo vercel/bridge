@@ -11,22 +11,22 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/urfave/cli/v3"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"k8s.io/client-go/tools/clientcmd"
 
-	pb "github.com/vercel/bridge/api/go/bridge/v1"
+	"github.com/vercel/bridge/pkg/admin"
 	"github.com/vercel/bridge/pkg/devcontainer"
 	"github.com/vercel/bridge/pkg/identity"
-	"github.com/vercel/bridge/pkg/k8s/k8spf"
-	"k8s.io/client-go/tools/clientcmd"
+	"github.com/vercel/bridge/pkg/interact"
 )
 
 const defaultFeatureRef = "ghcr.io/vercel/bridge/features/bridge:edge"
 const devFeatureRef = "../local-features/bridge"
 
 const defaultAdminAddr = "k8spf:///administrator.bridge:9090?workload=deployment"
+const defaultProxyImage = "ghcr.io/vercel/bridge:edge"
 
 // Create returns the CLI command for creating a bridge.
 func Create() *cli.Command {
@@ -51,8 +51,9 @@ func Create() *cli.Command {
 				Sources: cli.EnvVars("BRIDGE_ADMIN_ADDR"),
 			},
 			&cli.BoolFlag{
-				Name:  "force",
-				Usage: "Force recreation without confirmation",
+				Name:    "yes",
+				Aliases: []string{"y"},
+				Usage:   "Auto-accept all confirmation prompts",
 			},
 			&cli.StringFlag{
 				Name:    "devcontainer-config",
@@ -72,6 +73,13 @@ func Create() *cli.Command {
 				Hidden:  true,
 				Sources: cli.EnvVars("BRIDGE_FEATURE_REF"),
 			},
+			&cli.StringFlag{
+				Name:    "proxy-image",
+				Usage:   "Bridge proxy container image (used for local admin fallback)",
+				Value:   defaultProxyImage,
+				Hidden:  true,
+				Sources: cli.EnvVars("BRIDGE_PROXY_IMAGE"),
+			},
 		},
 		Before: preflightCreate,
 		Arguments: []cli.Argument{
@@ -86,6 +94,12 @@ func Create() *cli.Command {
 		Action: runCreate,
 	}
 }
+
+// errAdminUnavailable is a sentinel error returned when the remote
+// administrator cannot be reached.
+type errAdminUnavailable struct{}
+
+func (errAdminUnavailable) Error() string { return "administrator unavailable" }
 
 // preflightCreate runs pre-flight checks before the create command executes.
 func preflightCreate(ctx context.Context, c *cli.Command) (context.Context, error) {
@@ -137,7 +151,8 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	}
 	adminAddr := c.String("admin-addr")
 	connectFlag := c.Bool("connect")
-	force := c.Bool("force")
+	yes := c.Bool("yes")
+	proxyImage := c.String("proxy-image")
 	featureRef := c.String("feature-ref")
 	if featureRef == defaultFeatureRef && Version == "dev" {
 		featureRef = devFeatureRef
@@ -145,85 +160,152 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 
 	w := c.Root().Writer
 	r := c.Root().Reader
+	p := interact.NewPrinter(w)
 
-	// Step 1: Resolve device identity
+	// Step 1: Resolve device identity.
 	deviceID, err := identity.GetDeviceID()
 	if err != nil {
 		return fmt.Errorf("failed to get device identity: %w", err)
 	}
 	slog.Info("Device identity", "device_id", deviceID)
 
-	// Step 2: Connect to the administrator
-	slog.Info("Connecting to bridge administrator...", "addr", adminAddr)
+	kubeContext := currentKubeContext()
 
-	builder := k8spf.NewBuilder(k8spf.BuilderConfig{})
-	conn, err := grpc.NewClient(adminAddr,
-		append(builder.DialOptions(), grpc.WithTransportCredentials(insecure.NewCredentials()))...,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to connect to administrator: %w", err)
-	}
-	defer conn.Close()
+	// Step 2: Connect to administrator (remote, with local fallback).
+	var adm admin.Admin
+	var existingBridges []*admin.BridgeInfo
 
-	client := pb.NewAdministratorServiceClient(conn)
-
-	// Step 4: Check for existing bridges
-	listResp, err := client.ListBridges(ctx, &pb.ListBridgesRequest{
-		DeviceId: deviceID,
-	})
-	if err != nil {
-		slog.Warn("Failed to list existing bridges", "error", err)
-	} else if len(listResp.Bridges) > 0 && !force {
-		// Check if there's an existing bridge for the same deployment
-		for _, bridge := range listResp.Bridges {
-			if bridge.SourceDeployment == deploymentName {
-				fmt.Fprintf(w, "\nWarning: An existing bridge for deployment %q already exists in namespace %q (created %s).\n",
-					bridge.SourceDeployment, bridge.Namespace, bridge.CreatedAt)
-				fmt.Fprintf(w, "This will tear down the existing bridge and recreate it.\n")
-				fmt.Fprintf(w, "Continue? [y/N] ")
-
-				reader := bufio.NewReader(r)
-				answer, _ := reader.ReadString('\n')
-				answer = strings.TrimSpace(strings.ToLower(answer))
-				if answer != "y" && answer != "yes" {
-					fmt.Fprintf(w, "Aborted.\n")
-					return nil
+	err = interact.RunSteps(ctx, []interact.Step{
+		{
+			Title: "Connecting to bridge administrator...",
+			Run: func(ctx context.Context) error {
+				remote, dialErr := admin.NewRemote(adminAddr)
+				if dialErr != nil {
+					return errAdminUnavailable{}
 				}
-				force = true
+				// Probe with a quick ListBridges call to verify the admin is up.
+				probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+				bridges, probeErr := remote.ListBridges(probeCtx, deviceID)
+				if probeErr != nil {
+					remote.Close()
+					return errAdminUnavailable{}
+				}
+				existingBridges = bridges
+				adm = remote
+				return nil
+			},
+		},
+	})
+
+	if _, ok := err.(errAdminUnavailable); ok {
+		err = nil
+
+		// Remote admin not available — offer local fallback.
+		if !yes {
+			p.Newline()
+			p.Warn("No bridge administrator found in the cluster.")
+			p.Info(fmt.Sprintf("Bridge can use your local credentials for cluster %q instead.", kubeContext))
+			fmt.Fprintf(w, "Continue? [y/N] ")
+
+			answer := promptYN(r)
+			if answer != "y" && answer != "yes" {
+				fmt.Fprintf(w, "Aborted.\n")
+				return nil
+			}
+		}
+
+		err = interact.RunSteps(ctx, []interact.Step{
+			{
+				Title: "Initializing local administrator...",
+				Run: func(ctx context.Context) error {
+					localAdm, localErr := admin.NewLocal(admin.LocalConfig{
+						ProxyImage: proxyImage,
+					})
+					if localErr != nil {
+						return fmt.Errorf("failed to initialize: %w", localErr)
+					}
+					adm = localAdm
+					bridges, listErr := localAdm.ListBridges(ctx, deviceID)
+					if listErr != nil {
+						slog.Warn("Failed to list existing bridges", "error", listErr)
+					} else {
+						existingBridges = bridges
+					}
+					return nil
+				},
+			},
+		})
+		if err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	defer adm.Close()
+
+	// Step 3: Check for existing bridges.
+	var conflictingBridge *admin.BridgeInfo
+	if !yes {
+		for _, bridge := range existingBridges {
+			if bridge.SourceDeployment == deploymentName {
+				conflictingBridge = bridge
 				break
 			}
 		}
 	}
 
-	// Step 5: Create the bridge
-	slog.Info("Creating bridge...",
-		"deployment", deploymentName,
-		"source_namespace", sourceNamespace,
-	)
+	if conflictingBridge != nil {
+		p.Newline()
+		p.Warn("An existing bridge already exists:")
+		p.KeyValue("Name", conflictingBridge.SourceDeployment)
+		p.KeyValue("Created", conflictingBridge.CreatedAt)
+		p.KeyValue("Context", kubeContext)
+		p.Newline()
+		p.Muted("This will tear down the existing bridge and recreate it.")
+		fmt.Fprintf(w, "Continue? [y/N] ")
 
-	createResp, err := client.CreateBridge(ctx, &pb.CreateBridgeRequest{
-		DeviceId:         deviceID,
-		SourceDeployment: deploymentName,
-		SourceNamespace:  sourceNamespace,
-		Force:            force,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create bridge: %w", err)
+		answer := promptYN(r)
+		if answer != "y" && answer != "yes" {
+			fmt.Fprintf(w, "Aborted.\n")
+			return nil
+		}
+		yes = true
 	}
 
-	fmt.Fprintf(w, "\nBridge created successfully!\n")
-	fmt.Fprintf(w, "  Namespace: %s\n", createResp.Namespace)
-	fmt.Fprintf(w, "  Pod:       %s\n", createResp.PodName)
-	fmt.Fprintf(w, "  Port:      %d\n", createResp.Port)
+	// Step 4: Create bridge.
+	var createResp *admin.CreateResponse
 
-	// Step 6: Generate devcontainer config when a base config is provided.
+	err = interact.RunWithSpinner(ctx, "Creating bridge...", func(ctx context.Context) error {
+		var createErr error
+		createResp, createErr = adm.CreateBridge(ctx, admin.CreateRequest{
+			DeviceID:         deviceID,
+			SourceDeployment: deploymentName,
+			SourceNamespace:  sourceNamespace,
+			Force:            yes,
+		})
+		return createErr
+	})
+	if err != nil {
+		return err
+	}
+
+	p.Newline()
+	p.Success("Bridge created successfully!")
+	p.KeyValue("Namespace", createResp.Namespace)
+	p.KeyValue("Pod", createResp.PodName)
+	p.KeyValue("Port", fmt.Sprintf("%d", createResp.Port))
+	p.KeyValue("Context", kubeContext)
+	p.Newline()
+
+	// Step 5: Generate devcontainer config when a base config is provided.
 	baseConfigFlag := c.String("devcontainer-config")
 	if baseConfigFlag != "" || connectFlag {
 		baseConfig, err := devcontainer.ResolveConfigPath(baseConfigFlag)
 		if err != nil {
 			return err
 		}
-		dcConfigPath, err := generateDevcontainerConfig(w, deploymentName, baseConfig, featureRef, c.Int("listen"), createResp)
+		dcConfigPath, err := generateDevcontainerConfig(p, w, deploymentName, baseConfig, featureRef, c.Int("listen"), createResp)
 		if err != nil {
 			return err
 		}
@@ -235,11 +317,18 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	return nil
 }
 
+// promptYN reads a single line from r and returns the trimmed, lowercased answer.
+func promptYN(r io.Reader) string {
+	reader := bufio.NewReader(r)
+	answer, _ := reader.ReadString('\n')
+	return strings.TrimSpace(strings.ToLower(answer))
+}
+
 // generateDevcontainerConfig creates a bridge devcontainer.json from a base config.
 // It respects the KUBECONFIG env var by bind-mounting it into the container,
 // unless the base config already sets containerEnv.KUBECONFIG.
 // Returns the path to the generated config.
-func generateDevcontainerConfig(w io.Writer, deploymentName, baseConfigPath, featureRef string, appPort int, resp *pb.CreateBridgeResponse) (string, error) {
+func generateDevcontainerConfig(p *interact.Printer, w io.Writer, deploymentName, baseConfigPath, featureRef string, appPort int, resp *admin.CreateResponse) (string, error) {
 	dcName := deploymentName
 	if dcName == "" {
 		dcName = "proxy"
@@ -292,7 +381,7 @@ func generateDevcontainerConfig(w io.Writer, deploymentName, baseConfigPath, fea
 			return "", fmt.Errorf("failed to write env file: %w", err)
 		}
 		cfg.EnsureRunArgs("--env-file", envFilePath)
-		fmt.Fprintf(w, "\nEnvironment variables written to %s (%d vars)\n", envFilePath, len(resp.EnvVars))
+		p.Info(fmt.Sprintf("Environment variables written to %s (%d vars)", envFilePath, len(resp.EnvVars)))
 	}
 
 	if err := cfg.Save(dcConfigPath); err != nil {
@@ -302,7 +391,7 @@ func generateDevcontainerConfig(w io.Writer, deploymentName, baseConfigPath, fea
 	// Ensure generated bridge config directories are gitignored.
 	ensureGitignore(baseParent, "bridge-*/")
 
-	fmt.Fprintf(w, "\nDevcontainer config written to %s\n", dcConfigPath)
+	p.Info(fmt.Sprintf("Devcontainer config written to %s", dcConfigPath))
 	return dcConfigPath, nil
 }
 
@@ -473,6 +562,17 @@ func ensureGitignore(dir, pattern string) {
 	f.WriteString(pattern + "\n")
 }
 
+// currentKubeContext returns the name of the active kubectl context.
+func currentKubeContext() string {
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{})
+	rawConfig, err := kubeConfig.RawConfig()
+	if err != nil {
+		return ""
+	}
+	return rawConfig.CurrentContext
+}
+
 // startDevcontainer starts the devcontainer and attaches an interactive shell.
 func startDevcontainer(ctx context.Context, dcConfigPath string, r io.Reader, w io.Writer) error {
 	// <workspace>/.devcontainer/bridge-<name>/devcontainer.json → <workspace>
@@ -485,11 +585,14 @@ func startDevcontainer(ctx context.Context, dcConfigPath string, r io.Reader, w 
 		Stderr:          w,
 	}
 
-	slog.Info("Starting devcontainer", "config", dcConfigPath, "workspace", workspaceFolder)
-	if err := dcClient.Up(ctx); err != nil {
+	slog.Debug("Starting devcontainer", "config", dcConfigPath, "workspace", workspaceFolder)
+	err := interact.RunWithSpinner(ctx, "Starting devcontainer...", func(ctx context.Context) error {
+		return dcClient.Up(ctx)
+	})
+	if err != nil {
 		return fmt.Errorf("failed to start devcontainer: %w", err)
 	}
 
-	slog.Info("Devcontainer started, attaching shell")
+	slog.Debug("Devcontainer started, attaching shell")
 	return dcClient.ExecAttached(ctx, []string{"bash"})
 }

@@ -30,7 +30,7 @@ type CreateSuite struct {
 
 	cluster          *testutil.Cluster
 	administratorRef string
-	testServerRef    string
+	userserviceRef   string
 
 	adminPod    corev1.Pod
 	bridgeBin   string // path to pre-built linux bridge binary
@@ -106,11 +106,11 @@ func (s *CreateSuite) SetupSuite() {
 	s.administratorRef, err = s.cluster.PushImage(s.ctx, adminTag, adminTag)
 	require.NoError(s.T(), err, "failed to push administrator image")
 
-	testServerTag := "test-api-server:test"
-	err = testutil.BuildTestServerImage(s.ctx, testServerTag)
+	userserviceTag := "userservice:test"
+	err = testutil.BuildUserserviceImage(s.ctx, userserviceTag)
 	require.NoError(s.T(), err, "failed to build test server image")
 
-	s.testServerRef, err = s.cluster.PushImage(s.ctx, testServerTag, testServerTag)
+	s.userserviceRef, err = s.cluster.PushImage(s.ctx, userserviceTag, userserviceTag)
 	require.NoError(s.T(), err, "failed to push test server image")
 
 	// 3. Deploy administrator (same image for admin and proxy — same binary).
@@ -120,8 +120,8 @@ func (s *CreateSuite) SetupSuite() {
 	slog.Info("Administrator pod", "name", s.adminPod.Name)
 
 	// 4. Deploy test server.
-	err = testutil.DeployTestServer(s.ctx, s.cluster.RestConfig, s.cluster.Clientset, s.testServerRef)
-	require.NoError(s.T(), err, "failed to deploy test server")
+	err = testutil.DeployUserservice(s.ctx, s.cluster.RestConfig, s.cluster.Clientset, s.userserviceRef)
+	require.NoError(s.T(), err, "failed to deploy userservice")
 
 	// 6. Build bridge binary for linux.
 	s.bridgeBin, err = testutil.BuildBridge()
@@ -192,10 +192,10 @@ func (s *CreateSuite) TestFullstackCreate() {
 	go func() {
 		defer stdoutW.Close()
 		errCh <- app.Run(s.ctx, []string{
-			"bridge", "create", testutil.TestServerName,
-			"-n", testutil.TestServerNamespace,
+			"bridge", "create", testutil.UserserviceName,
+			"-n", testutil.UserserviceNamespace,
 			"--admin-addr", adminAddr,
-			"--force",
+			"--yes",
 			"--connect",
 			"--feature-ref", "../local-features/bridge",
 			"-f", filepath.Join(s.workspaceDir, ".devcontainer", "devcontainer.json"),
@@ -213,7 +213,7 @@ func (s *CreateSuite) TestFullstackCreate() {
 	// --- Wait for intercept readiness via devcontainer exec ---
 
 	generatedConfig := filepath.Join(s.workspaceDir, ".devcontainer",
-		fmt.Sprintf("bridge-%s", testutil.TestServerName), "devcontainer.json")
+		fmt.Sprintf("bridge-%s", testutil.UserserviceName), "devcontainer.json")
 	dcExec := &devcontainer.Client{
 		WorkspaceFolder: s.workspaceDir,
 		ConfigPath:      generatedConfig,
@@ -264,7 +264,7 @@ func (s *CreateSuite) TestFullstackCreate() {
 	// --- Verify network access with a single wget ---
 
 	targetURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/",
-		testutil.TestServerName, testutil.TestServerNamespace, testutil.TestServerPort)
+		testutil.UserserviceServiceName, testutil.UserserviceNamespace, testutil.UserservicePort)
 
 	// Dump full intercept log and DNS diagnostics before attempting wget.
 	logOut, _ := dcExec.ExecOutput(s.ctx, []string{"cat", "/tmp/bridge-intercept.log"})
@@ -280,7 +280,7 @@ func (s *CreateSuite) TestFullstackCreate() {
 	// Warm up the k8spf gRPC connection with a throwaway DNS query.
 	// The first DNS resolution via k8spf triggers lazy port-forward setup which
 	// can take >5s. This pre-warms the connection so the real wget doesn't time out.
-	warmupOut, _ := dcExec.ExecOutput(s.ctx, []string{"sh", "-c", "nslookup " + testutil.TestServerName + "." + testutil.TestServerNamespace + ".svc.cluster.local 127.0.0.1 2>&1 || true"})
+	warmupOut, _ := dcExec.ExecOutput(s.ctx, []string{"sh", "-c", "nslookup " + testutil.UserserviceServiceName + "." + testutil.UserserviceNamespace + ".svc.cluster.local 127.0.0.1 2>&1 || true"})
 	t.Logf("[warmup nslookup] %s", strings.TrimSpace(warmupOut))
 
 	wgetOut, wgetErr := dcExec.ExecOutput(s.ctx, []string{"wget", "-O", "-", "-T", "10", targetURL})

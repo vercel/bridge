@@ -29,6 +29,11 @@ type Dialer struct {
 	reqID atomic.Int64
 }
 
+// dialTimeout is how long we wait for the initial SPDY port-forward
+// connection before giving up. This prevents hanging indefinitely when the
+// Kubernetes API server or kubelet is unreachable.
+const dialTimeout = 15 * time.Second
+
 // NewDialer establishes an SPDY connection to the given pod and returns
 // a Dialer that can create net.Conn streams to the specified port.
 func NewDialer(restConfig *rest.Config, clientset kubernetes.Interface, namespace, podName string, port int) (*Dialer, error) {
@@ -44,7 +49,10 @@ func NewDialer(restConfig *rest.Config, clientset kubernetes.Interface, namespac
 		return nil, fmt.Errorf("create SPDY round tripper: %w", err)
 	}
 
-	spdyDialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, reqURL)
+	spdyDialer := spdy.NewDialer(upgrader, &http.Client{
+		Transport: transport,
+		Timeout:   dialTimeout,
+	}, http.MethodPost, reqURL)
 
 	conn, protocol, err := spdyDialer.Dial(portforward.PortForwardProtocolV1Name)
 	if err != nil {
@@ -65,7 +73,27 @@ func NewDialer(restConfig *rest.Config, clientset kubernetes.Interface, namespac
 // net.Conn wrapping the data stream. The addr parameter is ignored — the
 // connection always targets the pod port configured in NewDialer.
 // This signature is compatible with grpc.WithContextDialer.
-func (d *Dialer) DialContext(_ context.Context, _ string) (net.Conn, error) {
+func (d *Dialer) DialContext(ctx context.Context, _ string) (net.Conn, error) {
+	type result struct {
+		conn net.Conn
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		conn, err := d.createStream()
+		ch <- result{conn, err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case r := <-ch:
+		return r.conn, r.err
+	}
+}
+
+// createStream performs the actual SPDY stream creation.
+func (d *Dialer) createStream() (net.Conn, error) {
 	requestID := strconv.FormatInt(d.reqID.Add(1), 10)
 	portStr := strconv.Itoa(d.port)
 

@@ -182,6 +182,9 @@ func (s *administratorServer) CreateBridge(ctx context.Context, req *bridgev1.Cr
 			ProxyImage:       s.proxyImage,
 		})
 		if err != nil {
+			if notFound, ok := err.(*resources.DeploymentNotFoundError); ok {
+				return nil, status.Error(codes.NotFound, notFound.Error())
+			}
 			return nil, status.Errorf(codes.Internal, "failed to copy and transform: %v", err)
 		}
 	} else {

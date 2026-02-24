@@ -45,19 +45,19 @@ func main() {
 	// Push images use the host-accessible registry; pull images use the in-cluster name.
 	adminPushImage := pushRegistry + "/administrator:latest"
 	adminPullImage := pullRegistry + "/administrator:latest"
-	testServerPushImage := pushRegistry + "/test-api-server:latest"
-	testServerPullImage := pullRegistry + "/test-api-server:latest"
+	userservicePushImage := pushRegistry + "/userservice:latest"
+	userservicePullImage := pullRegistry + "/userservice:latest"
 
 	// 1. Build and push images.
 	log.Println("Building administrator image...")
 	dockerBuild(root, filepath.Join("services", "administrator", "Dockerfile"), adminPushImage)
 
-	log.Println("Building test server image...")
-	dockerBuild(filepath.Join(root, "e2e", "testserver"), "Dockerfile", testServerPushImage)
+	log.Println("Building userservice image...")
+	dockerBuild(filepath.Join(root, "e2e", "testserver"), "Dockerfile", userservicePushImage)
 
 	log.Println("Pushing images to registry...")
 	run("docker", "push", adminPushImage)
-	run("docker", "push", testServerPushImage)
+	run("docker", "push", userservicePushImage)
 
 	// 2. Connect to the cluster and apply manifests.
 	restCfg, err := kube.RestConfig(kube.Config{})
@@ -73,9 +73,9 @@ func main() {
 		log.Fatalf("Failed to apply administrator manifests: %v", err)
 	}
 
-	log.Println("Applying test server manifests...")
+	log.Println("Applying userservice manifests...")
 	if err := manifests.Apply(ctx, restCfg, filepath.Join(root, "deploy", "k8s", "testserver.yaml"), map[string]string{
-		"{{TESTSERVER_IMAGE}}": testServerPullImage,
+		"{{USERSERVICE_IMAGE}}": userservicePullImage,
 	}); err != nil {
 		log.Fatalf("Failed to apply test server manifests: %v", err)
 	}
@@ -83,7 +83,7 @@ func main() {
 	// 3. Restart deployments to pick up new images.
 	log.Println("Restarting deployments...")
 	run("kubectl", "rollout", "restart", "deployment/administrator", "-n", "bridge")
-	run("kubectl", "rollout", "restart", "deployment/test-api-server", "-n", "test-workloads")
+	run("kubectl", "rollout", "restart", "deployment/userservice", "-n", "userservice")
 
 	// 4. Wait for rollouts.
 	clientset, err := kubernetes.NewForConfig(restCfg)
@@ -96,9 +96,9 @@ func main() {
 		log.Fatalf("Administrator not ready: %v", err)
 	}
 
-	log.Println("Waiting for test server deployment...")
-	if err := waitForDeployment(ctx, clientset, "test-workloads", "test-api-server"); err != nil {
-		log.Fatalf("Test server not ready: %v", err)
+	log.Println("Waiting for userservice deployment...")
+	if err := waitForDeployment(ctx, clientset, "userservice", "userservice"); err != nil {
+		log.Fatalf("Userservice not ready: %v", err)
 	}
 
 	log.Println("Done. Cluster is seeded.")

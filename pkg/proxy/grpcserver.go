@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/vercel/bridge/pkg/plumbing"
 
@@ -17,6 +18,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// egressDialTimeout caps how long the bridge server waits when dialing an
+// egress destination on behalf of the tunnel client.
+const egressDialTimeout = 10 * time.Second
 
 // ListenPort describes a port the proxy should listen on for ingress traffic.
 type ListenPort struct {
@@ -161,7 +166,7 @@ func (s *GRPCServer) GetMetadata(_ context.Context, _ *bridgev1.GetMetadataReque
 func (s *GRPCServer) TunnelNetwork(stream grpc.BidiStreamingServer[bridgev1.TunnelNetworkMessage, bridgev1.TunnelNetworkMessage]) error {
 	slog.Info("Tunnel connected")
 
-	tun := plumbing.NewTunnel(&net.Dialer{}, stream)
+	tun := plumbing.NewTunnel(&net.Dialer{Timeout: egressDialTimeout}, stream)
 
 	s.tunnelMu.Lock()
 	s.tunnel = tun

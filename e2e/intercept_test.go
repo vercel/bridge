@@ -50,9 +50,9 @@ type InterceptSuite struct {
 	internalNet *testcontainers.DockerNetwork // testserver + proxy
 	bridgeNet   *testcontainers.DockerNetwork // proxy + intercept
 
-	bridgeBin     string
-	interceptImg  string
-	testServerImg string
+	bridgeBin      string
+	interceptImg   string
+	userserviceImg string
 }
 
 func (s *InterceptSuite) SetupSuite() {
@@ -73,10 +73,10 @@ func (s *InterceptSuite) SetupSuite() {
 	err = testutil.BuildInterceptImage(s.ctx, s.bridgeBin, s.interceptImg)
 	require.NoError(s.T(), err, "failed to build intercept image")
 
-	// Build the test server image.
-	s.testServerImg = "bridge-testserver:e2e-test"
-	err = testutil.BuildTestServerImage(s.ctx, s.testServerImg)
-	require.NoError(s.T(), err, "failed to build test server image")
+	// Build the userservice image.
+	s.userserviceImg = "bridge-userservice:e2e-test"
+	err = testutil.BuildUserserviceImage(s.ctx, s.userserviceImg)
+	require.NoError(s.T(), err, "failed to build userservice image")
 
 	// Create two Docker networks.
 	s.internalNet, err = network.New(s.ctx, network.WithDriver("bridge"))
@@ -164,7 +164,7 @@ func (s *InterceptSuite) startIntercept(t *testing.T) testcontainers.Container {
 func (s *InterceptSuite) startTestServer(t *testing.T) testcontainers.Container {
 	testserverC, err := testcontainers.GenericContainer(s.ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:    s.testServerImg,
+			Image:    s.userserviceImg,
 			Env:      map[string]string{"PORT": "8080"},
 			Networks: []string{s.internalNet.Name},
 			NetworkAliases: map[string][]string{

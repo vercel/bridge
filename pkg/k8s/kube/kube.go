@@ -2,11 +2,17 @@ package kube
 
 import (
 	"log/slog"
+	"time"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
+
+// apiTimeout is the default timeout for Kubernetes API requests made via
+// rest.Config. This prevents the CLI from hanging when the API server is
+// unreachable.
+const apiTimeout = 10 * time.Second
 
 // Config holds optional overrides for out-of-cluster kubeconfig resolution.
 type Config struct {
@@ -44,6 +50,10 @@ func RestConfig(cfg Config) (*rest.Config, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	if config.Timeout == 0 {
+		config.Timeout = apiTimeout
 	}
 
 	return config, nil
