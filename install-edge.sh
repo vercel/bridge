@@ -28,6 +28,13 @@ main() {
     os=$(get_os)
     arch=$(get_arch)
 
+    # Cache sudo credentials up front so the prompt happens before the
+    # download — avoids issues when the script is piped via curl | sh.
+    if [ ! -w "$INSTALL_DIR" ]; then
+        echo "Installation to ${INSTALL_DIR} requires sudo access."
+        sudo -v
+    fi
+
     binary_name="bridge-${os}-${arch}"
     download_url="https://github.com/${REPO}/releases/download/edge/${binary_name}"
 
@@ -36,15 +43,14 @@ main() {
     curl -fsSL -o bridge "${download_url}"
     chmod +x bridge
 
-    # Remove macOS quarantine attribute to prevent Gatekeeper from killing the binary
     if [ "$os" = "darwin" ]; then
+        # Remove macOS quarantine attribute to prevent Gatekeeper prompts
         xattr -d com.apple.quarantine bridge 2>/dev/null || true
     fi
 
     if [ -w "$INSTALL_DIR" ]; then
         mv bridge "${INSTALL_DIR}/bridge"
     else
-        echo "Moving binary to ${INSTALL_DIR} (requires sudo)..."
         sudo mv bridge "${INSTALL_DIR}/bridge"
     fi
 

@@ -206,7 +206,7 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 		if !yes {
 			p.Newline()
 			p.Warn("No bridge administrator found in the cluster.")
-			p.Info(fmt.Sprintf("Bridge can use your local credentials for cluster %q instead.", kubeContext))
+			p.Info(fmt.Sprintf("Should Bridge use your local credentials for cluster %q instead.", kubeContext))
 			fmt.Fprintf(w, "Continue? [y/N] ")
 
 			answer := promptYN(r)

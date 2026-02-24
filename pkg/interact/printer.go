@@ -3,6 +3,7 @@ package interact
 import (
 	"fmt"
 	"io"
+	"strings"
 )
 
 // Printer writes themed, styled messages to a writer.
@@ -31,10 +32,16 @@ func (p *Printer) Info(msg string) {
 	fmt.Fprintf(p.w, "%s %s\n", p.theme.Info.Render("→"), msg)
 }
 
-// Errorf prints a red error message with formatting.
+// Errorf prints a red error message with formatting. If the message contains
+// newlines, only the first line is styled to avoid lipgloss mangling
+// multi-line output (e.g. devcontainer build logs).
 func (p *Printer) Errorf(format string, a ...any) {
 	msg := fmt.Sprintf(format, a...)
-	fmt.Fprintf(p.w, "%s %s\n", p.theme.Error.Render("✗"), p.theme.Error.Render(msg))
+	first, rest, _ := strings.Cut(msg, "\n")
+	fmt.Fprintf(p.w, "%s %s\n", p.theme.Error.Render("✗"), p.theme.Error.Render(first))
+	if rest != "" {
+		fmt.Fprintln(p.w, rest)
+	}
 }
 
 // Header prints a bold, underlined header.
