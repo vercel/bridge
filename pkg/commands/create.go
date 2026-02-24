@@ -35,8 +35,9 @@ func Create() *cli.Command {
 		Usage: "Create a bridge to a Kubernetes deployment",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
-				Name:  "connect",
-				Usage: "Start a Devcontainer and connect to the bridge after creation",
+				Name:    "connect",
+				Aliases: []string{"c"},
+				Usage:   "Start a Devcontainer and connect to the bridge after creation",
 			},
 			&cli.StringFlag{
 				Name:    "namespace",
