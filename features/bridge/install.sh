@@ -117,7 +117,7 @@ if [ -n "$BRIDGE_SERVER_ADDR" ]; then
     sudo BRIDGE_SERVER_ADDR="$BRIDGE_SERVER_ADDR" \
          FORWARD_DOMAINS="$FORWARD_DOMAINS" \
          KUBECONFIG="${KUBECONFIG:-}" \
-         /usr/local/bin/bridge intercept > /tmp/bridge-intercept.log 2>&1 &
+         /usr/local/bin/bridge --log-path stderr intercept > /tmp/bridge-intercept.log 2>&1 &
 fi
 
 exec "$@"

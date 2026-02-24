@@ -43,20 +43,20 @@ func main() {
 	}
 
 	// Push images use the host-accessible registry; pull images use the in-cluster name.
-	adminPushImage := pushRegistry + "/administrator:latest"
-	adminPullImage := pullRegistry + "/administrator:latest"
+	bridgePushImage := pushRegistry + "/bridge:latest"
+	bridgePullImage := pullRegistry + "/bridge:latest"
 	userservicePushImage := pushRegistry + "/userservice:latest"
 	userservicePullImage := pullRegistry + "/userservice:latest"
 
 	// 1. Build and push images.
-	log.Println("Building administrator image...")
-	dockerBuild(root, filepath.Join("services", "administrator", "Dockerfile"), adminPushImage)
+	log.Println("Building bridge image...")
+	dockerBuild(root, "Dockerfile", bridgePushImage)
 
 	log.Println("Building userservice image...")
 	dockerBuild(filepath.Join(root, "e2e", "testserver"), "Dockerfile", userservicePushImage)
 
 	log.Println("Pushing images to registry...")
-	run("docker", "push", adminPushImage)
+	run("docker", "push", bridgePushImage)
 	run("docker", "push", userservicePushImage)
 
 	// 2. Connect to the cluster and apply manifests.
@@ -67,8 +67,7 @@ func main() {
 
 	log.Println("Applying administrator manifests...")
 	if err := manifests.Apply(ctx, restCfg, filepath.Join(root, "deploy", "k8s", "administrator.yaml"), map[string]string{
-		"{{ADMINISTRATOR_IMAGE}}": adminPullImage,
-		"{{PROXY_IMAGE}}":         adminPullImage,
+		"{{BRIDGE_IMAGE}}": bridgePullImage,
 	}); err != nil {
 		log.Fatalf("Failed to apply administrator manifests: %v", err)
 	}

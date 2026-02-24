@@ -65,17 +65,17 @@ func CleanupBuild() {
 	}
 }
 
-// BuildAdministratorImage builds the administrator Docker image from the
-// project's services/administrator/Dockerfile. The build context is the
-// project root so that go.mod, cmd/, pkg/, etc. are all available.
-func BuildAdministratorImage(ctx context.Context, tag string) error {
+// BuildBridgeImage builds the bridge Docker image from the project's root
+// Dockerfile. The build context is the project root so that go.mod, cmd/,
+// pkg/, etc. are all available.
+func BuildBridgeImage(ctx context.Context, tag string) error {
 	projectRoot, err := findProjectRoot()
 	if err != nil {
 		return fmt.Errorf("find project root: %w", err)
 	}
 
-	dockerfile := filepath.Join("services", "administrator", "Dockerfile")
-	slog.Info("Building administrator image", "tag", tag, "dockerfile", dockerfile)
+	dockerfile := "Dockerfile"
+	slog.Info("Building bridge image", "tag", tag, "dockerfile", dockerfile)
 
 	cmd := exec.CommandContext(ctx, "docker", "build",
 		"-t", tag,

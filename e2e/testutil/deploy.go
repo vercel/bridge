@@ -35,7 +35,7 @@ const (
 
 // DeployAdministrator applies the administrator manifests and waits for the
 // pod to be ready. The image must already be pushed to the test registry.
-func DeployAdministrator(ctx context.Context, cfg *rest.Config, clientset kubernetes.Interface, imageRef, proxyImageRef string) (*corev1.Pod, error) {
+func DeployAdministrator(ctx context.Context, cfg *rest.Config, clientset kubernetes.Interface, imageRef string) (*corev1.Pod, error) {
 	projectRoot, err := FindProjectRoot()
 	if err != nil {
 		return nil, err
@@ -43,8 +43,7 @@ func DeployAdministrator(ctx context.Context, cfg *rest.Config, clientset kubern
 
 	manifestPath := filepath.Join(projectRoot, "deploy", "k8s", "administrator.yaml")
 	if err := manifests.Apply(ctx, cfg, manifestPath, map[string]string{
-		"{{ADMINISTRATOR_IMAGE}}": imageRef,
-		"{{PROXY_IMAGE}}":         proxyImageRef,
+		"{{BRIDGE_IMAGE}}": imageRef,
 	}); err != nil {
 		return nil, fmt.Errorf("apply administrator manifests: %w", err)
 	}

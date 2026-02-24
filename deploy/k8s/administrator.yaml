@@ -61,7 +61,7 @@ spec:
       serviceAccountName: administrator
       containers:
         - name: administrator
-          image: "{{ADMINISTRATOR_IMAGE}}"
+          image: "{{BRIDGE_IMAGE}}"
           imagePullPolicy: Always
           command: ["bridge", "administrator"]
           env:
@@ -70,7 +70,7 @@ spec:
             - name: SERVICE_ACCOUNT_NAME
               value: administrator
             - name: BRIDGE_PROXY_IMAGE
-              value: "{{PROXY_IMAGE}}"
+              value: "{{BRIDGE_IMAGE}}"
           ports:
             - name: grpc
               containerPort: 9090

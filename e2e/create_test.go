@@ -99,12 +99,12 @@ func (s *CreateSuite) SetupSuite() {
 	require.NoError(s.T(), err, "failed to setup cluster")
 
 	// 2. Build and push images.
-	adminTag := "administrator:test"
-	err = testutil.BuildAdministratorImage(s.ctx, adminTag)
-	require.NoError(s.T(), err, "failed to build administrator image")
+	bridgeTag := "bridge:test"
+	err = testutil.BuildBridgeImage(s.ctx, bridgeTag)
+	require.NoError(s.T(), err, "failed to build bridge image")
 
-	s.administratorRef, err = s.cluster.PushImage(s.ctx, adminTag, adminTag)
-	require.NoError(s.T(), err, "failed to push administrator image")
+	s.administratorRef, err = s.cluster.PushImage(s.ctx, bridgeTag, bridgeTag)
+	require.NoError(s.T(), err, "failed to push bridge image")
 
 	userserviceTag := "userservice:test"
 	err = testutil.BuildUserserviceImage(s.ctx, userserviceTag)
@@ -113,8 +113,8 @@ func (s *CreateSuite) SetupSuite() {
 	s.userserviceRef, err = s.cluster.PushImage(s.ctx, userserviceTag, userserviceTag)
 	require.NoError(s.T(), err, "failed to push test server image")
 
-	// 3. Deploy administrator (same image for admin and proxy — same binary).
-	adminPod, err := testutil.DeployAdministrator(s.ctx, s.cluster.RestConfig, s.cluster.Clientset, s.administratorRef, s.administratorRef)
+	// 3. Deploy administrator.
+	adminPod, err := testutil.DeployAdministrator(s.ctx, s.cluster.RestConfig, s.cluster.Clientset, s.administratorRef)
 	require.NoError(s.T(), err, "failed to deploy administrator")
 	s.adminPod = *adminPod
 	slog.Info("Administrator pod", "name", s.adminPod.Name)

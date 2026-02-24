@@ -228,9 +228,9 @@ func (c *Cluster) TearDown(ctx context.Context) {
 }
 
 // PushImage tags a local image for the test registry and pushes it.
-// localRef should be a locally available image (e.g. "administrator:test").
-// remoteName is the name:tag used in the registry (e.g. "administrator:test").
-// Returns the full cluster-internal reference (e.g. "registry.test:5000/administrator:test").
+// localRef should be a locally available image (e.g. "bridge:test").
+// remoteName is the name:tag used in the registry (e.g. "bridge:test").
+// Returns the full cluster-internal reference (e.g. "registry.test:5000/bridge:test").
 func (c *Cluster) PushImage(ctx context.Context, localRef, remoteName string) (string, error) {
 	clusterRef := fmt.Sprintf("%s/%s", c.RegistryClusterAddress, remoteName)
 	hostRef := fmt.Sprintf("%s/%s", c.RegistryAddress, remoteName)

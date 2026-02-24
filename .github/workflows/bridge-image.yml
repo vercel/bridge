@@ -1,4 +1,4 @@
-name: Administrator Docker Image
+name: Bridge Docker Image
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
       - 'pkg/**'
       - 'cmd/**'
       - 'api/**'
-      - 'services/administrator/Dockerfile'
+      - 'Dockerfile'
       - 'go.mod'
       - 'go.sum'
     tags:
@@ -20,7 +20,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/administrator
+  IMAGE_NAME: ${{ github.repository_owner }}/bridge
 
 jobs:
   build-and-push:
@@ -53,7 +53,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: services/administrator/Dockerfile
+          file: Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.version.outputs.tags }}

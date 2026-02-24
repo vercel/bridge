@@ -24,4 +24,3 @@ RUN apk add --no-cache ca-certificates
 COPY --from=builder /bridge /usr/local/bin/bridge
 
 ENTRYPOINT ["bridge"]
-CMD ["administrator"]

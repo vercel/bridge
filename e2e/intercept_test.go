@@ -187,7 +187,7 @@ func (s *InterceptSuite) TestIntercept() {
 	t.Log("testserver started")
 
 	// 2. Start proxy container on BOTH networks.
-	_, proxyIP := s.startProxy(t, []string{"bridge", "server", "--addr", ":9090"})
+	_, proxyIP := s.startProxy(t, []string{"bridge", "--log-path", "stderr", "server", "--addr", ":9090"})
 	t.Log("proxy container started")
 
 	// 3. Start intercept container on the bridge network only (privileged for iptables).
@@ -198,7 +198,7 @@ func (s *InterceptSuite) TestIntercept() {
 	serverAddr := proxyIP + ":9090"
 	exitCode, reader, err := interceptC.Exec(s.ctx, []string{
 		"sh", "-c",
-		fmt.Sprintf(`bridge intercept --server-addr %s --forward-domains "*" > /tmp/bridge.log 2>&1 &`, serverAddr),
+		fmt.Sprintf(`bridge --log-path stderr intercept --server-addr %s --forward-domains "*" > /tmp/bridge.log 2>&1 &`, serverAddr),
 	})
 	require.NoError(t, err, "failed to exec bridge intercept")
 	io.Copy(io.Discard, reader)
@@ -247,7 +247,7 @@ func (s *InterceptSuite) TestIngress() {
 	t := s.T()
 
 	// 1. Start proxy with --listen-ports 8080/tcp on BOTH networks.
-	proxyC, proxyIP := s.startProxy(t, []string{"bridge", "server", "--addr", ":9090", "-l", "8080/tcp"})
+	proxyC, proxyIP := s.startProxy(t, []string{"bridge", "--log-path", "stderr", "server", "--addr", ":9090", "-l", "8080/tcp"})
 	t.Log("proxy container started with ingress listener on :8080")
 
 	// 2. Start intercept container on the bridge network only.
@@ -270,7 +270,7 @@ func (s *InterceptSuite) TestIngress() {
 	serverAddr := proxyIP + ":9090"
 	exitCode, reader, err = interceptC.Exec(s.ctx, []string{
 		"sh", "-c",
-		fmt.Sprintf(`bridge intercept --server-addr %s --app-port 8080 > /tmp/bridge.log 2>&1 &`, serverAddr),
+		fmt.Sprintf(`bridge --log-path stderr intercept --server-addr %s --app-port 8080 > /tmp/bridge.log 2>&1 &`, serverAddr),
 	})
 	require.NoError(t, err, "failed to exec bridge intercept")
 	io.Copy(io.Discard, reader)
