@@ -47,18 +47,14 @@ var bridgeFrames = bubbles.Spinner{
 type Spinner struct {
 	title *atomic.Value
 	prog  *tea.Program
-	done  chan spinnerResult
-}
-
-type spinnerResult struct {
-	err error
+	done  chan struct{}
 }
 
 // NewSpinner creates a new spinner. Call Start to display it.
 func NewSpinner(title string) *Spinner {
 	t := &atomic.Value{}
 	t.Store(title)
-	return &Spinner{title: t}
+	return &Spinner{title: t, done: make(chan struct{})}
 }
 
 // SetTitle updates the spinner title while it is running.
@@ -76,19 +72,18 @@ func (s *Spinner) Start(ctx context.Context) error {
 		titleStyle: theme.Muted,
 	}
 
-	s.done = make(chan spinnerResult, 1)
 	s.prog = tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(nil))
 
-	if _, err := s.prog.Run(); err != nil {
-		return err
-	}
-	return nil
+	_, err := s.prog.Run()
+	close(s.done)
+	return err
 }
 
-// Stop stops the spinner. Safe to call from any goroutine.
+// Stop stops the spinner and waits for it to fully exit.
 func (s *Spinner) Stop() {
 	if s.prog != nil {
 		s.prog.Send(stopMsg{})
+		<-s.done
 	}
 }
 
