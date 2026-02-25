@@ -119,18 +119,14 @@ EOF
 [ -f /etc/profile.d/bridge.sh ] && source /etc/profile.d/bridge.sh
 
 # Run bridge intercept as root (required for iptables).
-# Explicitly unset IRSA env vars (AWS_ROLE_ARN, AWS_WEB_IDENTITY_TOKEN_FILE)
-# so the AWS SDK uses SSO credentials instead of token-file auth
-# (the token file doesn't exist outside the cluster pod).
-# sudo preserves the container env, so unsetting in the shell isn't enough.
+# Use sudo -E to inherit env, then unset IRSA vars inside the shell so the
+# AWS SDK uses SSO credentials instead of token-file auth (the token file
+# doesn't exist outside the cluster pod).
 if [ -n "$BRIDGE_SERVER_ADDR" ]; then
-    sudo AWS_ROLE_ARN="" \
-         AWS_WEB_IDENTITY_TOKEN_FILE="" \
-         BRIDGE_SERVER_ADDR="$BRIDGE_SERVER_ADDR" \
-         FORWARD_DOMAINS="$FORWARD_DOMAINS" \
-         COPY_FILES="$COPY_FILES" \
-         KUBECONFIG="${KUBECONFIG:-}" \
-         /usr/local/bin/bridge --log-paths stderr intercept > /tmp/bridge-intercept.log 2>&1 &
+    sudo -E bash -c '
+        unset AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE
+        exec /usr/local/bin/bridge --log-paths stderr intercept
+    ' > /tmp/bridge-intercept.log 2>&1 &
 fi
 
 exec "$@"
