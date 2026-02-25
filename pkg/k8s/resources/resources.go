@@ -573,14 +573,47 @@ func upsertConfigMap(ctx context.Context, client kubernetes.Interface, ns string
 }
 
 // copyServiceAccount copies a ServiceAccount from the source namespace into
-// the target namespace with a deployment-scoped prefix.
+// the target namespace with a deployment-scoped prefix. It also copies any
+// secrets referenced by imagePullSecrets.
 func copyServiceAccount(ctx context.Context, client kubernetes.Interface, srcNS, targetNS, saName, deployName string) error {
 	sa, err := client.CoreV1().ServiceAccounts(srcNS).Get(ctx, saName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get service account %s/%s: %w", srcNS, saName, err)
 	}
 
-	sa.Name = deployName + "-" + saName
+	prefix := deployName + "-"
+	ownerLabels := map[string]string{
+		meta.LabelBridgeType:       meta.BridgeTypeProxy,
+		meta.LabelBridgeDeployment: deployName,
+	}
+
+	// Copy imagePullSecrets and rewrite references.
+	for i, ref := range sa.ImagePullSecrets {
+		secret, err := client.CoreV1().Secrets(srcNS).Get(ctx, ref.Name, metav1.GetOptions{})
+		if err != nil {
+			slog.Warn("Failed to copy imagePullSecret", "name", ref.Name, "error", err)
+			continue
+		}
+		dstName := prefix + ref.Name
+		secret.Name = dstName
+		secret.Namespace = targetNS
+		secret.ResourceVersion = ""
+		secret.UID = ""
+		secret.CreationTimestamp = metav1.Time{}
+		if secret.Labels == nil {
+			secret.Labels = make(map[string]string)
+		}
+		for k, v := range ownerLabels {
+			secret.Labels[k] = v
+		}
+		if err := upsertSecret(ctx, client, targetNS, secret); err != nil {
+			slog.Warn("Failed to upsert imagePullSecret", "name", dstName, "error", err)
+			continue
+		}
+		sa.ImagePullSecrets[i].Name = dstName
+	}
+
+	sa.Name = prefix + saName
 	sa.Namespace = targetNS
 	sa.ResourceVersion = ""
 	sa.UID = ""
@@ -588,8 +621,9 @@ func copyServiceAccount(ctx context.Context, client kubernetes.Interface, srcNS,
 	if sa.Labels == nil {
 		sa.Labels = make(map[string]string)
 	}
-	sa.Labels[meta.LabelBridgeType] = meta.BridgeTypeProxy
-	sa.Labels[meta.LabelBridgeDeployment] = deployName
+	for k, v := range ownerLabels {
+		sa.Labels[k] = v
+	}
 
 	existing, err := client.CoreV1().ServiceAccounts(targetNS).Get(ctx, sa.Name, metav1.GetOptions{})
 	if errors.IsNotFound(err) {
