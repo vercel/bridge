@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/vercel/bridge/pkg/identity"
+	"github.com/vercel/bridge/pkg/k8s/kube"
 	"github.com/vercel/bridge/pkg/k8s/meta"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -181,14 +182,25 @@ func CreateInNamespace(ctx context.Context, client kubernetes.Interface, cfg InN
 	deployName := identity.BridgeResourceName(cfg.DeviceID, srcDeploy.Name)
 	ns := cfg.SourceNamespace
 
-	// Collect ports and volume mount paths from the source deployment's first container.
+	// Use a live pod's container spec when available — it reflects runtime
+	// mutations (e.g. injected sidecars, admission webhooks) that the
+	// deployment template doesn't capture. Fall back to the template spec.
+	sourceContainers := srcDeploy.Spec.Template.Spec.Containers
+	if podName, err := kube.GetFirstPodForDeployment(ctx, client, ns, cfg.SourceDeployment); err == nil {
+		if pod, err := client.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); err == nil && len(pod.Spec.Containers) > 0 {
+			slog.Info("Using live pod for source configuration", "pod", podName)
+			sourceContainers = pod.Spec.Containers
+		}
+	}
+
+	// Collect ports and volume mount paths from the source's first container.
 	var appPorts []int32
 	var volumeMountPaths []string
-	if containers := srcDeploy.Spec.Template.Spec.Containers; len(containers) > 0 {
-		for _, p := range containers[0].Ports {
+	if len(sourceContainers) > 0 {
+		for _, p := range sourceContainers[0].Ports {
 			appPorts = append(appPorts, p.ContainerPort)
 		}
-		for _, vm := range containers[0].VolumeMounts {
+		for _, vm := range sourceContainers[0].VolumeMounts {
 			volumeMountPaths = append(volumeMountPaths, vm.MountPath)
 		}
 	}
