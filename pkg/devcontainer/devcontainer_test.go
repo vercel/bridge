@@ -42,11 +42,14 @@ func TestRoundTrip_PreservesUnknownFields(t *testing.T) {
 		t.Errorf("mounts = %v, want [source=vol,target=/data,type=volume]", cfg.Mounts)
 	}
 
+	// build is now a typed field.
+	if cfg.Build == nil || cfg.Build.Dockerfile != "Dockerfile" {
+		t.Errorf("build.dockerfile = %v, want Dockerfile", cfg.Build)
+	}
+
 	// Overflow must contain the unknown keys.
-	for _, key := range []string{"build", "postCreateCommand"} {
-		if _, ok := cfg.Overflow[key]; !ok {
-			t.Errorf("overflow missing key %q", key)
-		}
+	if _, ok := cfg.Overflow["postCreateCommand"]; !ok {
+		t.Errorf("overflow missing key %q", "postCreateCommand")
 	}
 
 	// Round-trip marshal.
@@ -186,5 +189,59 @@ func TestLoad_ExistingThenModify(t *testing.T) {
 	// postCreateCommand must survive
 	if _, ok := reloaded.Overflow["postCreateCommand"]; !ok {
 		t.Error("postCreateCommand lost on round-trip")
+	}
+}
+
+func TestRebaseBuildPaths(t *testing.T) {
+	input := `{
+  "name": "test",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  }
+}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Simulate moving from .devcontainer/ to .devcontainer/bridge-foo/
+	cfg.RebaseBuildPaths(".devcontainer", filepath.Join(".devcontainer", "bridge-foo"))
+
+	wantDockerfile := filepath.Join("..", "..", "Dockerfile")
+	if cfg.Build.Dockerfile != wantDockerfile {
+		t.Errorf("dockerfile = %q, want %q", cfg.Build.Dockerfile, wantDockerfile)
+	}
+	wantContext := filepath.Join("..", "..")
+	if cfg.Build.Context != wantContext {
+		t.Errorf("context = %q, want %q", cfg.Build.Context, wantContext)
+	}
+}
+
+func TestRebaseBuildPaths_NoBuild(t *testing.T) {
+	cfg := &Config{}
+	// Should not panic when there's no build field.
+	cfg.RebaseBuildPaths(".devcontainer", filepath.Join(".devcontainer", "bridge-foo"))
+}
+
+func TestRebaseBuildPaths_AbsolutePaths(t *testing.T) {
+	input := `{
+  "build": {
+    "dockerfile": "/absolute/Dockerfile",
+    "context": "/absolute/dir"
+  }
+}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	cfg.RebaseBuildPaths(".devcontainer", filepath.Join(".devcontainer", "bridge-foo"))
+
+	if cfg.Build.Dockerfile != "/absolute/Dockerfile" {
+		t.Errorf("dockerfile = %q, want /absolute/Dockerfile", cfg.Build.Dockerfile)
+	}
+	if cfg.Build.Context != "/absolute/dir" {
+		t.Errorf("context = %q, want /absolute/dir", cfg.Build.Context)
 	}
 }

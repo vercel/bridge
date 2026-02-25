@@ -7,11 +7,18 @@ import (
 	"path/filepath"
 )
 
+// Build holds the devcontainer build configuration.
+type Build struct {
+	Dockerfile string `json:"dockerfile,omitempty"`
+	Context    string `json:"context,omitempty"`
+}
+
 // Config represents a devcontainer.json configuration.
 // Known fields are typed; unknown fields are preserved via Overflow.
 type Config struct {
 	Name         string                    `json:"name,omitempty"`
 	Image        string                    `json:"image,omitempty"`
+	Build        *Build                    `json:"build,omitempty"`
 	Features     map[string]map[string]any `json:"features,omitempty"`
 	ContainerEnv map[string]string         `json:"containerEnv,omitempty"`
 	RemoteEnv    map[string]string         `json:"remoteEnv,omitempty"`
@@ -27,6 +34,7 @@ type Config struct {
 var knownKeys = map[string]bool{
 	"name":         true,
 	"image":        true,
+	"build":        true,
 	"features":     true,
 	"containerEnv": true,
 	"remoteEnv":    true,
@@ -162,6 +170,31 @@ func (c *Config) EnsureContainerEnv(k, v string) {
 // EnsureRunArgs appends additional docker run arguments.
 func (c *Config) EnsureRunArgs(args ...string) {
 	c.RunArgs = append(c.RunArgs, args...)
+}
+
+// RebaseBuildPaths adjusts the relative "dockerfile" and "context" paths inside
+// the Build field so they remain correct when the config is saved to a
+// different directory. origDir is the directory containing the original config;
+// newDir is where the config will be written.
+func (c *Config) RebaseBuildPaths(origDir, newDir string) {
+	if c.Build == nil {
+		return
+	}
+
+	rebase := func(p string) string {
+		if p == "" || filepath.IsAbs(p) {
+			return p
+		}
+		abs := filepath.Clean(filepath.Join(origDir, p))
+		rel, err := filepath.Rel(newDir, abs)
+		if err != nil {
+			return p
+		}
+		return filepath.Clean(rel)
+	}
+
+	c.Build.Dockerfile = rebase(c.Build.Dockerfile)
+	c.Build.Context = rebase(c.Build.Context)
 }
 
 // EnsureCapAdd idempotently adds capabilities to capAdd.

@@ -278,20 +278,17 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	p.KeyValue("Context", kubeContext)
 	p.Newline()
 
-	// Step 5: Generate devcontainer config when a base config is provided.
-	baseConfigFlag := c.String("devcontainer-config")
-	if baseConfigFlag != "" || connectFlag {
-		baseConfig, err := devcontainer.ResolveConfigPath(baseConfigFlag)
-		if err != nil {
-			return err
-		}
-		dcConfigPath, err := generateDevcontainerConfig(p, baseConfig, featureRef, c.Int("listen"), createResp)
-		if err != nil {
-			return err
-		}
-		if connectFlag {
-			return startDevcontainer(ctx, p, dcConfigPath, r)
-		}
+	// Step 5: Generate devcontainer config.
+	baseConfig, err := devcontainer.ResolveConfigPath(c.String("devcontainer-config"))
+	if err != nil {
+		return err
+	}
+	dcConfigPath, err := generateDevcontainerConfig(p, baseConfig, featureRef, c.Int("listen"), createResp)
+	if err != nil {
+		return err
+	}
+	if connectFlag {
+		return startDevcontainer(ctx, p, dcConfigPath, r)
 	}
 
 	return nil
@@ -330,6 +327,10 @@ func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef s
 	if err != nil {
 		return "", fmt.Errorf("failed to load base devcontainer config: %w", err)
 	}
+
+	// Rebase relative build paths (dockerfile, context) so they resolve
+	// correctly from the new config directory.
+	cfg.RebaseBuildPaths(filepath.Dir(baseConfigPath), dcDir)
 
 	cfg.Name = "bridge-" + dcName
 	bridgeServerAddr := fmt.Sprintf("k8spf:///%s.%s:%d?workload=deployment", resp.DeploymentName, resp.Namespace, resp.Port)
