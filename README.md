@@ -12,6 +12,21 @@ curl -fsSL https://raw.githubusercontent.com/vercel/bridge/main/install-edge.sh 
 
 This downloads the latest edge binary for your platform (macOS/Linux, amd64/arm64) and installs it to `/usr/local/bin`.
 
+## Usage
+
+To create a bridge to the `userservice` you can simply run
+
+```
+bridge create -c userservice
+```
+
+This will
+
+1. Copy the `userservice` configuration
+2. Swap the application container with a proxy
+3. Generate a Devcontainer from your nearest (or specify which with `-f`)
+4. Put you inside the container (`-c`)
+
 ## API
 
 The API is defined using protocol buffers. Currently, all messages are sent/received via websocket/HTTP but the payloads
