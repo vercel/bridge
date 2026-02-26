@@ -56,6 +56,7 @@ func NewApp() *cli.Command {
 			Create(),
 			Administrator(),
 			Debug(),
+			Update(),
 		},
 	}
 }

@@ -12,6 +12,14 @@ curl -fsSL https://raw.githubusercontent.com/vercel/bridge/main/install-edge.sh 
 
 This downloads the latest edge binary for your platform (macOS/Linux, amd64/arm64) and installs it to `/usr/local/bin`.
 
+### Update
+
+Either rerun the [installation](#installation) or you can run
+
+```
+bridge update
+```
+
 ## Usage
 
 To create a bridge to the `userservice` you can simply run
