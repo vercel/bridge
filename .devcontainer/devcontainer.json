@@ -11,5 +11,6 @@
   "postCreateCommand": "sudo chown $(id -u) /commandhistory",
   "remoteEnv": {
     "HISTFILE": "/commandhistory/.shell_history"
-  }
+  },
+  "appPort": [3000]
 }

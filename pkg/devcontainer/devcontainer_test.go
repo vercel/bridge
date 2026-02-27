@@ -245,3 +245,115 @@ func TestRebaseBuildPaths_AbsolutePaths(t *testing.T) {
 		t.Errorf("context = %q, want /absolute/dir", cfg.Build.Context)
 	}
 }
+
+func TestAppPort_UnmarshalSingleInt(t *testing.T) {
+	input := `{"appPort": 3000}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(cfg.AppPort) != 1 {
+		t.Fatalf("appPort len = %d, want 1", len(cfg.AppPort))
+	}
+	if cfg.AppPort[0].HostPort != 3000 || cfg.AppPort[0].ContainerPort != 3000 {
+		t.Errorf("appPort[0] = %+v, want {3000, 3000}", cfg.AppPort[0])
+	}
+}
+
+func TestAppPort_UnmarshalSingleString(t *testing.T) {
+	input := `{"appPort": "8080:3000"}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(cfg.AppPort) != 1 {
+		t.Fatalf("appPort len = %d, want 1", len(cfg.AppPort))
+	}
+	if cfg.AppPort[0].HostPort != 8080 || cfg.AppPort[0].ContainerPort != 3000 {
+		t.Errorf("appPort[0] = %+v, want {8080, 3000}", cfg.AppPort[0])
+	}
+}
+
+func TestAppPort_UnmarshalArray(t *testing.T) {
+	input := `{"appPort": [3000, "8080:4000", 5000]}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	want := []PortMapping{
+		{HostPort: 3000, ContainerPort: 3000},
+		{HostPort: 8080, ContainerPort: 4000},
+		{HostPort: 5000, ContainerPort: 5000},
+	}
+	if len(cfg.AppPort) != len(want) {
+		t.Fatalf("appPort len = %d, want %d", len(cfg.AppPort), len(want))
+	}
+	for i, w := range want {
+		if cfg.AppPort[i] != w {
+			t.Errorf("appPort[%d] = %+v, want %+v", i, cfg.AppPort[i], w)
+		}
+	}
+}
+
+func TestAppPort_MarshalJSON(t *testing.T) {
+	cfg := &Config{
+		Name: "test",
+		AppPort: []PortMapping{
+			{HostPort: 3000, ContainerPort: 3000},
+			{HostPort: 8080, ContainerPort: 4000},
+		},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	if _, ok := raw["appPort"]; !ok {
+		t.Error("marshalled JSON missing appPort key")
+	}
+}
+
+func TestAppPort_OmittedWhenEmpty(t *testing.T) {
+	cfg := &Config{Name: "test"}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	if _, ok := raw["appPort"]; ok {
+		t.Error("appPort should be omitted when empty")
+	}
+}
+
+func TestAppPort_RoundTrip(t *testing.T) {
+	input := `{"name": "test", "appPort": [3000, "9090:8080"]}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	data, err := json.Marshal(&cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var cfg2 Config
+	if err := json.Unmarshal(data, &cfg2); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	if len(cfg2.AppPort) != 2 {
+		t.Fatalf("appPort len = %d, want 2", len(cfg2.AppPort))
+	}
+	want0 := PortMapping{HostPort: 3000, ContainerPort: 3000}
+	want1 := PortMapping{HostPort: 9090, ContainerPort: 8080}
+	if cfg2.AppPort[0] != want0 {
+		t.Errorf("appPort[0] = %+v, want %+v", cfg2.AppPort[0], want0)
+	}
+	if cfg2.AppPort[1] != want1 {
+		t.Errorf("appPort[1] = %+v, want %+v", cfg2.AppPort[1], want1)
+	}
+}

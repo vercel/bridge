@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 // Build holds the devcontainer build configuration.
@@ -25,6 +27,7 @@ type Config struct {
 	CapAdd       []string                  `json:"capAdd,omitempty"`
 	Mounts       []string                  `json:"mounts,omitempty"`
 	RunArgs      []string                  `json:"runArgs,omitempty"`
+	AppPort      PortMappings              `json:"appPort,omitempty"`
 
 	// Overflow holds unknown fields so we don't lose them on round-trip.
 	Overflow map[string]json.RawMessage `json:"-"`
@@ -41,6 +44,7 @@ var knownKeys = map[string]bool{
 	"capAdd":       true,
 	"mounts":       true,
 	"runArgs":      true,
+	"appPort":      true,
 }
 
 // UnmarshalJSON decodes a devcontainer.json, populating typed fields and
@@ -195,6 +199,92 @@ func (c *Config) RebaseBuildPaths(origDir, newDir string) {
 
 	c.Build.Dockerfile = rebase(c.Build.Dockerfile)
 	c.Build.Context = rebase(c.Build.Context)
+}
+
+// PortMapping describes a host-to-container port mapping from the appPort field.
+type PortMapping struct {
+	HostPort      int
+	ContainerPort int
+}
+
+// PortMappings is a slice of PortMapping with custom JSON handling for the
+// devcontainer spec's polymorphic appPort field (single value or array).
+type PortMappings []PortMapping
+
+// UnmarshalJSON decodes appPort from a single value or an array.
+func (pm *PortMappings) UnmarshalJSON(data []byte) error {
+	// Try as array first.
+	var arr []json.RawMessage
+	if err := json.Unmarshal(data, &arr); err == nil {
+		result := make(PortMappings, 0, len(arr))
+		for _, elem := range arr {
+			m, err := parsePortValue(elem)
+			if err != nil {
+				return err
+			}
+			result = append(result, m)
+		}
+		*pm = result
+		return nil
+	}
+
+	// Single value.
+	m, err := parsePortValue(data)
+	if err != nil {
+		return err
+	}
+	*pm = PortMappings{m}
+	return nil
+}
+
+// MarshalJSON encodes PortMappings as a JSON array.
+func (pm PortMappings) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]PortMapping(pm))
+}
+
+// parsePortValue parses a single appPort value (int or "host:container" string)
+// into a PortMapping. A bare port sets both host and container to the same value.
+func parsePortValue(raw json.RawMessage) (PortMapping, error) {
+	// Try int.
+	var n int
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return PortMapping{HostPort: n, ContainerPort: n}, nil
+	}
+
+	// Try string.
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return PortMapping{}, fmt.Errorf("appPort element must be int or string: %s", string(raw))
+	}
+
+	if parts := strings.SplitN(s, ":", 2); len(parts) == 2 {
+		h, err1 := strconv.Atoi(parts[0])
+		c, err2 := strconv.Atoi(parts[1])
+		if err1 == nil && err2 == nil {
+			return PortMapping{HostPort: h, ContainerPort: c}, nil
+		}
+	}
+
+	p, err := strconv.Atoi(s)
+	if err != nil {
+		return PortMapping{}, fmt.Errorf("appPort: invalid port value %q", s)
+	}
+	return PortMapping{HostPort: p, ContainerPort: p}, nil
+}
+
+// UnmarshalJSON decodes the polymorphic appPort field (int, string, or array).
+func (m *PortMapping) UnmarshalJSON(data []byte) error {
+	pm, err := parsePortValue(data)
+	if err != nil {
+		return err
+	}
+	*m = pm
+	return nil
+}
+
+// MarshalJSON encodes a PortMapping as "hostPort:containerPort".
+func (m PortMapping) MarshalJSON() ([]byte, error) {
+	return json.Marshal(fmt.Sprintf("%d:%d", m.HostPort, m.ContainerPort))
 }
 
 // EnsureCapAdd idempotently adds capabilities to capAdd.

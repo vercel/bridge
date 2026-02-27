@@ -21,6 +21,7 @@ import (
 	"github.com/vercel/bridge/pkg/devcontainer"
 	"github.com/vercel/bridge/pkg/identity"
 	"github.com/vercel/bridge/pkg/interact"
+	"github.com/vercel/bridge/pkg/netutil"
 )
 
 const defaultFeatureRef = "ghcr.io/vercel/bridge/bridge-feature:latest"
@@ -276,12 +277,12 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	if appPort == 0 {
 		appPort = 3000
 	}
-	dcConfigPath, err := generateDevcontainerConfig(p, baseConfig, featureRef, appPort, createResp)
+	dcConfigPath, portMappings, err := generateDevcontainerConfig(p, baseConfig, featureRef, appPort, createResp)
 	if err != nil {
 		return err
 	}
 	if connectFlag {
-		return startDevcontainer(ctx, p, dcConfigPath, createResp.DeploymentName, r)
+		return startDevcontainer(ctx, p, dcConfigPath, createResp.DeploymentName, portMappings, r)
 	}
 
 	return nil
@@ -298,7 +299,7 @@ func promptYN(r io.Reader) string {
 // It respects the KUBECONFIG env var by bind-mounting it into the container,
 // unless the base config already sets containerEnv.KUBECONFIG.
 // Returns the path to the generated config.
-func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef string, appPort int, resp *bridgev1.CreateBridgeResponse) (string, error) {
+func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef string, appPort int, resp *bridgev1.CreateBridgeResponse) (string, []devcontainer.PortMapping, error) {
 	dcName := resp.DeploymentName
 
 	// Place the generated config under the .devcontainer/ directory that contains
@@ -318,7 +319,7 @@ func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef s
 	// Load from base config, then overlay bridge settings.
 	cfg, err := devcontainer.Load(baseConfigPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to load base devcontainer config: %w", err)
+		return "", nil, fmt.Errorf("failed to load base devcontainer config: %w", err)
 	}
 
 	// Rebase relative build paths (dockerfile, context) so they resolve
@@ -348,11 +349,14 @@ func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef s
 	cfg.EnsureRunArgs("-l", containerLabelKeyBridgeDeployment+"="+dcName)
 
 	if err := configureDevMounts(cfg); err != nil {
-		return "", err
+		return "", nil, err
 	}
 
+	// Resolve appPort conflicts before saving.
+	resolveAppPorts(cfg)
+
 	if err := os.MkdirAll(dcDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create devcontainer directory: %w", err)
+		return "", nil, fmt.Errorf("failed to create devcontainer directory: %w", err)
 	}
 
 	// Write source deployment env vars to a .env file so the devcontainer
@@ -360,21 +364,21 @@ func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef s
 	if len(resp.EnvVars) > 0 {
 		envFilePath := filepath.Join(dcDir, "development.env")
 		if err := writeEnvFile(envFilePath, resp.EnvVars); err != nil {
-			return "", fmt.Errorf("failed to write env file: %w", err)
+			return "", nil, fmt.Errorf("failed to write env file: %w", err)
 		}
 		cfg.EnsureRunArgs("--env-file", envFilePath)
 		p.Info(fmt.Sprintf("Environment variables written to %s (%d vars)", envFilePath, len(resp.EnvVars)))
 	}
 
 	if err := cfg.Save(dcConfigPath); err != nil {
-		return "", fmt.Errorf("failed to write devcontainer config: %w", err)
+		return "", nil, fmt.Errorf("failed to write devcontainer config: %w", err)
 	}
 
 	// Ensure generated bridge config directories are gitignored.
 	ensureGitignore(baseParent, "bridge-*/")
 
 	p.Info(fmt.Sprintf("Devcontainer config written to %s", dcConfigPath))
-	return dcConfigPath, nil
+	return dcConfigPath, cfg.AppPort, nil
 }
 
 // currentKubeNamespace returns the current Kubernetes namespace.
@@ -504,8 +508,20 @@ func stopBridgeContainers(ctx context.Context, deploymentName string) {
 	}
 }
 
+// resolveAppPorts checks each appPort entry in the config and remaps the host
+// port to the next free port if it's already in use.
+func resolveAppPorts(cfg *devcontainer.Config) {
+	for i := range cfg.AppPort {
+		m := &cfg.AppPort[i]
+		free, err := netutil.FindFreePortFrom(m.HostPort)
+		if err == nil {
+			m.HostPort = free
+		}
+	}
+}
+
 // startDevcontainer starts the devcontainer and attaches an interactive shell.
-func startDevcontainer(ctx context.Context, p interact.Printer, dcConfigPath, deploymentName string, r io.Reader) error {
+func startDevcontainer(ctx context.Context, p interact.Printer, dcConfigPath, deploymentName string, portMappings []devcontainer.PortMapping, r io.Reader) error {
 	// <workspace>/.devcontainer/bridge-<name>/devcontainer.json → <workspace>
 	workspaceFolder := filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath)))
 	dcClient := &devcontainer.Client{
@@ -537,6 +553,17 @@ func startDevcontainer(ctx context.Context, p interact.Printer, dcConfigPath, de
 		// Clean up the container and report the error.
 		_ = dcClient.Stop(ctx)
 		return err
+	}
+
+	if len(portMappings) > 0 {
+		p.Newline()
+		for _, m := range portMappings {
+			if m.HostPort == m.ContainerPort {
+				p.Info(fmt.Sprintf("Port %d exposed", m.ContainerPort))
+			} else {
+				p.Info(fmt.Sprintf("Port %d → container:%d", m.HostPort, m.ContainerPort))
+			}
+		}
 	}
 
 	slog.Debug("Devcontainer started, attaching shell")
