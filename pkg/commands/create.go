@@ -174,7 +174,7 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	kubeContext := currentKubeContext()
 
 	// Step 2: Connect to administrator (remote, with local fallback).
-	adm, isLocal, err := connectAdmin(ctx, adminAddr)
+	adm, isLocal, err := connectAdmin(ctx, adminAddr, deviceID)
 	if err != nil {
 		return err
 	}

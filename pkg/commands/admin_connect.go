@@ -15,7 +15,7 @@ import (
 // the remote administrator first; if unavailable, falls back to a local admin
 // backed by the user's kubeconfig. The returned bool is true when the local
 // fallback was used. The caller must defer adm.Close().
-func connectAdmin(ctx context.Context, adminAddr string) (admin.Service, bool, error) {
+func connectAdmin(ctx context.Context, adminAddr, deviceID string) (admin.Service, bool, error) {
 	sp := interact.NewSpinner("Connecting to bridge administrator...")
 	go sp.Start(ctx)
 
@@ -23,7 +23,7 @@ func connectAdmin(ctx context.Context, adminAddr string) (admin.Service, bool, e
 	if dialErr == nil {
 		// Probe the remote with a lightweight RPC to confirm it's reachable.
 		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		_, probeErr := remote.ListBridges(probeCtx, &bridgev1.ListBridgesRequest{})
+		_, probeErr := remote.ListBridges(probeCtx, &bridgev1.ListBridgesRequest{DeviceId: deviceID})
 		cancel()
 		if probeErr == nil {
 			sp.Stop()

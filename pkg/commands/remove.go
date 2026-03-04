@@ -59,7 +59,7 @@ func runRemove(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("failed to get device identity: %w", err)
 	}
 
-	adm, isLocal, err := connectAdmin(ctx, adminAddr)
+	adm, isLocal, err := connectAdmin(ctx, adminAddr, deviceID)
 	if err != nil {
 		return err
 	}

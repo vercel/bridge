@@ -49,7 +49,7 @@ func runGet(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("failed to get device identity: %w", err)
 	}
 
-	adm, _, err := connectAdmin(ctx, adminAddr)
+	adm, _, err := connectAdmin(ctx, adminAddr, deviceID)
 	if err != nil {
 		return err
 	}
