@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
+	"github.com/vercel/bridge/pkg/archive"
 	"github.com/vercel/bridge/pkg/devcontainer"
 	"github.com/vercel/bridge/pkg/identity"
 	"github.com/vercel/bridge/pkg/interact"
@@ -82,6 +84,11 @@ func Create() *cli.Command {
 				Hidden:  true,
 				Sources: cli.EnvVars("BRIDGE_PROXY_IMAGE"),
 			},
+			&cli.StringFlag{
+				Name:    "source",
+				Aliases: []string{"s"},
+				Usage:   "Path to a folder, glob, or single YAML file to use as the bridge source",
+			},
 		},
 		Before: preflightCreate,
 		Arguments: []cli.Argument{
@@ -135,12 +142,27 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	yes := c.Bool("yes")
 	proxyImage := c.String("proxy-image")
 	featureRef := c.String("feature-ref")
+	sourcePath := c.String("source")
 	if featureRef == defaultFeatureRef && Version == "dev" {
 		featureRef = devFeatureRef
 	}
 
 	r := c.Root().Reader
 	p := interact.NewPrinter(c.Root().Writer)
+
+	// Pack source manifests if --source is specified.
+	var sourceManifests []byte
+	if sourcePath != "" {
+		fsys, pattern, err := resolveSourceFlag(sourcePath)
+		if err != nil {
+			return fmt.Errorf("failed to resolve source path: %w", err)
+		}
+		sourceManifests, err = archive.PackGlobFiles(fsys, pattern)
+		if err != nil {
+			return fmt.Errorf("failed to pack source manifests: %w", err)
+		}
+		slog.Info("Packed source manifests", "path", sourcePath, "size", len(sourceManifests))
+	}
 
 	// Step 1: Resolve device identity.
 	deviceID, err := identity.GetDeviceID()
@@ -166,31 +188,35 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	}
 
 	// Step 3: Check for existing bridges.
+	// Skip duplicate detection when using --source without a deployment name,
+	// since the server will determine the name from the manifests.
 	listResp, err := adm.ListBridges(ctx, &bridgev1.ListBridgesRequest{DeviceId: deviceID})
 	if err != nil {
 		return fmt.Errorf("failed to list bridges: %w", err)
 	}
 
-	// Compute the expected bridge deployment name so we can match by name.
-	expectedName := identity.BridgeResourceName(deviceID, deploymentName)
-	if !yes {
-		for _, bridge := range listResp.Bridges {
-			if bridge.DeploymentName == expectedName {
-				p.Newline()
-				p.Warn("An existing bridge already exists:")
-				p.KeyValue("Name", bridge.DeploymentName)
-				p.KeyValue("Created", bridge.CreatedAt)
-				p.KeyValue("Context", kubeContext)
-				p.Newline()
-				p.Muted("This will tear down the existing bridge and recreate it.")
-				p.Prompt("Continue? [y/N] ")
+	if deploymentName != "" {
+		// Compute the expected bridge deployment name so we can match by name.
+		expectedName := identity.BridgeResourceName(deviceID, deploymentName)
+		if !yes {
+			for _, bridge := range listResp.Bridges {
+				if bridge.DeploymentName == expectedName {
+					p.Newline()
+					p.Warn("An existing bridge already exists:")
+					p.KeyValue("Name", bridge.DeploymentName)
+					p.KeyValue("Created", bridge.CreatedAt)
+					p.KeyValue("Context", kubeContext)
+					p.Newline()
+					p.Muted("This will tear down the existing bridge and recreate it.")
+					p.Prompt("Continue? [y/N] ")
 
-				if answer := promptYN(r); answer != "y" && answer != "yes" {
-					p.Println("Aborted.")
-					return nil
+					if answer := promptYN(r); answer != "y" && answer != "yes" {
+						p.Println("Aborted.")
+						return nil
+					}
+					yes = true
+					break
 				}
-				yes = true
-				break
 			}
 		}
 	}
@@ -205,6 +231,7 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 		SourceNamespace:  sourceNamespace,
 		Force:            yes,
 		ProxyImage:       proxyImage,
+		SourceManifests:  sourceManifests,
 	})
 	sp.Stop()
 	if err != nil {
@@ -573,6 +600,38 @@ func waitForIntercept(ctx context.Context, dc *devcontainer.Client) error {
 		return fmt.Errorf("container failed to start within %s (no logs available)", timeout)
 	}
 	return fmt.Errorf("container failed to start within %s:\n%s", timeout, logTail(log, 10))
+}
+
+// resolveSourceFlag interprets the --source flag value and returns an fs.FS
+// rooted at the appropriate directory plus a glob pattern for PackGlobFiles.
+//
+// Supported forms:
+//   - Directory: -s _infra        → DirFS("_infra"), "*.yaml"
+//   - Glob:      -s '_infra/*.yml' → DirFS("_infra"), "*.yml"
+//   - File:      -s app.yaml      → DirFS("."),       "app.yaml"
+func resolveSourceFlag(sourcePath string) (fs.FS, string, error) {
+	if strings.ContainsAny(sourcePath, "*?[") {
+		dir, pattern := filepath.Split(sourcePath)
+		if dir == "" {
+			dir = "."
+		}
+		return os.DirFS(dir), pattern, nil
+	}
+
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to stat %q: %w", sourcePath, err)
+	}
+
+	if info.IsDir() {
+		return os.DirFS(sourcePath), "*.y*ml", nil
+	}
+
+	dir := filepath.Dir(sourcePath)
+	if dir == "" {
+		dir = "."
+	}
+	return os.DirFS(dir), filepath.Base(sourcePath), nil
 }
 
 // logTail returns the last n lines of s.

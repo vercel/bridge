@@ -67,7 +67,7 @@ var terminalReasons = map[string]bool{
 // error if a terminal failure is detected (e.g., CrashLoopBackOff,
 // ImagePullBackOff, CreateContainerConfigError). On timeout it returns the
 // best error it can glean from container statuses.
-func WaitForPod(ctx context.Context, client kubernetes.Interface, ns, labelSelector string, timeout time.Duration) (string, error) {
+func WaitForPod(ctx context.Context, client kubernetes.Interface, ns, labelSelector string, timeout time.Duration) (*corev1.Pod, error) {
 	deadline := time.After(timeout)
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -77,13 +77,13 @@ func WaitForPod(ctx context.Context, client kubernetes.Interface, ns, labelSelec
 	for {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		case <-deadline:
 			msg := fmt.Sprintf("timed out waiting for pod in %s (selector: %s)", ns, labelSelector)
 			if lastPodStatus != "" {
 				msg += ": " + lastPodStatus
 			}
-			return "", fmt.Errorf("%s", msg)
+			return nil, fmt.Errorf("%s", msg)
 		case <-ticker.C:
 			pods, err := client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 				LabelSelector: labelSelector,
@@ -94,10 +94,10 @@ func WaitForPod(ctx context.Context, client kubernetes.Interface, ns, labelSelec
 
 			for _, pod := range pods.Items {
 				if podReady(&pod) {
-					return pod.Name, nil
+					return &pod, nil
 				}
 				if reason := podTerminalReason(&pod); reason != "" {
-					return "", fmt.Errorf("pod %s in %s has terminal failure: %s", pod.Name, ns, podError(&pod))
+					return nil, fmt.Errorf("pod %s in %s has terminal failure: %s", pod.Name, ns, podError(&pod))
 				}
 				if errMsg := podError(&pod); errMsg != "" {
 					lastPodStatus = errMsg

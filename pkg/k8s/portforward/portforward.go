@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/vercel/bridge/pkg/plumbing"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/client-go/kubernetes"
@@ -20,6 +21,8 @@ import (
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
 )
+
+var _ plumbing.GRPCContextDialer = (*Dialer)(nil)
 
 // Dialer creates net.Conn connections to a Kubernetes pod port via SPDY
 // port-forwarding, without binding a local port.

@@ -19,6 +19,7 @@ import (
 	"github.com/vercel/bridge/pkg/k8s/kube"
 	"github.com/vercel/bridge/pkg/k8s/resources"
 
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -83,13 +84,17 @@ func runAdministrator(ctx context.Context, c *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("failed to create kubernetes client: %w", err)
 	}
+	dynClient, err := dynamic.NewForConfig(restCfg)
+	if err != nil {
+		return fmt.Errorf("failed to create dynamic kubernetes client: %w", err)
+	}
 
-	localAdm := admin.NewLocalFromClient(clientset, restCfg, admin.LocalConfig{
+	localAdm := admin.NewLocalFromClient(clientset, dynClient, restCfg, admin.LocalConfig{
 		ServiceAccountName:      c.String("service-account"),
 		ServiceAccountNamespace: c.String("namespace"),
 	})
 
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(grpc.MaxRecvMsgSize(16 << 20))
 	bridgev1.RegisterAdministratorServiceServer(srv, &administratorServer{admin: localAdm})
 
 	lis, err := net.Listen("tcp", addr)

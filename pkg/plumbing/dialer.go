@@ -12,6 +12,17 @@ type ContextDialer interface {
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
 }
 
+type GRPCContextDialer interface {
+	DialContext(ctx context.Context, _ string) (net.Conn, error)
+}
+
+// GRPCContextDialerFunc adapts a function to the GRPCContextDialer interface.
+type GRPCContextDialerFunc func(ctx context.Context, addr string) (net.Conn, error)
+
+func (f GRPCContextDialerFunc) DialContext(ctx context.Context, addr string) (net.Conn, error) {
+	return f(ctx, addr)
+}
+
 // StaticPortDialer replaces the port of every dial address with a fixed port.
 type StaticPortDialer struct {
 	Port   int

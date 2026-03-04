@@ -34,6 +34,11 @@ message CreateBridgeRequest {
   // The container image for the bridge proxy pod. If empty, the server uses
   // its configured default.
   string proxy_image = 5 [json_name = "proxy_image"];
+
+  // A tar.gz archive of Kubernetes YAML files to use as the bridge source.
+  // When set, source_deployment becomes optional (used to select which
+  // Deployment in the archive to bridge when multiple exist).
+  bytes source_manifests = 6 [json_name = "source_manifests"];
 }
 
 // CreateBridgeResponse is returned by the Administrator after a bridge is provisioned.

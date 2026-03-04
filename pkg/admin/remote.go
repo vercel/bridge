@@ -23,7 +23,10 @@ type remoteAdmin struct {
 func NewClient(addr string) (Service, error) {
 	builder := k8spf.NewBuilder(k8spf.BuilderConfig{})
 	conn, err := grpc.NewClient(addr,
-		append(builder.DialOptions(), grpc.WithTransportCredentials(insecure.NewCredentials()))...,
+		append(builder.DialOptions(),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(16<<20)),
+		)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to administrator: %w", err)

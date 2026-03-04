@@ -11,15 +11,13 @@ import (
 	"math/rand/v2"
 	"strings"
 
-	"github.com/vercel/bridge/pkg/identity"
-	"github.com/vercel/bridge/pkg/k8s/kube"
 	"github.com/vercel/bridge/pkg/k8s/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -100,7 +98,7 @@ func CopyAndTransform(ctx context.Context, client kubernetes.Interface, cfg Copy
 	deployName := srcDeploy.Name
 
 	// Extract and copy config dependencies with prefixed names.
-	nameMap, err := copyConfigDependencies(ctx, client, srcDeploy, cfg.SourceNamespace, cfg.TargetNamespace, deployName)
+	names, err := copyConfigDependencies(ctx, client, srcDeploy, cfg.SourceNamespace, cfg.TargetNamespace, deployName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to copy config dependencies: %w", err)
 	}
@@ -126,7 +124,7 @@ func CopyAndTransform(ctx context.Context, client kubernetes.Interface, cfg Copy
 	grpcPort := chooseGRPCPort(appPorts)
 
 	// Create the transformed deployment
-	if err := createBridgedDeployment(ctx, client, srcDeploy, cfg.TargetNamespace, cfg.ProxyImage, deployName, grpcPort, appPorts, nameMap); err != nil {
+	if err := createBridgedDeployment(ctx, client, srcDeploy, cfg.TargetNamespace, cfg.ProxyImage, deployName, grpcPort, appPorts, names); err != nil {
 		return nil, fmt.Errorf("failed to create bridged deployment: %w", err)
 	}
 
@@ -137,7 +135,8 @@ func CopyAndTransform(ctx context.Context, client kubernetes.Interface, cfg Copy
 	if len(appPorts) > 0 {
 		svcTargetPort = appPorts[0]
 	}
-	if err := ensureService(ctx, client, cfg.TargetNamespace, deployName, svcTargetPort); err != nil {
+	svc := NewBridgeService(cfg.TargetNamespace, deployName, svcTargetPort)
+	if err := upsertService(ctx, client, svc); err != nil {
 		return nil, fmt.Errorf("failed to create service: %w", err)
 	}
 
@@ -148,185 +147,55 @@ func CopyAndTransform(ctx context.Context, client kubernetes.Interface, cfg Copy
 	}, nil
 }
 
-// InNamespaceConfig holds configuration for creating a bridge in the source
-// deployment's own namespace.
-type InNamespaceConfig struct {
-	// SourceNamespace is the namespace where the source deployment lives.
-	SourceNamespace string
-	// SourceDeployment is the name of the Deployment to clone.
-	SourceDeployment string
-	// DeviceID is the KSUID of the developer's device.
-	DeviceID string
-	// ProxyImage is the bridge proxy container image.
-	ProxyImage string
+// findApplicationDeployment locates a Deployment by name in the bundle.
+func findApplicationDeployment(b *Bundle, name string) (*appsv1.Deployment, error) {
+	for _, r := range b.Resources {
+		if deploy, ok := r.Object.(*appsv1.Deployment); ok && deploy.Name == name {
+			return deploy, nil
+		}
+	}
+	return nil, fmt.Errorf("deployment %q not found in bundle", name)
 }
 
-// CreateInNamespace creates a bridge deployment in the same namespace as the
-// source deployment. Unlike CopyAndTransform, it doesn't copy secrets,
-// configmaps, or service accounts — they're already available in the namespace.
-// Pod labels are bridge-specific only so the original ReplicaSet and Service
-// don't target bridge pods.
-func CreateInNamespace(ctx context.Context, client kubernetes.Interface, cfg InNamespaceConfig) (*CopyResult, error) {
-	if cfg.ProxyImage == "" {
-		return nil, fmt.Errorf("proxy image is required")
-	}
-	if cfg.DeviceID == "" {
-		return nil, fmt.Errorf("device_id is required")
+// injectProxyImage swaps the first container in the deployment for the bridge
+// proxy. App ports are preserved as additional container ports after the named
+// "grpc" port so they can be queried from the deployment state later.
+func injectProxyImage(deploy *appsv1.Deployment, proxyImage string) {
+	containers := deploy.Spec.Template.Spec.Containers
+	if len(containers) == 0 {
+		return
 	}
 
-	srcDeploy, err := client.AppsV1().Deployments(cfg.SourceNamespace).Get(ctx, cfg.SourceDeployment, metav1.GetOptions{})
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return nil, &DeploymentNotFoundError{Name: cfg.SourceDeployment, Namespace: cfg.SourceNamespace}
+	c := &containers[0]
+
+	var srcPorts []int32
+	for _, p := range c.Ports {
+		srcPorts = append(srcPorts, p.ContainerPort)
+	}
+
+	grpcPort := chooseGRPCPort(srcPorts)
+
+	args := []string{"bridge", "--log-paths", "stdout", "server", "--addr", fmt.Sprintf(":%d", grpcPort)}
+	if len(srcPorts) > 0 {
+		var specs []string
+		for _, p := range srcPorts {
+			specs = append(specs, fmt.Sprintf("%d/tcp", p))
 		}
-		return nil, fmt.Errorf("failed to get source deployment %s/%s: %w", cfg.SourceNamespace, cfg.SourceDeployment, err)
+		args = append(args, "--listen-ports", strings.Join(specs, ","))
 	}
 
-	deployName := identity.BridgeResourceName(cfg.DeviceID, srcDeploy.Name)
-	ns := cfg.SourceNamespace
-
-	// Use a live pod's container spec when available — it reflects runtime
-	// mutations (e.g. injected sidecars, admission webhooks) that the
-	// deployment template doesn't capture. Fall back to the template spec.
-	sourceContainers := srcDeploy.Spec.Template.Spec.Containers
-	if podName, err := kube.GetFirstPodForDeployment(ctx, client, ns, cfg.SourceDeployment); err == nil {
-		if pod, err := client.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); err == nil && len(pod.Spec.Containers) > 0 {
-			slog.Info("Using live pod for source configuration", "pod", podName)
-			sourceContainers = pod.Spec.Containers
-		}
+	c.Image = proxyImage
+	c.Command = args
+	c.Args = nil
+	c.Ports = []corev1.ContainerPort{
+		{Name: "grpc", ContainerPort: grpcPort, Protocol: corev1.ProtocolTCP},
 	}
-
-	// Collect ports and volume mount paths from the source's first container.
-	var appPorts []int32
-	var volumeMountPaths []string
-	if len(sourceContainers) > 0 {
-		for _, p := range sourceContainers[0].Ports {
-			appPorts = append(appPorts, p.ContainerPort)
-		}
-		for _, vm := range sourceContainers[0].VolumeMounts {
-			volumeMountPaths = append(volumeMountPaths, vm.MountPath)
-		}
+	for _, p := range srcPorts {
+		c.Ports = append(c.Ports, corev1.ContainerPort{ContainerPort: p, Protocol: corev1.ProtocolTCP})
 	}
-
-	grpcPort := chooseGRPCPort(appPorts)
-
-	// Swap the first (primary app) container for the bridge proxy.
-	if containers := srcDeploy.Spec.Template.Spec.Containers; len(containers) > 0 {
-		c := &containers[0]
-		args := []string{"bridge", "--log-paths", "stdout", "server", "--addr", fmt.Sprintf(":%d", grpcPort)}
-		if len(appPorts) > 0 {
-			var specs []string
-			for _, p := range appPorts {
-				specs = append(specs, fmt.Sprintf("%d/tcp", p))
-			}
-			args = append(args, "--listen-ports", strings.Join(specs, ","))
-		}
-		c.Image = cfg.ProxyImage
-		c.Command = args
-		c.Args = nil
-		c.Ports = []corev1.ContainerPort{
-			{Name: "grpc", ContainerPort: grpcPort, Protocol: corev1.ProtocolTCP},
-		}
-		for _, p := range appPorts {
-			c.Ports = append(c.Ports, corev1.ContainerPort{ContainerPort: p, Protocol: corev1.ProtocolTCP})
-		}
-		c.LivenessProbe = nil
-		c.ReadinessProbe = nil
-		c.StartupProbe = nil
-	}
-
-	// Bridge-specific labels only — NOT the source pod labels, so the
-	// original ReplicaSet and Service selectors don't match bridge pods.
-	podLabels := map[string]string{
-		meta.LabelBridgeType:       meta.BridgeTypeProxy,
-		meta.LabelBridgeDeployment: deployName,
-		meta.LabelDeviceID:         cfg.DeviceID,
-	}
-
-	// Mutate the source deployment into the bridge deployment.
-	replicas := int32(1)
-	srcDeploy.Name = deployName
-	srcDeploy.ResourceVersion = ""
-	srcDeploy.UID = ""
-	srcDeploy.CreationTimestamp = metav1.Time{}
-	srcDeploy.Labels = map[string]string{
-		meta.LabelBridgeType:              meta.BridgeTypeProxy,
-		meta.LabelBridgeDeployment:        deployName,
-		meta.LabelDeviceID:                cfg.DeviceID,
-		meta.LabelWorkloadSource:          cfg.SourceDeployment,
-		meta.LabelWorkloadSourceNamespace: cfg.SourceNamespace,
-	}
-	srcDeploy.Spec.Replicas = &replicas
-	srcDeploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: podLabels}
-	srcDeploy.Spec.Template.ObjectMeta.Labels = podLabels
-
-	existing, err := client.AppsV1().Deployments(ns).Get(ctx, deployName, metav1.GetOptions{})
-	if errors.IsNotFound(err) {
-		if _, err := client.AppsV1().Deployments(ns).Create(ctx, srcDeploy, metav1.CreateOptions{}); err != nil {
-			return nil, fmt.Errorf("failed to create bridged deployment: %w", err)
-		}
-	} else if err != nil {
-		return nil, fmt.Errorf("failed to check for existing deployment: %w", err)
-	} else {
-		existing.Spec = srcDeploy.Spec
-		existing.Labels = srcDeploy.Labels
-		if _, err := client.AppsV1().Deployments(ns).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
-			return nil, fmt.Errorf("failed to update bridged deployment: %w", err)
-		}
-	}
-
-	// Create a Service selecting this specific bridge deployment.
-	svcTargetPort := grpcPort
-	if len(appPorts) > 0 {
-		svcTargetPort = appPorts[0]
-	}
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      deployName,
-			Namespace: ns,
-			Labels: map[string]string{
-				meta.LabelBridgeType:       meta.BridgeTypeProxy,
-				meta.LabelBridgeDeployment: deployName,
-				meta.LabelDeviceID:         cfg.DeviceID,
-			},
-		},
-		Spec: corev1.ServiceSpec{
-			Selector: map[string]string{
-				meta.LabelBridgeDeployment: deployName,
-			},
-			Ports: []corev1.ServicePort{
-				{
-					Name:       "main",
-					Port:       80,
-					TargetPort: intstr.FromInt32(svcTargetPort),
-					Protocol:   corev1.ProtocolTCP,
-				},
-			},
-		},
-	}
-
-	existingSvc, err := client.CoreV1().Services(ns).Get(ctx, deployName, metav1.GetOptions{})
-	if errors.IsNotFound(err) {
-		if _, err := client.CoreV1().Services(ns).Create(ctx, svc, metav1.CreateOptions{}); err != nil {
-			return nil, fmt.Errorf("failed to create service: %w", err)
-		}
-	} else if err != nil {
-		return nil, fmt.Errorf("failed to check for existing service: %w", err)
-	} else {
-		existingSvc.Spec.Ports = svc.Spec.Ports
-		existingSvc.Spec.Selector = svc.Spec.Selector
-		existingSvc.Labels = svc.Labels
-		if _, err := client.CoreV1().Services(ns).Update(ctx, existingSvc, metav1.UpdateOptions{}); err != nil {
-			return nil, fmt.Errorf("failed to update service: %w", err)
-		}
-	}
-
-	return &CopyResult{
-		DeploymentName:   deployName,
-		PodPort:          grpcPort,
-		VolumeMountPaths: volumeMountPaths,
-		AppPorts:         appPorts,
-	}, nil
+	c.LivenessProbe = nil
+	c.ReadinessProbe = nil
+	c.StartupProbe = nil
 }
 
 // chooseGRPCPort picks a port for the gRPC server starting from 8080,
@@ -343,77 +212,6 @@ func chooseGRPCPort(appPorts []int32) int32 {
 	}
 }
 
-// CreateSimpleDeployment creates a minimal Deployment with just the bridge proxy
-// container when no source deployment is specified.
-func CreateSimpleDeployment(ctx context.Context, client kubernetes.Interface, namespace, proxyImage string) (*CopyResult, error) {
-	if proxyImage == "" {
-		return nil, fmt.Errorf("proxy image is required")
-	}
-
-	replicas := int32(1)
-	name := randomBridgeName()
-	podLabels := map[string]string{
-		meta.LabelBridgeType:       meta.BridgeTypeProxy,
-		meta.LabelBridgeDeployment: name,
-	}
-	deploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			Labels: map[string]string{
-				meta.LabelBridgeType:       meta.BridgeTypeProxy,
-				meta.LabelBridgeDeployment: name,
-			},
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: podLabels,
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: podLabels,
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:    "bridge-proxy",
-							Image:   proxyImage,
-							Command: []string{"bridge", "server", "--addr", fmt.Sprintf(":%d", defaultProxyPort)},
-							Ports: []corev1.ContainerPort{
-								{ContainerPort: defaultProxyPort, Protocol: corev1.ProtocolTCP},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	existing, err := client.AppsV1().Deployments(namespace).Get(ctx, deploy.Name, metav1.GetOptions{})
-	if errors.IsNotFound(err) {
-		if _, err := client.AppsV1().Deployments(namespace).Create(ctx, deploy, metav1.CreateOptions{}); err != nil {
-			return nil, fmt.Errorf("failed to create simple deployment: %w", err)
-		}
-	} else if err != nil {
-		return nil, err
-	} else {
-		existing.Spec = deploy.Spec
-		if _, err := client.AppsV1().Deployments(namespace).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
-			return nil, fmt.Errorf("failed to update simple deployment: %w", err)
-		}
-	}
-
-	if err := ensureService(ctx, client, namespace, deploy.Name, defaultProxyPort); err != nil {
-		return nil, fmt.Errorf("failed to create service: %w", err)
-	}
-
-	return &CopyResult{
-		DeploymentName: deploy.Name,
-		PodPort:        defaultProxyPort,
-	}, nil
-}
-
 // configRef tracks a reference to a Secret or ConfigMap.
 type configRef struct {
 	name     string
@@ -424,7 +222,7 @@ type configRef struct {
 // Deployment's pod spec, copies each resource to the target namespace with a
 // deployment-scoped prefix to avoid name collisions, and returns a name map
 // (original → prefixed) so callers can rewrite references on the pod spec.
-func copyConfigDependencies(ctx context.Context, client kubernetes.Interface, deploy *appsv1.Deployment, srcNS, targetNS, bridgeDeployName string) (nameMap map[string]string, err error) {
+func copyConfigDependencies(ctx context.Context, client kubernetes.Interface, deploy *appsv1.Deployment, srcNS, targetNS, bridgeDeployName string) (NameMap, error) {
 	podSpec := &deploy.Spec.Template.Spec
 	prefix := deploy.Name + "-"
 	ownerLabels := map[string]string{
@@ -487,7 +285,7 @@ func copyConfigDependencies(ctx context.Context, client kubernetes.Interface, de
 		}
 	}
 
-	nameMap = make(map[string]string)
+	names := make(NameMap)
 
 	// Copy each Secret to the target namespace with a prefixed name.
 	for _, ref := range secretRefs {
@@ -500,7 +298,7 @@ func copyConfigDependencies(ctx context.Context, client kubernetes.Interface, de
 			return nil, fmt.Errorf("failed to get secret %s/%s: %w", srcNS, ref.name, err)
 		}
 		dstName := prefix + ref.name
-		nameMap[ref.name] = dstName
+		names[ResourceKey{GroupKind: schema.GroupKind{Kind: "Secret"}, Name: ref.name}] = dstName
 		secret.Name = dstName
 		secret.Namespace = targetNS
 		secret.ResourceVersion = ""
@@ -528,7 +326,7 @@ func copyConfigDependencies(ctx context.Context, client kubernetes.Interface, de
 			return nil, fmt.Errorf("failed to get configmap %s/%s: %w", srcNS, ref.name, err)
 		}
 		dstName := prefix + ref.name
-		nameMap[ref.name] = dstName
+		names[ResourceKey{GroupKind: schema.GroupKind{Kind: "ConfigMap"}, Name: ref.name}] = dstName
 		cm.Name = dstName
 		cm.Namespace = targetNS
 		cm.ResourceVersion = ""
@@ -545,12 +343,12 @@ func copyConfigDependencies(ctx context.Context, client kubernetes.Interface, de
 		}
 	}
 
-	return nameMap, nil
+	return names, nil
 }
 
 // createBridgedDeployment creates a new Deployment in the target namespace with the
 // application container replaced by the bridge proxy.
-func createBridgedDeployment(ctx context.Context, client kubernetes.Interface, src *appsv1.Deployment, targetNS, proxyImage, deployName string, grpcPort int32, listenPorts []int32, nameMap map[string]string) error {
+func createBridgedDeployment(ctx context.Context, client kubernetes.Interface, src *appsv1.Deployment, targetNS, proxyImage, deployName string, grpcPort int32, listenPorts []int32, names NameMap) error {
 	replicas := int32(1)
 
 	// Clone containers from the source, modifying only the first (primary app)
@@ -628,7 +426,7 @@ func createBridgedDeployment(ctx context.Context, client kubernetes.Interface, s
 	}
 
 	// Rewrite all Secret/ConfigMap references to use the prefixed names.
-	rewriteConfigRefs(&deploy.Spec.Template.Spec, nameMap)
+	rewriteConfigRefs(&deploy.Spec.Template.Spec, names)
 
 	existing, err := client.AppsV1().Deployments(targetNS).Get(ctx, deploy.Name, metav1.GetOptions{})
 	if errors.IsNotFound(err) {
@@ -649,115 +447,56 @@ func createBridgedDeployment(ctx context.Context, client kubernetes.Interface, s
 }
 
 // rewriteConfigRefs rewrites all Secret/ConfigMap references in the pod spec
-// (env, envFrom, volumes) using the provided name map (original → prefixed).
-func rewriteConfigRefs(podSpec *corev1.PodSpec, nameMap map[string]string) {
-	rewrite := func(name string) string {
-		if mapped, ok := nameMap[name]; ok {
-			return mapped
-		}
-		return name
-	}
-
+// (env, envFrom, volumes) using the provided NameMap keyed by GroupKind+Name.
+func rewriteConfigRefs(podSpec *corev1.PodSpec, names NameMap) {
 	for i := range podSpec.Containers {
-		rewriteContainerRefs(&podSpec.Containers[i], rewrite)
+		rewriteContainerRefs(&podSpec.Containers[i], names)
 	}
 	for i := range podSpec.InitContainers {
-		rewriteContainerRefs(&podSpec.InitContainers[i], rewrite)
+		rewriteContainerRefs(&podSpec.InitContainers[i], names)
 	}
 	for i := range podSpec.Volumes {
 		if podSpec.Volumes[i].Secret != nil {
-			podSpec.Volumes[i].Secret.SecretName = rewrite(podSpec.Volumes[i].Secret.SecretName)
+			if mapped, ok := names[ResourceKey{GroupKind: schema.GroupKind{Kind: "Secret"}, Name: podSpec.Volumes[i].Secret.SecretName}]; ok {
+				podSpec.Volumes[i].Secret.SecretName = mapped
+			}
 		}
 		if podSpec.Volumes[i].ConfigMap != nil {
-			podSpec.Volumes[i].ConfigMap.Name = rewrite(podSpec.Volumes[i].ConfigMap.Name)
+			if mapped, ok := names[ResourceKey{GroupKind: schema.GroupKind{Kind: "ConfigMap"}, Name: podSpec.Volumes[i].ConfigMap.Name}]; ok {
+				podSpec.Volumes[i].ConfigMap.Name = mapped
+			}
 		}
 	}
 }
 
-func rewriteContainerRefs(c *corev1.Container, rewrite func(string) string) {
+func rewriteContainerRefs(c *corev1.Container, names NameMap) {
 	for i := range c.Env {
 		if c.Env[i].ValueFrom == nil {
 			continue
 		}
 		if ref := c.Env[i].ValueFrom.SecretKeyRef; ref != nil {
-			ref.Name = rewrite(ref.Name)
+			if mapped, ok := names[ResourceKey{GroupKind: schema.GroupKind{Kind: "Secret"}, Name: ref.Name}]; ok {
+				ref.Name = mapped
+			}
 		}
 		if ref := c.Env[i].ValueFrom.ConfigMapKeyRef; ref != nil {
-			ref.Name = rewrite(ref.Name)
+			if mapped, ok := names[ResourceKey{GroupKind: schema.GroupKind{Kind: "ConfigMap"}, Name: ref.Name}]; ok {
+				ref.Name = mapped
+			}
 		}
 	}
 	for i := range c.EnvFrom {
 		if c.EnvFrom[i].SecretRef != nil {
-			c.EnvFrom[i].SecretRef.Name = rewrite(c.EnvFrom[i].SecretRef.Name)
+			if mapped, ok := names[ResourceKey{GroupKind: schema.GroupKind{Kind: "Secret"}, Name: c.EnvFrom[i].SecretRef.Name}]; ok {
+				c.EnvFrom[i].SecretRef.Name = mapped
+			}
 		}
 		if c.EnvFrom[i].ConfigMapRef != nil {
-			c.EnvFrom[i].ConfigMapRef.Name = rewrite(c.EnvFrom[i].ConfigMapRef.Name)
+			if mapped, ok := names[ResourceKey{GroupKind: schema.GroupKind{Kind: "ConfigMap"}, Name: c.EnvFrom[i].ConfigMapRef.Name}]; ok {
+				c.EnvFrom[i].ConfigMapRef.Name = mapped
+			}
 		}
 	}
-}
-
-// ensureService creates or updates a ClusterIP Service that maps port 80 to the
-// given target port, selecting pods via the bridge proxy label.
-func ensureService(ctx context.Context, client kubernetes.Interface, namespace, name string, targetPort int32) error {
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			Labels: map[string]string{
-				meta.LabelBridgeType:       meta.BridgeTypeProxy,
-				meta.LabelBridgeDeployment: name,
-			},
-		},
-		Spec: corev1.ServiceSpec{
-			Selector: map[string]string{meta.LabelBridgeType: meta.BridgeTypeProxy},
-			Ports: []corev1.ServicePort{
-				{
-					Name:       "http",
-					Port:       80,
-					TargetPort: intstr.FromInt32(targetPort),
-					Protocol:   corev1.ProtocolTCP,
-				},
-			},
-		},
-	}
-
-	existing, err := client.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
-	if errors.IsNotFound(err) {
-		_, err = client.CoreV1().Services(namespace).Create(ctx, svc, metav1.CreateOptions{})
-		return err
-	} else if err != nil {
-		return err
-	}
-	existing.Spec.Ports = svc.Spec.Ports
-	existing.Spec.Selector = svc.Spec.Selector
-	_, err = client.CoreV1().Services(namespace).Update(ctx, existing, metav1.UpdateOptions{})
-	return err
-}
-
-func upsertSecret(ctx context.Context, client kubernetes.Interface, ns string, secret *corev1.Secret) error {
-	existing, err := client.CoreV1().Secrets(ns).Get(ctx, secret.Name, metav1.GetOptions{})
-	if errors.IsNotFound(err) {
-		_, err = client.CoreV1().Secrets(ns).Create(ctx, secret, metav1.CreateOptions{})
-		return err
-	} else if err != nil {
-		return err
-	}
-	secret.ResourceVersion = existing.ResourceVersion
-	_, err = client.CoreV1().Secrets(ns).Update(ctx, secret, metav1.UpdateOptions{})
-	return err
-}
-
-func upsertConfigMap(ctx context.Context, client kubernetes.Interface, ns string, cm *corev1.ConfigMap) error {
-	existing, err := client.CoreV1().ConfigMaps(ns).Get(ctx, cm.Name, metav1.GetOptions{})
-	if errors.IsNotFound(err) {
-		_, err = client.CoreV1().ConfigMaps(ns).Create(ctx, cm, metav1.CreateOptions{})
-		return err
-	} else if err != nil {
-		return err
-	}
-	cm.ResourceVersion = existing.ResourceVersion
-	_, err = client.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{})
-	return err
 }
 
 // copyServiceAccount copies a ServiceAccount from the source namespace into
@@ -825,10 +564,62 @@ func copyServiceAccount(ctx context.Context, client kubernetes.Interface, srcNS,
 	return err
 }
 
+// ListBridgeResources returns a Bundle of all bridge resources in the given
+// namespace matching the deployment name and device ID labels.
+func ListBridgeResources(ctx context.Context, client kubernetes.Interface, namespace, deployName, deviceID string) (*Bundle, error) {
+	sel := meta.LabelBridgeDeployment + "=" + deployName + "," + meta.LabelDeviceID + "=" + deviceID
+	listOpts := metav1.ListOptions{LabelSelector: sel}
+
+	var resources []Resource
+
+	if deploys, err := client.AppsV1().Deployments(namespace).List(ctx, listOpts); err == nil {
+		for i := range deploys.Items {
+			resources = append(resources, Resource{
+				Object: &deploys.Items[i],
+				GVK:    appsv1.SchemeGroupVersion.WithKind("Deployment"),
+			})
+		}
+	}
+	if svcs, err := client.CoreV1().Services(namespace).List(ctx, listOpts); err == nil {
+		for i := range svcs.Items {
+			resources = append(resources, Resource{
+				Object: &svcs.Items[i],
+				GVK:    corev1.SchemeGroupVersion.WithKind("Service"),
+			})
+		}
+	}
+	if secrets, err := client.CoreV1().Secrets(namespace).List(ctx, listOpts); err == nil {
+		for i := range secrets.Items {
+			resources = append(resources, Resource{
+				Object: &secrets.Items[i],
+				GVK:    corev1.SchemeGroupVersion.WithKind("Secret"),
+			})
+		}
+	}
+	if cms, err := client.CoreV1().ConfigMaps(namespace).List(ctx, listOpts); err == nil {
+		for i := range cms.Items {
+			resources = append(resources, Resource{
+				Object: &cms.Items[i],
+				GVK:    corev1.SchemeGroupVersion.WithKind("ConfigMap"),
+			})
+		}
+	}
+	if sas, err := client.CoreV1().ServiceAccounts(namespace).List(ctx, listOpts); err == nil {
+		for i := range sas.Items {
+			resources = append(resources, Resource{
+				Object: &sas.Items[i],
+				GVK:    corev1.SchemeGroupVersion.WithKind("ServiceAccount"),
+			})
+		}
+	}
+
+	return &Bundle{Resources: resources}, nil
+}
+
 // DeleteBridgeResources deletes all resources associated with a bridge deployment
-// in the given namespace, identified by the bridge deployment label.
-func DeleteBridgeResources(ctx context.Context, client kubernetes.Interface, namespace, deployName string) error {
-	sel := meta.LabelBridgeDeployment + "=" + deployName
+// in the given namespace, identified by the bridge deployment and device ID labels.
+func DeleteBridgeResources(ctx context.Context, client kubernetes.Interface, namespace, deployName, deviceID string) error {
+	sel := meta.LabelBridgeDeployment + "=" + deployName + "," + meta.LabelDeviceID + "=" + deviceID
 	listOpts := metav1.ListOptions{LabelSelector: sel}
 	delOpts := metav1.DeleteOptions{}
 

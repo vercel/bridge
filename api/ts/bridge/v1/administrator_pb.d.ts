@@ -53,6 +53,15 @@ export declare type CreateBridgeRequest = Message<"bridge.v1.CreateBridgeRequest
    * @generated from field: string proxy_image = 5 [json_name = "proxy_image"];
    */
   proxyImage: string;
+
+  /**
+   * A tar.gz archive of Kubernetes YAML files to use as the bridge source.
+   * When set, source_deployment becomes optional (used to select which
+   * Deployment in the archive to bridge when multiple exist).
+   *
+   * @generated from field: bytes source_manifests = 6 [json_name = "source_manifests"];
+   */
+  sourceManifests: Uint8Array;
 };
 
 /**
