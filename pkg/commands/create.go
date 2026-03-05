@@ -71,10 +71,13 @@ func Create() *cli.Command {
 				Usage:   "App listening port to forward inbound requests to (defaults to the source deployment's first container port)",
 			},
 			&cli.StringFlag{
-				Name:    "feature-ref",
-				Usage:   "Devcontainer feature reference for the bridge feature",
-				Hidden:  true,
-				Sources: cli.EnvVars("BRIDGE_FEATURE_REF"),
+				Name:   "feature-ref",
+				Usage:  "Devcontainer feature reference for the bridge feature",
+				Hidden: true,
+				Sources: cli.NewValueSourceChain(
+					cli.EnvVar("BRIDGE_FEATURE_REF"),
+					FuncSource(defaultFeatureRef),
+				),
 			},
 			&cli.StringFlag{
 				Name:    "proxy-image",
@@ -94,7 +97,7 @@ func Create() *cli.Command {
 				Hidden: true,
 				Sources: cli.NewValueSourceChain(
 					cli.EnvVar("BRIDGE_CONTAINER_BINARY_PATH"),
-					Func(linuxBinaryPath),
+					FuncSource(linuxBinaryPath),
 				),
 			},
 		},
@@ -166,18 +169,6 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	featureRef := c.String("feature-ref")
 	containerBinaryPath := c.String("container-binary-path")
 	sourcePath := c.String("source")
-	if featureRef == "" {
-		if Version == "dev" {
-			featureRef = devFeatureRef
-		}
-		if featureRef == "" || !localFeatureExists(featureRef) {
-			if BridgeFeatureTag != "" {
-				featureRef = featureRefBase + ":" + BridgeFeatureTag
-			} else {
-				featureRef = featureRefBase + ":latest"
-			}
-		}
-	}
 
 	r := c.Root().Reader
 	p := interact.NewPrinter(c.Root().Writer)
@@ -440,21 +431,6 @@ func configureDevMounts(cfg *devcontainer.Config, binaryPath string) error {
 		cfg.SetMount(fmt.Sprintf("source=%s,target=/usr/local/bin/bridge,type=bind,readonly", binPath))
 	}
 
-	// Mount the host kubeconfig so the bridge intercept process can
-	// authenticate to the cluster from inside the container.
-	if cfg.ContainerEnv == nil || cfg.ContainerEnv["KUBECONFIG"] == "" {
-		kubeconfigPath := os.Getenv("KUBECONFIG")
-		if kubeconfigPath == "" {
-			home, _ := os.UserHomeDir()
-			kubeconfigPath = filepath.Join(home, ".kube", "config")
-		}
-		if _, err := os.Stat(kubeconfigPath); err == nil {
-			const containerKubeconfig = "/tmp/bridge-kubeconfig"
-			cfg.SetMount(fmt.Sprintf("source=%s,target=%s,type=bind,readonly", kubeconfigPath, containerKubeconfig))
-			cfg.EnsureContainerEnv("KUBECONFIG", containerKubeconfig)
-		}
-	}
-
 	return nil
 }
 
@@ -517,14 +493,21 @@ func ensureGitignore(dir, pattern string) {
 	f.WriteString(pattern + "\n")
 }
 
-// localFeatureExists checks whether a local (relative path) devcontainer
-// feature ref exists on disk. The devcontainer CLI resolves these relative to
-// the .devcontainer/ directory, so we check for the devcontainer-feature.json
-// file at .devcontainer/<ref>/devcontainer-feature.json.
-func localFeatureExists(ref string) bool {
-	p := filepath.Join(".devcontainer", ref, "devcontainer-feature.json")
-	_, err := os.Stat(p)
-	return err == nil
+// defaultFeatureRef returns the devcontainer feature reference to use when
+// neither --feature-ref nor BRIDGE_FEATURE_REF is set. In dev mode it
+// prefers the local feature checkout; otherwise it falls back to the
+// published ghcr.io image tagged with BridgeFeatureTag (or "latest").
+func defaultFeatureRef() string {
+	if Version == "dev" {
+		p := filepath.Join(".devcontainer", devFeatureRef, "devcontainer-feature.json")
+		if _, err := os.Stat(p); err == nil {
+			return devFeatureRef
+		}
+	}
+	if BridgeFeatureTag != "" {
+		return featureRefBase + ":" + BridgeFeatureTag
+	}
+	return featureRefBase + ":latest"
 }
 
 // currentKubeContext returns the name of the active kubectl context.
@@ -543,7 +526,7 @@ func currentKubeContext() string {
 // starting a new devcontainer.
 func stopBridgeContainers(ctx context.Context, deploymentName string) {
 	label := containerLabelKeyBridgeDeployment + "=" + deploymentName
-	cmd := exec.CommandContext(ctx, "docker", "ps", "-q", "--filter", "label="+label)
+	cmd := exec.CommandContext(ctx, "docker", "ps", "-aq", "--filter", "label="+label)
 	out, err := cmd.Output()
 	if err != nil || len(out) == 0 {
 		return

@@ -81,8 +81,8 @@ func (f *funcValueSource) Lookup() (string, bool) {
 func (f *funcValueSource) String() string   { return "func" }
 func (f *funcValueSource) GoString() string { return "&funcValueSource{}" }
 
-// Func returns a ValueSource that calls fn to obtain a value.
-func Func(fn func() string) cli.ValueSource {
+// FuncSource returns a ValueSource that calls fn to obtain a value.
+func FuncSource(fn func() string) cli.ValueSource {
 	return &funcValueSource{fn: fn}
 }
 

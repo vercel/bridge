@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   build:
@@ -41,13 +42,42 @@ jobs:
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
           output="bridge-${GOOS}-${GOARCH}${ext}"
           version="${GITHUB_REF#refs/tags/}"
-          go build -ldflags="-s -w -X main.version=${version}" -o "$output" ./cmd/bridge
+          go build -ldflags="-s -w -X main.version=${version} -X main.bridgeFeatureTag=${version}" -o "$output" ./cmd/bridge
           chmod +x "$output"
 
       - uses: actions/upload-artifact@v4
         with:
           name: bridge-${{ matrix.goos }}-${{ matrix.goarch }}
           path: bridge-*
+
+  publish-feature:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish Features
+        uses: devcontainers/action@v1
+        with:
+          publish-features: 'true'
+          base-path-to-features: './features'
+          generate-docs: 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install oras
+        uses: oras-project/setup-oras@v1
+
+      - name: Tag feature with release version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          oras tag ghcr.io/vercel/bridge/bridge-feature:latest "$VERSION"
 
   release:
     needs: build
