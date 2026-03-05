@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -21,6 +22,9 @@ import (
 	"github.com/vercel/bridge/pkg/commands"
 	"github.com/vercel/bridge/pkg/devcontainer"
 	"github.com/vercel/bridge/pkg/identity"
+	"github.com/vercel/bridge/pkg/intercept"
+	"github.com/vercel/bridge/pkg/k8s/kube"
+	"github.com/vercel/bridge/pkg/k8s/meta"
 )
 
 // CreateSuite exercises the full bridge create --connect flow.
@@ -211,82 +215,30 @@ func (s *CreateSuite) TestFullstackCreate() {
 		}
 	}()
 
-	// --- Wait for intercept readiness via devcontainer exec ---
+	// --- Wait for bridge pod and intercept readiness ---
 
 	deviceID, _ := identity.GetDeviceID()
 	bridgeName := identity.BridgeResourceName(deviceID, testutil.UserserviceName)
+	bridgeNS := testutil.UserserviceNamespace
+
+	pod, err := kube.WaitForPod(s.ctx, s.cluster.Clientset, bridgeNS, meta.DeploymentSelector(bridgeName), 1*time.Minute)
+	require.NoError(t, err, "bridge pod not ready")
+	t.Logf("Bridge pod ready: %s", pod.Name)
 
 	generatedConfig := filepath.Join(s.workspaceDir, ".devcontainer",
 		fmt.Sprintf("bridge-%s", bridgeName), "devcontainer.json")
-	dcExec := &devcontainer.Client{
+	dc := &devcontainer.Client{
 		WorkspaceFolder: s.workspaceDir,
 		ConfigPath:      generatedConfig,
 	}
+	require.NoError(t, intercept.WaitForReady(s.ctx, dc), "intercept not ready")
 
-	bridgeNS := testutil.UserserviceNamespace
-
-	s.Eventually(func() bool {
-		// Check if the goroutine already failed.
-		select {
-		case err := <-errCh:
-			t.Fatalf("bridge create --connect exited early: %v", err)
-		default:
-		}
-
-		// Diagnostic: check if generated config exists (means CreateBridge returned).
-		if _, err := os.Stat(generatedConfig); err != nil {
-			t.Logf("[diag] generated config not yet created: %s", generatedConfig)
-
-			// Check bridge namespace pods while waiting for CreateBridge.
-			pods, err := s.cluster.Clientset.CoreV1().Pods(bridgeNS).List(s.ctx, metav1.ListOptions{})
-			if err != nil {
-				t.Logf("[diag] list pods in %s: %v", bridgeNS, err)
-			} else if len(pods.Items) == 0 {
-				t.Logf("[diag] no pods in namespace %s", bridgeNS)
-			} else {
-				for _, p := range pods.Items {
-					t.Logf("[diag] pod %s phase=%s labels=%v", p.Name, p.Status.Phase, p.Labels)
-					for _, cs := range p.Status.ContainerStatuses {
-						t.Logf("[diag]   container %s ready=%v", cs.Name, cs.Ready)
-					}
-				}
-			}
-			return false
-		}
-
-		out, err := dcExec.ExecOutput(s.ctx, []string{"cat", "/tmp/bridge-intercept.log"})
-		if err != nil {
-			t.Logf("[diag] exec in devcontainer: %v | output: %s", err, strings.TrimSpace(out))
-			return false
-		}
-		t.Logf("[diag] intercept log: %s", out)
-		return strings.Contains(out, "Bridge intercept starting")
-	}, 1*time.Minute, 1*time.Second, "intercept not ready")
-	t.Log("Bridge intercept is ready")
-
-	// --- Verify network access with a single wget ---
+	// --- Verify network access ---
 
 	targetURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/",
 		testutil.UserserviceServiceName, testutil.UserserviceNamespace, testutil.UserservicePort)
 
-	// Dump full intercept log and DNS diagnostics before attempting wget.
-	logOut, _ := dcExec.ExecOutput(s.ctx, []string{"cat", "/tmp/bridge-intercept.log"})
-	t.Logf("[intercept-log]\n%s", logOut)
-
-	resolvOut, _ := dcExec.ExecOutput(s.ctx, []string{"cat", "/etc/resolv.conf"})
-	t.Logf("[resolv.conf]\n%s", resolvOut)
-
-	// Check if DNS server is actually listening.
-	ssOut, _ := dcExec.ExecOutput(s.ctx, []string{"sh", "-c", "ss -ulnp | grep :53 || netstat -ulnp 2>/dev/null | grep :53 || echo 'no listener found on :53'"})
-	t.Logf("[dns-listen] %s", strings.TrimSpace(ssOut))
-
-	// Warm up the k8spf gRPC connection with a throwaway DNS query.
-	// The first DNS resolution via k8spf triggers lazy port-forward setup which
-	// can take >5s. This pre-warms the connection so the real wget doesn't time out.
-	warmupOut, _ := dcExec.ExecOutput(s.ctx, []string{"sh", "-c", "nslookup " + testutil.UserserviceServiceName + "." + testutil.UserserviceNamespace + ".svc.cluster.local 127.0.0.1 2>&1 || true"})
-	t.Logf("[warmup nslookup] %s", strings.TrimSpace(warmupOut))
-
-	wgetOut, wgetErr := dcExec.ExecOutput(s.ctx, []string{"wget", "-O", "-", "-T", "10", targetURL})
+	wgetOut, wgetErr := dc.ExecOutput(s.ctx, []string{"wget", "-O", "-", "-T", "10", targetURL})
 	t.Logf("[wget] output: %s", strings.TrimSpace(wgetOut))
 	require.NoError(t, wgetErr, "wget failed")
 	require.Contains(t, wgetOut, "ok", "expected test server response")
@@ -381,6 +333,194 @@ func (s *CreateSuite) TestCreateFailsOnInterceptCrash() {
 	require.Error(t, err)
 	t.Logf("create error: %v", err)
 	require.Contains(t, err.Error(), "container failed to start")
+}
+
+// TestManifestSourceCreate exercises the --source flag with manifest-based creation
+// and verifies that annotations on the Deployment are preserved through the pipeline.
+func (s *CreateSuite) TestManifestSourceCreate() {
+	t := s.T()
+
+	// --- Write manifest YAML to a temp directory ---
+
+	const manifestYAML = `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+  namespace: userservice
+  labels:
+    app: myapp
+  annotations:
+    bridge.dev/test-annotation: e2e-test-value
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+    spec:
+      containers:
+        - name: myapp
+          image: invalid123
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc
+  namespace: userservice
+spec:
+  selector:
+    app: myapp
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+`
+
+	manifestDir, err := os.MkdirTemp(os.TempDir(), "bridge-manifest-test-*")
+	require.NoError(t, err)
+	manifestDir, err = filepath.EvalSymlinks(manifestDir)
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(manifestDir) })
+
+	require.NoError(t, os.WriteFile(filepath.Join(manifestDir, "manifest.yaml"), []byte(manifestYAML), 0644))
+
+	// --- Create workspace and set up environment ---
+
+	dir := createWorkspace(t, s.bridgeBin, s.projectRoot, s.cluster)
+	t.Cleanup(func() {
+		dc := &devcontainer.Client{WorkspaceFolder: dir}
+		_ = dc.Stop(s.ctx)
+		os.RemoveAll(dir)
+	})
+
+	origKubeconfig := os.Getenv("KUBECONFIG")
+	os.Setenv("KUBECONFIG", s.cluster.KubeConfigPath)
+	t.Cleanup(func() {
+		if origKubeconfig != "" {
+			os.Setenv("KUBECONFIG", origKubeconfig)
+		} else {
+			os.Unsetenv("KUBECONFIG")
+		}
+	})
+
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { os.Chdir(origDir) })
+
+	_, err = identity.EnsureDeviceID()
+	require.NoError(t, err)
+
+	// --- Run `bridge create --source <manifest-dir>` ---
+	// No --admin-addr: the default (k8spf:///administrator.bridge:9090?workload=deployment)
+	// should auto-discover the administrator deployed by SetupSuite.
+
+	stdinR, stdinW, err := os.Pipe()
+	require.NoError(t, err)
+	defer stdinW.Close()
+
+	stdoutR, stdoutW, err := os.Pipe()
+	require.NoError(t, err)
+
+	app := commands.NewApp()
+	app.Reader = stdinR
+	app.Writer = stdoutW
+
+	errCh := make(chan error, 1)
+	go func() {
+		defer stdoutW.Close()
+		errCh <- app.Run(s.ctx, []string{
+			"bridge", "create",
+			"-n", testutil.UserserviceNamespace,
+			"--source", manifestDir,
+			"--yes",
+			"--connect",
+			"--feature-ref", "../local-features/bridge-feature",
+			"-f", filepath.Join(dir, ".devcontainer", "devcontainer.json"),
+		})
+	}()
+
+	go func() {
+		scanner := bufio.NewScanner(stdoutR)
+		for scanner.Scan() {
+			t.Logf("[bridge] %s", scanner.Text())
+		}
+	}()
+
+	// --- Wait for bridge pod readiness ---
+
+	deviceID, _ := identity.GetDeviceID()
+	bridgeName := identity.BridgeResourceName(deviceID, "myapp")
+
+	bridgeNS := testutil.UserserviceNamespace
+
+	// Wait for the bridge pod to be ready in the cluster.
+	pod, err := kube.WaitForPod(s.ctx, s.cluster.Clientset, bridgeNS, meta.DeploymentSelector(bridgeName), 1*time.Minute)
+	require.NoError(t, err, "bridge pod not ready")
+	t.Logf("Bridge pod ready: %s", pod.Name)
+
+	generatedConfig := filepath.Join(dir, ".devcontainer",
+		fmt.Sprintf("bridge-%s", bridgeName), "devcontainer.json")
+	dc := &devcontainer.Client{
+		WorkspaceFolder: dir,
+		ConfigPath:      generatedConfig,
+	}
+	require.NoError(t, intercept.WaitForReady(s.ctx, dc), "intercept not ready")
+
+	// --- Verify annotation preserved on the bridge deployment ---
+
+	dep, err := s.cluster.Clientset.AppsV1().Deployments(bridgeNS).Get(s.ctx, bridgeName, metav1.GetOptions{})
+	require.NoError(t, err, "failed to get bridge deployment")
+	require.Equal(t, "e2e-test-value", dep.Annotations["bridge.dev/test-annotation"],
+		"annotation bridge.dev/test-annotation should be preserved on the bridge deployment")
+
+	// --- Verify network access ---
+
+	targetURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/",
+		testutil.UserserviceServiceName, testutil.UserserviceNamespace, testutil.UserservicePort)
+
+	wgetOut, wgetErr := dc.ExecOutput(s.ctx, []string{"wget", "-O", "-", "-T", "10", targetURL})
+	t.Logf("[wget] output: %s", strings.TrimSpace(wgetOut))
+	require.NoError(t, wgetErr, "wget failed")
+	require.Contains(t, wgetOut, "ok", "expected test server response")
+
+	// --- Verify bridge get lists the bridge ---
+
+	getOut := s.runBridgeGet()
+	t.Logf("[bridge get] output:\n%s", getOut)
+	lines := strings.Split(strings.TrimSpace(getOut), "\n")
+	require.Len(t, lines, 2, "expected header + 1 bridge entry")
+	require.True(t, strings.HasPrefix(strings.TrimSpace(lines[1]), bridgeName),
+		"expected bridge name %q, got line: %s", bridgeName, lines[1])
+
+	// --- Clean up: close stdin so bash exits ---
+
+	stdinW.Close()
+
+	require.NoError(t, <-errCh, "bridge create --source failed")
+}
+
+// runBridgeGet executes `bridge get` with the given extra args and returns
+// the captured stdout. It uses the admin-addr derived from the administrator
+// pod deployed by SetupSuite.
+func (s *CreateSuite) runBridgeGet(extraArgs ...string) string {
+	s.T().Helper()
+
+	var buf bytes.Buffer
+	app := commands.NewApp()
+	app.Writer = &buf
+
+	args := []string{"bridge", "get"}
+	args = append(args, extraArgs...)
+
+	require.NoError(s.T(), app.Run(s.ctx, args), "bridge get failed")
+	return buf.String()
 }
 
 func TestCreateSuite(t *testing.T) {

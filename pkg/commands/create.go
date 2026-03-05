@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/urfave/cli/v3"
 	"k8s.io/client-go/tools/clientcmd"
@@ -22,6 +21,7 @@ import (
 	"github.com/vercel/bridge/pkg/devcontainer"
 	"github.com/vercel/bridge/pkg/identity"
 	"github.com/vercel/bridge/pkg/interact"
+	"github.com/vercel/bridge/pkg/intercept"
 	"github.com/vercel/bridge/pkg/netutil"
 )
 
@@ -530,7 +530,7 @@ func startDevcontainer(ctx context.Context, p interact.Printer, dcConfigPath, de
 	}
 
 	sp.SetTitle("Connecting container to proxy...")
-	err = waitForIntercept(ctx, dcClient)
+	err = intercept.WaitForReady(ctx, dcClient)
 	sp.Stop()
 	if err != nil {
 		// Clean up the container and report the error.
@@ -551,55 +551,6 @@ func startDevcontainer(ctx context.Context, p interact.Printer, dcConfigPath, de
 
 	slog.Debug("Devcontainer started, attaching shell")
 	return dcClient.ExecAttached(ctx, []string{"bash"})
-}
-
-// waitForIntercept polls the intercept log inside the devcontainer until it
-// sees "Intercept ready" or "Intercept crashed". Returns a timeout error if
-// neither appears within 30s.
-func waitForIntercept(ctx context.Context, dc *devcontainer.Client) error {
-	containerID, err := dc.ContainerID(ctx)
-	if err != nil {
-		return nil // can't determine container, don't block
-	}
-
-	const (
-		timeout = 30 * time.Second
-		poll    = 500 * time.Millisecond
-		logPath = "/tmp/bridge-intercept.log"
-	)
-	deadline := time.Now().Add(timeout)
-
-	readLog := func() string {
-		cmd := exec.CommandContext(ctx, "docker", "exec", containerID, "cat", logPath)
-		out, err := cmd.Output()
-		if err != nil {
-			return ""
-		}
-		return string(out)
-	}
-
-	for time.Now().Before(deadline) {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		log := readLog()
-		if strings.Contains(log, "Intercept ready") {
-			return nil
-		}
-		if strings.Contains(log, "Intercept crashed") {
-			return fmt.Errorf("container failed to start:\n%s", logTail(log, 10))
-		}
-
-		time.Sleep(poll)
-	}
-
-	// Timed out — report whatever logs we have.
-	log := readLog()
-	if log == "" {
-		return fmt.Errorf("container failed to start within %s (no logs available)", timeout)
-	}
-	return fmt.Errorf("container failed to start within %s:\n%s", timeout, logTail(log, 10))
 }
 
 // resolveSourceFlag interprets the --source flag value and returns an fs.FS
@@ -632,13 +583,4 @@ func resolveSourceFlag(sourcePath string) (fs.FS, string, error) {
 		dir = "."
 	}
 	return os.DirFS(dir), filepath.Base(sourcePath), nil
-}
-
-// logTail returns the last n lines of s.
-func logTail(s string, n int) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return strings.Join(lines, "\n")
 }

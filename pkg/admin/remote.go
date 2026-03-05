@@ -14,8 +14,9 @@ import (
 
 // remoteAdmin implements Service by calling the in-cluster administrator via gRPC.
 type remoteAdmin struct {
-	conn   *grpc.ClientConn
-	client bridgev1.AdministratorServiceClient
+	conn    *grpc.ClientConn
+	client  bridgev1.AdministratorServiceClient
+	builder *k8spf.Builder
 }
 
 // NewClient creates a remote Service that connects to the administrator gRPC
@@ -32,8 +33,9 @@ func NewClient(addr string) (Service, error) {
 		return nil, fmt.Errorf("failed to connect to administrator: %w", err)
 	}
 	return &remoteAdmin{
-		conn:   conn,
-		client: bridgev1.NewAdministratorServiceClient(conn),
+		conn:    conn,
+		client:  bridgev1.NewAdministratorServiceClient(conn),
+		builder: builder,
 	}, nil
 }
 
@@ -61,8 +63,11 @@ func (r *remoteAdmin) DeleteBridge(ctx context.Context, req *bridgev1.DeleteBrid
 	return resp, nil
 }
 
-// Close releases the gRPC connection.
+// Close releases the gRPC connection and the underlying port-forward pool.
 func (r *remoteAdmin) Close() error {
+	if r.builder != nil {
+		r.builder.Close()
+	}
 	if r.conn != nil {
 		return r.conn.Close()
 	}
