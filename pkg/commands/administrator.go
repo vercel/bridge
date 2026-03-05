@@ -34,7 +34,7 @@ func Administrator() *cli.Command {
 				Name:    "addr",
 				Usage:   "Address to bind the gRPC server to",
 				Value:   ":9090",
-				Sources: cli.EnvVars("ADMINISTRATOR_ADDR"),
+				Sources: cli.EnvVars("BRIDGE_ADMINISTRATOR_ADDR"),
 			},
 			&cli.StringFlag{
 				Name:    "proxy-image",
@@ -57,12 +57,12 @@ func Administrator() *cli.Command {
 			&cli.StringFlag{
 				Name:    "kube-context",
 				Usage:   "Override the kubectl context (out-of-cluster only)",
-				Sources: cli.EnvVars("KUBE_CONTEXT"),
+				Sources: cli.EnvVars("BRIDGE_KUBE_CONTEXT"),
 			},
 			&cli.StringFlag{
 				Name:    "kube-namespace",
 				Usage:   "Override the default kubeconfig namespace (out-of-cluster only)",
-				Sources: cli.EnvVars("KUBE_NAMESPACE"),
+				Sources: cli.EnvVars("BRIDGE_KUBE_NAMESPACE"),
 			},
 		},
 		Action: runAdministrator,

@@ -10,9 +10,11 @@ import (
 )
 
 var version = "dev"
+var bridgeFeatureTag = ""
 
 func main() {
 	commands.Version = version
+	commands.BridgeFeatureTag = bridgeFeatureTag
 
 	app := commands.NewApp()
 	if err := app.Run(context.Background(), os.Args); err != nil {

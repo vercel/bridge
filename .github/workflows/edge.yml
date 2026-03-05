@@ -42,7 +42,8 @@ jobs:
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
           output="bridge-${GOOS}-${GOARCH}${ext}"
           version="edge-$(git rev-parse --short HEAD)"
-          go build -ldflags="-s -w -X main.version=${version}" -o "$output" ./cmd/bridge
+          feature_tag="$(git rev-parse --short HEAD)"
+          go build -ldflags="-s -w -X main.version=${version} -X main.bridgeFeatureTag=${feature_tag}" -o "$output" ./cmd/bridge
           chmod +x "$output"
 
       - uses: actions/upload-artifact@v4

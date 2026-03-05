@@ -44,12 +44,12 @@ func Intercept() *cli.Command {
 				Name:    "app-port",
 				Usage:   "Local app port to forward inbound requests to",
 				Value:   3000,
-				Sources: cli.EnvVars("APP_PORT"),
+				Sources: cli.EnvVars("BRIDGE_APP_PORT"),
 			},
 			&cli.StringSliceFlag{
 				Name:    "forward-domains",
 				Usage:   "Domain patterns to intercept via DNS (e.g., '*.example.com')",
-				Sources: cli.EnvVars("FORWARD_DOMAINS"),
+				Sources: cli.EnvVars("BRIDGE_FORWARD_DOMAINS"),
 			},
 			&cli.IntFlag{
 				Name:  "dns-port",
@@ -57,8 +57,14 @@ func Intercept() *cli.Command {
 				Value: 53,
 			},
 			&cli.StringSliceFlag{
-				Name:  "copy-files",
-				Usage: "File paths to copy from the bridge proxy into the devcontainer (also appends from $COPY_FILES)",
+				Name:    "copy-files",
+				Usage:   "File paths to copy from the bridge proxy into the devcontainer",
+				Sources: cli.EnvVars("BRIDGE_COPY_FILES"),
+			},
+			&cli.StringSliceFlag{
+				Name:    "ignore-env-vars",
+				Usage:   "Environment variables to unset before connecting (e.g. AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY)",
+				Sources: cli.EnvVars("BRIDGE_IGNORE_ENV_VARS"),
 			},
 		},
 		Action: runIntercept,
@@ -90,9 +96,9 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		}
 	}
 
-	// Parse copy-files from both the flag and the COPY_FILES env var, merging them.
+	// Parse copy-files, handling comma-separated values from env vars.
 	var copyFiles []string
-	for _, src := range append(c.StringSlice("copy-files"), os.Getenv("COPY_FILES")) {
+	for _, src := range c.StringSlice("copy-files") {
 		for _, part := range strings.Split(src, ",") {
 			part = strings.TrimSpace(part)
 			if part != "" {
@@ -101,13 +107,31 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		}
 	}
 
+	// Unset environment variables specified by --ignore-env-vars / BRIDGE_IGNORE_ENV_VARS.
+	// This prevents credentials injected via --env-file (e.g. source pod AWS creds)
+	// from overriding the developer's local credentials used for k8s auth.
+	var unsetVars []string
+	for _, v := range c.StringSlice("ignore-env-vars") {
+		for _, name := range strings.Split(v, ",") {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				os.Unsetenv(name)
+				unsetVars = append(unsetVars, name)
+			}
+		}
+	}
+	if len(unsetVars) > 0 {
+		slog.Info("Unset environment variables", "vars", unsetVars)
+	}
+
 	if u, err := user.Current(); err == nil {
 		slog.Info("Intercept process starting",
+			"version", Version,
 			"user", u.Username,
 			"home", u.HomeDir,
 		)
 	} else {
-		slog.Info("Intercept process starting", "user_lookup_error", err)
+		slog.Info("Intercept process starting", "version", Version, "user_lookup_error", err)
 	}
 
 	if len(forwardDomains) > 0 {

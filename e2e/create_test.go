@@ -523,6 +523,56 @@ func (s *CreateSuite) runBridgeGet(extraArgs ...string) string {
 	return buf.String()
 }
 
+// TestCreateFailsMissingBinary verifies that bridge create --connect fails
+// with a clear error when the linux bridge binary is missing. This is a
+// standalone test — no cluster or suite setup needed.
+func TestCreateFailsMissingBinary(t *testing.T) {
+	// Create a minimal workspace with a devcontainer.json.
+	dir, err := os.MkdirTemp(os.TempDir(), "bridge-missing-bin-test-*")
+	require.NoError(t, err)
+	dir, err = filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	dcDir := filepath.Join(dir, ".devcontainer")
+	require.NoError(t, os.MkdirAll(dcDir, 0755))
+
+	cfg := &devcontainer.Config{
+		Image: "mcr.microsoft.com/devcontainers/base:alpine-3.20",
+	}
+	require.NoError(t, cfg.Save(filepath.Join(dcDir, "devcontainer.json")))
+
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { os.Chdir(origDir) })
+
+	// Ensure device identity exists.
+	_, err = identity.EnsureDeviceID()
+	require.NoError(t, err)
+
+	// Point --container-binary-path at a non-existent file to trigger
+	// the pre-flight check before any cluster work happens.
+	fakeBin := filepath.Join(dir, "nonexistent", "bridge-linux")
+
+	app := commands.NewApp()
+	app.Reader = strings.NewReader("")
+	app.Writer = io.Discard
+
+	err = app.Run(context.Background(), []string{
+		"bridge", "create", "fake-deploy",
+		"-n", "default",
+		"--yes",
+		"--connect",
+		"--container-binary-path", fakeBin,
+		"-f", filepath.Join(dcDir, "devcontainer.json"),
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bridge-linux", "error should mention the missing binary path")
+	require.Contains(t, err.Error(), "install", "error should include install instructions")
+}
+
 func TestCreateSuite(t *testing.T) {
 	suite.Run(t, new(CreateSuite))
 }

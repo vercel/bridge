@@ -55,6 +55,26 @@ main() {
     fi
 
     echo "bridge (edge) installed to ${INSTALL_DIR}/bridge"
+
+    install_linux_binary "$os" "$arch"
+}
+
+# Also install the linux binary to ~/.bridge/bin/bridge-linux so that
+# `bridge create` can bind-mount it into devcontainers.
+install_linux_binary() {
+    local os="$1" arch="$2"
+    local bridge_dir="${HOME}/.bridge/bin"
+    mkdir -p "$bridge_dir"
+
+    if [ "$os" = "linux" ]; then
+        cp "${INSTALL_DIR}/bridge" "${bridge_dir}/bridge-linux"
+    else
+        local linux_url="https://github.com/${REPO}/releases/download/edge/bridge-linux-${arch}"
+        echo "Downloading linux bridge binary..."
+        curl -fsSL -o "${bridge_dir}/bridge-linux" "${linux_url}"
+    fi
+    chmod +x "${bridge_dir}/bridge-linux"
+    echo "Linux bridge binary installed to ${bridge_dir}/bridge-linux"
 }
 
 main

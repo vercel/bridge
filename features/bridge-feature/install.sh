@@ -2,9 +2,6 @@
 set -e
 trap 'echo "ERROR: install.sh failed at line $LINENO (exit code $?)" >&2' ERR
 
-# GitHub repository for bridge releases
-REPO="vercel/bridge"
-
 # Install required tools
 install_dependencies() {
     if ! command -v curl &> /dev/null; then
@@ -33,72 +30,13 @@ install_dependencies() {
     fi
 }
 
-# Detect architecture
-get_arch() {
-    local arch=$(uname -m)
-    case "$arch" in
-        x86_64) echo "amd64" ;;
-        aarch64|arm64) echo "arm64" ;;
-        *) echo "Unsupported architecture: $arch" >&2; exit 1 ;;
-    esac
-}
-
-# Get the latest release version from GitHub
-get_latest_version() {
-    curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | \
-        grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
-}
-
-# Download and install bridge binary
-install_bridge() {
-    if [ -x /usr/local/bin/bridge ]; then
-        echo "Bridge binary already installed, skipping download"
-        return 0
-    fi
-
-    local version="${BRIDGEVERSION:-edge}"
-
-    # In dev mode the binary is expected to be provided via bind mount at runtime.
-    if [ "$version" = "dev" ]; then
-        echo "Dev mode: skipping binary download (expecting bind mount at runtime)"
-        return 0
-    fi
-
-    local arch=$(get_arch)
-    local os="linux"
-
-    # Resolve 'latest' to actual version
-    if [ "$version" = "latest" ]; then
-        version=$(get_latest_version)
-        if [ -z "$version" ]; then
-            echo "Failed to fetch latest version" >&2
-            exit 1
-        fi
-    fi
-
-    echo "Installing bridge ${version} for ${os}-${arch}..."
-
-    local binary_name="bridge-${os}-${arch}"
-    local download_url="https://github.com/${REPO}/releases/download/${version}/${binary_name}"
-
-    echo "Downloading from: ${download_url}"
-
-    if ! curl -fsSL -o /usr/local/bin/bridge "${download_url}"; then
-        echo "Failed to download bridge binary" >&2
-        exit 1
-    fi
-
-    chmod +x /usr/local/bin/bridge
-    echo "Bridge ${version} installed successfully"
-}
-
 # Write environment configuration to /etc/profile.d (sourced by entrypoint)
 write_env_config() {
     cat > /etc/profile.d/bridge.sh << EOF
 export BRIDGE_SERVER_ADDR="${BRIDGESERVERADDR:-}"
-export APP_PORT="${APPPORT:-3000}"
-export FORWARD_DOMAINS="${FORWARDDOMAINS:-$FORWARD_DOMAINS}"
-export COPY_FILES="${COPYFILES:-$COPY_FILES}"
+export BRIDGE_APP_PORT="${APPPORT:-3000}"
+export BRIDGE_FORWARD_DOMAINS="${FORWARDDOMAINS:-$BRIDGE_FORWARD_DOMAINS}"
+export BRIDGE_COPY_FILES="${COPYFILES:-$BRIDGE_COPY_FILES}"
 EOF
 }
 
@@ -119,12 +57,8 @@ EOF
 [ -f /etc/profile.d/bridge.sh ] && source /etc/profile.d/bridge.sh
 
 # Run bridge intercept as root (required for iptables).
-# Use sudo -E to inherit env, then unset IRSA vars inside the shell so the
-# AWS SDK uses SSO credentials instead of token-file auth (the token file
-# doesn't exist outside the cluster pod).
 if [ -n "$BRIDGE_SERVER_ADDR" ]; then
     sudo -E bash -c '
-        unset AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE
         exec /usr/local/bin/bridge --log-paths stderr intercept
     ' > /tmp/bridge-intercept.log 2>&1 &
 fi
@@ -139,7 +73,6 @@ main() {
     echo "Installing Bridge Tunnel Client..."
 
     install_dependencies
-    install_bridge
     write_env_config
     create_entrypoint
 

@@ -11,6 +11,7 @@ import (
 )
 
 var Version = "dev"
+var BridgeFeatureTag = ""
 
 // NewApp returns the root CLI command with all subcommands registered.
 func NewApp() *cli.Command {
@@ -23,12 +24,12 @@ func NewApp() *cli.Command {
 				Name:    "log-level",
 				Usage:   "Log level (debug, info, warn, error)",
 				Value:   "info",
-				Sources: cli.EnvVars("LOG_LEVEL"),
+				Sources: cli.EnvVars("BRIDGE_LOG_LEVEL"),
 			},
 			&cli.StringSliceFlag{
 				Name:    "log-paths",
 				Usage:   "Additional log destinations: \"stdout\", \"stderr\", or a file path (repeatable)",
-				Sources: cli.EnvVars("LOG_PATHS"),
+				Sources: cli.EnvVars("BRIDGE_LOG_PATHS"),
 			},
 		},
 		Before: func(ctx context.Context, command *cli.Command) (context.Context, error) {
@@ -61,6 +62,28 @@ func NewApp() *cli.Command {
 			Update(),
 		},
 	}
+}
+
+// funcValueSource is a cli.ValueSource backed by an arbitrary function.
+// This lets us set a flag's default from computed values (e.g. linuxBinaryPath)
+// while still allowing env-var and explicit-flag overrides.
+type funcValueSource struct {
+	fn func() string
+}
+
+func (f *funcValueSource) Lookup() (string, bool) {
+	if v := f.fn(); v != "" {
+		return v, true
+	}
+	return "", false
+}
+
+func (f *funcValueSource) String() string   { return "func" }
+func (f *funcValueSource) GoString() string { return "&funcValueSource{}" }
+
+// Func returns a ValueSource that calls fn to obtain a value.
+func Func(fn func() string) cli.ValueSource {
+	return &funcValueSource{fn: fn}
 }
 
 func parseLogLevel(s string) slog.Level {

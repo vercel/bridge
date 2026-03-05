@@ -25,7 +25,7 @@ import (
 	"github.com/vercel/bridge/pkg/netutil"
 )
 
-const defaultFeatureRef = "ghcr.io/vercel/bridge/bridge-feature:latest"
+const featureRefBase = "ghcr.io/vercel/bridge/bridge-feature"
 const devFeatureRef = "../local-features/bridge-feature"
 
 const defaultAdminAddr = "k8spf:///administrator.bridge:9090?workload=deployment"
@@ -73,7 +73,6 @@ func Create() *cli.Command {
 			&cli.StringFlag{
 				Name:    "feature-ref",
 				Usage:   "Devcontainer feature reference for the bridge feature",
-				Value:   defaultFeatureRef,
 				Hidden:  true,
 				Sources: cli.EnvVars("BRIDGE_FEATURE_REF"),
 			},
@@ -89,6 +88,15 @@ func Create() *cli.Command {
 				Aliases: []string{"s"},
 				Usage:   "Path to a folder, glob, or single YAML file to use as the bridge source",
 			},
+			&cli.StringFlag{
+				Name:   "container-binary-path",
+				Usage:  "Path to the linux bridge binary to mount into the devcontainer",
+				Hidden: true,
+				Sources: cli.NewValueSourceChain(
+					cli.EnvVar("BRIDGE_CONTAINER_BINARY_PATH"),
+					Func(linuxBinaryPath),
+				),
+			},
 		},
 		Before: preflightCreate,
 		Arguments: []cli.Argument{
@@ -102,6 +110,20 @@ func Create() *cli.Command {
 		},
 		Action: runCreate,
 	}
+}
+
+// linuxBinaryPath returns the default path to the linux bridge binary that
+// will be bind-mounted into devcontainers. In dev mode it uses the local
+// build output; otherwise the installer-managed copy at ~/.bridge/bin/.
+func linuxBinaryPath() string {
+	if Version == "dev" {
+		return filepath.Join("dist", "bridge-linux")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(os.Getenv("HOME"), ".bridge", "bin", "bridge-linux")
+	}
+	return filepath.Join(home, ".bridge", "bin", "bridge-linux")
 }
 
 // errAdminUnavailable is a sentinel error returned when the remote
@@ -142,13 +164,18 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	yes := c.Bool("yes")
 	proxyImage := c.String("proxy-image")
 	featureRef := c.String("feature-ref")
+	containerBinaryPath := c.String("container-binary-path")
 	sourcePath := c.String("source")
-	if featureRef == defaultFeatureRef {
+	if featureRef == "" {
 		if Version == "dev" {
 			featureRef = devFeatureRef
-		} else if strings.HasPrefix(Version, "edge-") {
-			sha := strings.TrimPrefix(Version, "edge-")
-			featureRef = "ghcr.io/vercel/bridge/bridge-feature:" + sha
+		}
+		if featureRef == "" || !localFeatureExists(featureRef) {
+			if BridgeFeatureTag != "" {
+				featureRef = featureRefBase + ":" + BridgeFeatureTag
+			} else {
+				featureRef = featureRefBase + ":latest"
+			}
 		}
 	}
 
@@ -175,6 +202,13 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("failed to get device identity: %w", err)
 	}
 	slog.Info("Device identity", "device_id", deviceID)
+
+	// Pre-flight: verify linux bridge binary exists when --connect is set.
+	if connectFlag {
+		if _, err := os.Stat(containerBinaryPath); err != nil {
+			return fmt.Errorf("linux bridge binary not found at %s — install with: curl -fsSL https://github.com/vercel/bridge/releases/download/edge/install-edge.sh | sh", containerBinaryPath)
+		}
+	}
 
 	kubeContext := currentKubeContext()
 
@@ -265,7 +299,7 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	if appPort == 0 {
 		appPort = 3000
 	}
-	dcConfigPath, portMappings, err := generateDevcontainerConfig(p, baseConfig, featureRef, appPort, createResp)
+	dcConfigPath, portMappings, err := generateDevcontainerConfig(p, baseConfig, featureRef, appPort, containerBinaryPath, createResp)
 	if err != nil {
 		return err
 	}
@@ -287,7 +321,7 @@ func promptYN(r io.Reader) string {
 // It respects the KUBECONFIG env var by bind-mounting it into the container,
 // unless the base config already sets containerEnv.KUBECONFIG.
 // Returns the path to the generated config.
-func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef string, appPort int, resp *bridgev1.CreateBridgeResponse) (string, []devcontainer.PortMapping, error) {
+func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef string, appPort int, containerBinaryPath string, resp *bridgev1.CreateBridgeResponse) (string, []devcontainer.PortMapping, error) {
 	dcName := resp.DeploymentName
 
 	// Place the generated config under the .devcontainer/ directory that contains
@@ -336,7 +370,7 @@ func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef s
 	cfg.EnsureCapAdd("NET_ADMIN")
 	cfg.EnsureRunArgs("-l", containerLabelKeyBridgeDeployment+"="+dcName)
 
-	if err := configureDevMounts(cfg); err != nil {
+	if err := configureDevMounts(cfg, containerBinaryPath); err != nil {
 		return "", nil, err
 	}
 
@@ -356,6 +390,12 @@ func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef s
 		}
 		cfg.EnsureRunArgs("--env-file", envFilePath)
 		p.Info(fmt.Sprintf("Environment variables written to %s (%d vars)", envFilePath, len(resp.EnvVars)))
+
+		// The source pod's env vars may include AWS credentials that override
+		// the developer's local ~/.aws config. Tell the intercept process to
+		// unset them so k8s auth uses the mounted credentials instead.
+		cfg.EnsureContainerEnv("BRIDGE_IGNORE_ENV_VARS",
+			"AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_ROLE_ARN,AWS_WEB_IDENTITY_TOKEN_FILE")
 	}
 
 	if err := cfg.Save(dcConfigPath); err != nil {
@@ -388,19 +428,31 @@ func currentKubeNamespace() string {
 }
 
 // configureDevMounts adds host bind mounts needed for local development:
-// the linux bridge binary (dev mode), KUBECONFIG, and Docker network access.
-func configureDevMounts(cfg *devcontainer.Config) error {
-	// In dev mode, bind-mount the linux bridge binary into the container,
+// the linux bridge binary, KUBECONFIG, and Docker network access.
+func configureDevMounts(cfg *devcontainer.Config, binaryPath string) error {
+	// Bind-mount the linux bridge binary into the container,
 	// unless the base config already provides one (e.g. in e2e tests).
-	if Version == "dev" && !hasMountTarget(cfg, "/usr/local/bin/bridge") {
-		binPath, err := filepath.Abs(filepath.Join("dist", "bridge-linux"))
+	if !hasMountTarget(cfg, "/usr/local/bin/bridge") {
+		binPath, err := filepath.Abs(binaryPath)
 		if err != nil {
 			return fmt.Errorf("failed to resolve bridge binary path: %w", err)
 		}
-		if _, err := os.Stat(binPath); err != nil {
-			return fmt.Errorf("dev mode requires a linux bridge binary at %s — build with: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags=\"-s -w\" -o dist/bridge-linux ./cmd/bridge", binPath)
-		}
 		cfg.SetMount(fmt.Sprintf("source=%s,target=/usr/local/bin/bridge,type=bind,readonly", binPath))
+	}
+
+	// Mount the host kubeconfig so the bridge intercept process can
+	// authenticate to the cluster from inside the container.
+	if cfg.ContainerEnv == nil || cfg.ContainerEnv["KUBECONFIG"] == "" {
+		kubeconfigPath := os.Getenv("KUBECONFIG")
+		if kubeconfigPath == "" {
+			home, _ := os.UserHomeDir()
+			kubeconfigPath = filepath.Join(home, ".kube", "config")
+		}
+		if _, err := os.Stat(kubeconfigPath); err == nil {
+			const containerKubeconfig = "/tmp/bridge-kubeconfig"
+			cfg.SetMount(fmt.Sprintf("source=%s,target=%s,type=bind,readonly", kubeconfigPath, containerKubeconfig))
+			cfg.EnsureContainerEnv("KUBECONFIG", containerKubeconfig)
+		}
 	}
 
 	return nil
@@ -465,6 +517,16 @@ func ensureGitignore(dir, pattern string) {
 	f.WriteString(pattern + "\n")
 }
 
+// localFeatureExists checks whether a local (relative path) devcontainer
+// feature ref exists on disk. The devcontainer CLI resolves these relative to
+// the .devcontainer/ directory, so we check for the devcontainer-feature.json
+// file at .devcontainer/<ref>/devcontainer-feature.json.
+func localFeatureExists(ref string) bool {
+	p := filepath.Join(".devcontainer", ref, "devcontainer-feature.json")
+	_, err := os.Stat(p)
+	return err == nil
+}
+
 // currentKubeContext returns the name of the active kubectl context.
 func currentKubeContext() string {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
@@ -511,7 +573,7 @@ func resolveAppPorts(cfg *devcontainer.Config) {
 // startDevcontainer starts the devcontainer and attaches an interactive shell.
 func startDevcontainer(ctx context.Context, p interact.Printer, dcConfigPath, deploymentName string, portMappings []devcontainer.PortMapping, r io.Reader) error {
 	// <workspace>/.devcontainer/bridge-<name>/devcontainer.json → <workspace>
-	workspaceFolder := filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath)))
+	workspaceFolder, _ := filepath.Abs(filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath))))
 	dcClient := &devcontainer.Client{
 		WorkspaceFolder: workspaceFolder,
 		ConfigPath:      dcConfigPath,
