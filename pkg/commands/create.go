@@ -143,8 +143,13 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	proxyImage := c.String("proxy-image")
 	featureRef := c.String("feature-ref")
 	sourcePath := c.String("source")
-	if featureRef == defaultFeatureRef && Version == "dev" {
-		featureRef = devFeatureRef
+	if featureRef == defaultFeatureRef {
+		if Version == "dev" {
+			featureRef = devFeatureRef
+		} else if strings.HasPrefix(Version, "edge-") {
+			sha := strings.TrimPrefix(Version, "edge-")
+			featureRef = "ghcr.io/vercel/bridge/bridge-feature:" + sha
+		}
 	}
 
 	r := c.Root().Reader

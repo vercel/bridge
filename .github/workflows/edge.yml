@@ -4,15 +4,10 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'pkg/**'
-      - 'cmd/**'
-      - 'api/**'
-      - 'go.mod'
-      - 'go.sum'
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   build:
@@ -54,6 +49,35 @@ jobs:
         with:
           name: bridge-${{ matrix.goos }}-${{ matrix.goarch }}
           path: bridge-*
+
+  publish-feature:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish Features
+        uses: devcontainers/action@v1
+        with:
+          publish-features: 'true'
+          base-path-to-features: './features'
+          generate-docs: 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install oras
+        uses: oras-project/setup-oras@v1
+
+      - name: Tag feature with commit SHA
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          oras tag ghcr.io/vercel/bridge/bridge-feature:latest "$SHA"
 
   release:
     needs: build
