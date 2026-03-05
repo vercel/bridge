@@ -160,6 +160,7 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 	}
 
 	deployName := resources.FindDeploymentName(bundle)
+	logger.Info("Bridge deployment prepared", "deployment", deployName, "source", sourceName)
 
 	// Tear down any existing bridge for this source before creating a new one.
 	if req.Force {
@@ -170,6 +171,7 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 	}
 
 	if err := resources.Save(ctx, l.client, l.dynClient, bundle); err != nil {
+		logger.Error("Failed to save bridge resources", "deployment", deployName, "error", err)
 		_ = resources.DeleteBridgeResources(ctx, l.client, targetNS, deployName, req.DeviceId)
 		return nil, err
 	}
@@ -184,6 +186,7 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 	// Wait for the pod to be ready.
 	pod, err := kube.WaitForPod(ctx, l.client, targetNS, meta.DeploymentSelector(deployName), 2*time.Minute)
 	if err != nil {
+		logger.Error("Pod failed to become ready", "deployment", deployName, "error", err)
 		return nil, fmt.Errorf("failed waiting for pod: %w", err)
 	}
 
@@ -197,6 +200,8 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 		}
 	}
 
+	logger.Info("Bridge created successfully", "deployment", deployName, "pod", pod.Name, "grpc_port", grpcPort)
+
 	return &bridgev1.CreateBridgeResponse{
 		Namespace:        targetNS,
 		PodName:          pod.Name,
@@ -209,6 +214,8 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 }
 
 func (l *adminService) ListBridges(ctx context.Context, req *bridgev1.ListBridgesRequest) (*bridgev1.ListBridgesResponse, error) {
+	slog.Debug("ListBridges", "device_id", req.DeviceId)
+
 	if req.DeviceId == "" {
 		return nil, fmt.Errorf("device_id is required")
 	}
@@ -238,6 +245,8 @@ func (l *adminService) ListBridges(ctx context.Context, req *bridgev1.ListBridge
 		})
 	}
 
+	slog.Debug("ListBridges result", "device_id", req.DeviceId, "count", len(bridges))
+
 	return &bridgev1.ListBridgesResponse{Bridges: bridges}, nil
 }
 
@@ -255,6 +264,7 @@ func (l *adminService) DeleteBridge(ctx context.Context, req *bridgev1.DeleteBri
 	slog.Info("Deleting bridge", "device_id", req.DeviceId, "namespace", req.Namespace, "name", req.Name)
 
 	if err := resources.DeleteBridgeResources(ctx, l.client, req.Namespace, req.Name, req.DeviceId); err != nil {
+		slog.Error("Failed to delete bridge", "device_id", req.DeviceId, "namespace", req.Namespace, "name", req.Name, "error", err)
 		return nil, err
 	}
 

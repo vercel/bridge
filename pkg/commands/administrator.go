@@ -131,6 +131,7 @@ type administratorServer struct {
 func (s *administratorServer) CreateBridge(ctx context.Context, req *bridgev1.CreateBridgeRequest) (*bridgev1.CreateBridgeResponse, error) {
 	resp, err := s.admin.CreateBridge(ctx, req)
 	if err != nil {
+		slog.Error("CreateBridge failed", "device_id", req.DeviceId, "error", err)
 		return nil, grpcError(err)
 	}
 	return resp, nil
@@ -139,6 +140,7 @@ func (s *administratorServer) CreateBridge(ctx context.Context, req *bridgev1.Cr
 func (s *administratorServer) ListBridges(ctx context.Context, req *bridgev1.ListBridgesRequest) (*bridgev1.ListBridgesResponse, error) {
 	resp, err := s.admin.ListBridges(ctx, req)
 	if err != nil {
+		slog.Error("ListBridges failed", "device_id", req.DeviceId, "error", err)
 		return nil, grpcError(err)
 	}
 	return resp, nil
@@ -147,6 +149,7 @@ func (s *administratorServer) ListBridges(ctx context.Context, req *bridgev1.Lis
 func (s *administratorServer) DeleteBridge(ctx context.Context, req *bridgev1.DeleteBridgeRequest) (*bridgev1.DeleteBridgeResponse, error) {
 	resp, err := s.admin.DeleteBridge(ctx, req)
 	if err != nil {
+		slog.Error("DeleteBridge failed", "device_id", req.DeviceId, "name", req.Name, "error", err)
 		return nil, grpcError(err)
 	}
 	return resp, nil

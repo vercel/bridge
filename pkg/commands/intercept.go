@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -98,6 +99,15 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 				copyFiles = append(copyFiles, part)
 			}
 		}
+	}
+
+	if u, err := user.Current(); err == nil {
+		slog.Info("Intercept process starting",
+			"user", u.Username,
+			"home", u.HomeDir,
+		)
+	} else {
+		slog.Info("Intercept process starting", "user_lookup_error", err)
 	}
 
 	if len(forwardDomains) > 0 {

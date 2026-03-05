@@ -50,7 +50,7 @@ func WaitForReady(ctx context.Context, dc *devcontainer.Client) error {
 	}
 
 	if containerID == "" {
-		return fmt.Errorf("devcontainer not found within %s", timeout)
+		return fmt.Errorf("failed to start your devcontainer within %s", timeout)
 	}
 
 	log := readLog(ctx, containerID, logPath)
