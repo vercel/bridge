@@ -305,6 +305,7 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	}
 	// Use the user-specified listen port, or fall back to the PORT env var
 	// from the source deployment, or 3000 as a last resort.
+	slog.Debug("EnvVars from create response", "env_vars", createResp.EnvVars)
 	appPort := c.Int("listen")
 	if appPort == 0 {
 		if portStr, ok := createResp.EnvVars["PORT"]; ok {
@@ -409,6 +410,7 @@ func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef s
 		featureOpts["copyFiles"] = strings.Join(resp.VolumeMountPaths, ",")
 	}
 	cfg.SetFeature(featureRef, featureOpts)
+	cfg.AppPort = devcontainer.PortMappings{{HostPort: appPort, ContainerPort: appPort}}
 	cfg.EnsureCapAdd("NET_ADMIN")
 	cfg.EnsureRunArgs("-l", labelBridgeDeployment+"="+dcName)
 	cfg.EnsureContainerEnv("WORKLOAD_NAME", deploymentName)
