@@ -18,6 +18,7 @@ import (
 	"github.com/vercel/bridge/pkg/admin"
 	"github.com/vercel/bridge/pkg/k8s/kube"
 	"github.com/vercel/bridge/pkg/k8s/resources"
+	"github.com/vercel/bridge/pkg/logging"
 
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -70,6 +71,12 @@ func Administrator() *cli.Command {
 }
 
 func runAdministrator(ctx context.Context, c *cli.Command) error {
+	// Default log output to stdout so logs are visible in container environments.
+	if len(c.Root().StringSlice("log-paths")) == 0 {
+		level := parseLogLevel(c.Root().String("log-level"))
+		logging.Setup(level, []string{"stdout"})
+	}
+
 	addr := c.String("addr")
 
 	kubeCfg := kube.Config{

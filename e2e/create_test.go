@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"github.com/urfave/cli/v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -84,6 +85,27 @@ func createWorkspace(t *testing.T, bridgeBin, projectRoot string, cluster *testu
 	}
 	require.NoError(t, cfg.Save(filepath.Join(dcDir, "devcontainer.json")))
 	return dir
+}
+
+// newBridgeCreateApp returns a configured CLI app and builds the base args for
+// `bridge create --connect`. Callers append test-specific args (e.g. deployment
+// name, --source, --admin-addr) before the base args.
+func (s *CreateSuite) newBridgeCreateApp(reader io.Reader, writer io.Writer, workspaceDir string, extraArgs ...string) (*cli.Command, []string) {
+	app := commands.NewApp()
+	app.Reader = reader
+	app.Writer = writer
+
+	args := []string{"bridge", "create"}
+	args = append(args, extraArgs...)
+	args = append(args,
+		"-n", testutil.UserserviceNamespace,
+		"--yes",
+		"--connect",
+		"--feature-ref", "../local-features/bridge-feature",
+		"--container-binary-path", s.bridgeBin,
+		"-f", filepath.Join(workspaceDir, ".devcontainer", "devcontainer.json"),
+	)
+	return app, args
 }
 
 func (s *CreateSuite) SetupSuite() {
@@ -189,22 +211,13 @@ func (s *CreateSuite) TestFullstackCreate() {
 
 	adminAddr := fmt.Sprintf("k8spf:///%s.%s:9090", s.adminPod.Name, testutil.AdministratorNamespace)
 
-	app := commands.NewApp()
-	app.Reader = stdinR
-	app.Writer = stdoutW
+	app, args := s.newBridgeCreateApp(stdinR, stdoutW, s.workspaceDir,
+		testutil.UserserviceName, "--admin-addr", adminAddr)
 
 	errCh := make(chan error, 1)
 	go func() {
 		defer stdoutW.Close()
-		errCh <- app.Run(s.ctx, []string{
-			"bridge", "create", testutil.UserserviceName,
-			"-n", testutil.UserserviceNamespace,
-			"--admin-addr", adminAddr,
-			"--yes",
-			"--connect",
-			"--feature-ref", "../local-features/bridge-feature",
-			"-f", filepath.Join(s.workspaceDir, ".devcontainer", "devcontainer.json"),
-		})
+		errCh <- app.Run(s.ctx, args)
 	}()
 
 	// Log stdout from bridge create in the background.
@@ -316,19 +329,10 @@ func (s *CreateSuite) TestCreateFailsOnInterceptCrash() {
 	require.NoError(t, err)
 	defer stdinW.Close()
 
-	app := commands.NewApp()
-	app.Reader = stdinR
-	app.Writer = io.Discard
+	app, args := s.newBridgeCreateApp(stdinR, io.Discard, dir,
+		testutil.UserserviceName, "--admin-addr", adminAddr)
 
-	err = app.Run(s.ctx, []string{
-		"bridge", "create", testutil.UserserviceName,
-		"-n", testutil.UserserviceNamespace,
-		"--admin-addr", adminAddr,
-		"--yes",
-		"--connect",
-		"--feature-ref", "../local-features/bridge-feature",
-		"-f", filepath.Join(dir, ".devcontainer", "devcontainer.json"),
-	})
+	err = app.Run(s.ctx, args)
 
 	require.Error(t, err)
 	t.Logf("create error: %v", err)
@@ -428,22 +432,13 @@ spec:
 	stdoutR, stdoutW, err := os.Pipe()
 	require.NoError(t, err)
 
-	app := commands.NewApp()
-	app.Reader = stdinR
-	app.Writer = stdoutW
+	app, args := s.newBridgeCreateApp(stdinR, stdoutW, dir,
+		"--source", manifestDir)
 
 	errCh := make(chan error, 1)
 	go func() {
 		defer stdoutW.Close()
-		errCh <- app.Run(s.ctx, []string{
-			"bridge", "create",
-			"-n", testutil.UserserviceNamespace,
-			"--source", manifestDir,
-			"--yes",
-			"--connect",
-			"--feature-ref", "../local-features/bridge-feature",
-			"-f", filepath.Join(dir, ".devcontainer", "devcontainer.json"),
-		})
+		errCh <- app.Run(s.ctx, args)
 	}()
 
 	go func() {
