@@ -31,11 +31,10 @@ func FindFreePortFrom(port int) (int, error) {
 // portFree returns true if the given port is not bound on either loopback or
 // all interfaces.
 func portFree(port int) bool {
-	addr := fmt.Sprintf(":%d", port)
-	for _, host := range []string{"127.0.0.1", ""} {
-		if host != "" {
-			addr = fmt.Sprintf("%s:%d", host, port)
-		}
+	for _, addr := range []string{
+		fmt.Sprintf("127.0.0.1:%d", port),
+		fmt.Sprintf(":%d", port),
+	} {
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
 			return false
