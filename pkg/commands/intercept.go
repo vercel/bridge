@@ -44,12 +44,12 @@ func Intercept() *cli.Command {
 				Name:    "app-port",
 				Usage:   "Local app port to forward inbound requests to",
 				Value:   3000,
-				Sources: cli.EnvVars("BRIDGE_APP_PORT"),
+				Sources: cli.EnvVars("BRIDGE_APP_PORT", "APP_PORT"),
 			},
 			&cli.StringSliceFlag{
 				Name:    "forward-domains",
 				Usage:   "Domain patterns to intercept via DNS (e.g., '*.example.com')",
-				Sources: cli.EnvVars("BRIDGE_FORWARD_DOMAINS"),
+				Sources: cli.EnvVars("BRIDGE_FORWARD_DOMAINS", "FORWARD_DOMAINS"),
 			},
 			&cli.IntFlag{
 				Name:  "dns-port",
@@ -59,7 +59,7 @@ func Intercept() *cli.Command {
 			&cli.StringSliceFlag{
 				Name:    "copy-files",
 				Usage:   "File paths to copy from the bridge proxy into the devcontainer",
-				Sources: cli.EnvVars("BRIDGE_COPY_FILES"),
+				Sources: cli.EnvVars("BRIDGE_COPY_FILES", "COPY_FILES"),
 			},
 			&cli.StringSliceFlag{
 				Name:    "ignore-env-vars",
