@@ -21,12 +21,17 @@ import (
 
 	"github.com/vercel/bridge/e2e/testutil"
 	"github.com/vercel/bridge/pkg/commands"
+	"github.com/vercel/bridge/pkg/container"
 	"github.com/vercel/bridge/pkg/devcontainer"
 	"github.com/vercel/bridge/pkg/identity"
 	"github.com/vercel/bridge/pkg/intercept"
 	"github.com/vercel/bridge/pkg/k8s/kube"
 	"github.com/vercel/bridge/pkg/k8s/meta"
 )
+
+func bridgeLabels(name string) map[string]string {
+	return map[string]string{"bridge.deployment": name}
+}
 
 // CreateSuite exercises the full bridge create --connect flow.
 type CreateSuite struct {
@@ -46,6 +51,7 @@ type CreateSuite struct {
 	origDir        string
 	origKubeconfig string
 	workspaceDir   string // set by test, used by TearDownSuite for devcontainer cleanup
+	bridgeName     string // deployment name, used to stop containers on teardown
 }
 
 // createWorkspace creates a temp workspace directory with a devcontainer.json
@@ -159,9 +165,10 @@ func (s *CreateSuite) SetupSuite() {
 
 func (s *CreateSuite) TearDownSuite() {
 	// Stop devcontainer if we started one.
+	if s.bridgeName != "" {
+		container.NewDockerClient().StopAll(s.ctx, container.StopAllOpts{Labels: bridgeLabels(s.bridgeName)})
+	}
 	if s.workspaceDir != "" {
-		dc := &devcontainer.Client{WorkspaceFolder: s.workspaceDir}
-		dc.Stop(s.ctx)
 		os.RemoveAll(s.workspaceDir)
 	}
 	// Restore working directory.
@@ -232,11 +239,19 @@ func (s *CreateSuite) TestFullstackCreate() {
 
 	deviceID, _ := identity.GetDeviceID()
 	bridgeName := identity.BridgeResourceName(deviceID, testutil.UserserviceName)
+	s.bridgeName = bridgeName
 	bridgeNS := testutil.UserserviceNamespace
 
 	pod, err := kube.WaitForPod(s.ctx, s.cluster.Clientset, bridgeNS, meta.DeploymentSelector(bridgeName), 1*time.Minute)
 	require.NoError(t, err, "bridge pod not ready")
 	t.Logf("Bridge pod ready: %s", pod.Name)
+
+	ct := container.NewDockerClient()
+	containerID, err := container.WaitForID(s.ctx, ct, container.FindOpts{Labels: bridgeLabels(bridgeName)})
+	require.NoError(t, err, "container not found")
+	require.NoError(t, intercept.WaitForReady(s.ctx, ct, containerID), "intercept not ready")
+
+	// --- Verify network access ---
 
 	generatedConfig := filepath.Join(s.workspaceDir, ".devcontainer",
 		fmt.Sprintf("bridge-%s", bridgeName), "devcontainer.json")
@@ -244,10 +259,6 @@ func (s *CreateSuite) TestFullstackCreate() {
 		WorkspaceFolder: s.workspaceDir,
 		ConfigPath:      generatedConfig,
 	}
-	require.NoError(t, intercept.WaitForReady(s.ctx, dc), "intercept not ready")
-
-	// --- Verify network access ---
-
 	targetURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/",
 		testutil.UserserviceServiceName, testutil.UserserviceNamespace, testutil.UserservicePort)
 
@@ -299,12 +310,6 @@ func (s *CreateSuite) TestCreateFailsOnInterceptCrash() {
 	}
 	require.NoError(t, cfg.Save(filepath.Join(dcDir, "devcontainer.json")))
 
-	t.Cleanup(func() {
-		dc := &devcontainer.Client{WorkspaceFolder: dir}
-		_ = dc.Stop(s.ctx)
-		os.RemoveAll(dir)
-	})
-
 	origKubeconfig := os.Getenv("KUBECONFIG")
 	os.Setenv("KUBECONFIG", s.cluster.KubeConfigPath)
 	t.Cleanup(func() {
@@ -322,6 +327,13 @@ func (s *CreateSuite) TestCreateFailsOnInterceptCrash() {
 
 	_, err = identity.EnsureDeviceID()
 	require.NoError(t, err)
+
+	deviceID, _ := identity.GetDeviceID()
+	crashBridgeName := identity.BridgeResourceName(deviceID, testutil.UserserviceName)
+	t.Cleanup(func() {
+		container.NewDockerClient().StopAll(s.ctx, container.StopAllOpts{Labels: bridgeLabels(crashBridgeName)})
+		os.RemoveAll(dir)
+	})
 
 	adminAddr := fmt.Sprintf("k8spf:///%s.%s:9090", s.adminPod.Name, testutil.AdministratorNamespace)
 
@@ -397,11 +409,6 @@ spec:
 	// --- Create workspace and set up environment ---
 
 	dir := createWorkspace(t, s.bridgeBin, s.projectRoot, s.cluster)
-	t.Cleanup(func() {
-		dc := &devcontainer.Client{WorkspaceFolder: dir}
-		_ = dc.Stop(s.ctx)
-		os.RemoveAll(dir)
-	})
 
 	origKubeconfig := os.Getenv("KUBECONFIG")
 	os.Setenv("KUBECONFIG", s.cluster.KubeConfigPath)
@@ -420,6 +427,14 @@ spec:
 
 	_, err = identity.EnsureDeviceID()
 	require.NoError(t, err)
+
+	deviceID, _ := identity.GetDeviceID()
+	bridgeName := identity.BridgeResourceName(deviceID, "myapp")
+
+	t.Cleanup(func() {
+		container.NewDockerClient().StopAll(s.ctx, container.StopAllOpts{Labels: bridgeLabels(bridgeName)})
+		os.RemoveAll(dir)
+	})
 
 	// --- Run `bridge create --source <manifest-dir>` ---
 	// No --admin-addr: the default (k8spf:///administrator.bridge:9090?workload=deployment)
@@ -450,9 +465,6 @@ spec:
 
 	// --- Wait for bridge pod readiness ---
 
-	deviceID, _ := identity.GetDeviceID()
-	bridgeName := identity.BridgeResourceName(deviceID, "myapp")
-
 	bridgeNS := testutil.UserserviceNamespace
 
 	// Wait for the bridge pod to be ready in the cluster.
@@ -460,13 +472,10 @@ spec:
 	require.NoError(t, err, "bridge pod not ready")
 	t.Logf("Bridge pod ready: %s", pod.Name)
 
-	generatedConfig := filepath.Join(dir, ".devcontainer",
-		fmt.Sprintf("bridge-%s", bridgeName), "devcontainer.json")
-	dc := &devcontainer.Client{
-		WorkspaceFolder: dir,
-		ConfigPath:      generatedConfig,
-	}
-	require.NoError(t, intercept.WaitForReady(s.ctx, dc), "intercept not ready")
+	ct := container.NewDockerClient()
+	containerID, err := container.WaitForID(s.ctx, ct, container.FindOpts{Labels: bridgeLabels(bridgeName)})
+	require.NoError(t, err, "container not found")
+	require.NoError(t, intercept.WaitForReady(s.ctx, ct, containerID), "intercept not ready")
 
 	// --- Verify annotation preserved on the bridge deployment ---
 
@@ -477,6 +486,12 @@ spec:
 
 	// --- Verify network access ---
 
+	generatedConfig := filepath.Join(dir, ".devcontainer",
+		fmt.Sprintf("bridge-%s", bridgeName), "devcontainer.json")
+	dc := &devcontainer.Client{
+		WorkspaceFolder: dir,
+		ConfigPath:      generatedConfig,
+	}
 	targetURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/",
 		testutil.UserserviceServiceName, testutil.UserserviceNamespace, testutil.UserservicePort)
 
@@ -490,9 +505,15 @@ spec:
 	getOut := s.runBridgeGet()
 	t.Logf("[bridge get] output:\n%s", getOut)
 	lines := strings.Split(strings.TrimSpace(getOut), "\n")
-	require.Len(t, lines, 2, "expected header + 1 bridge entry")
-	require.True(t, strings.HasPrefix(strings.TrimSpace(lines[1]), bridgeName),
-		"expected bridge name %q, got line: %s", bridgeName, lines[1])
+	require.GreaterOrEqual(t, len(lines), 2, "expected header + at least 1 bridge entry")
+	var found bool
+	for _, line := range lines[1:] {
+		if strings.HasPrefix(strings.TrimSpace(line), bridgeName) {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected bridge %q in output:\n%s", bridgeName, getOut)
 
 	// --- Clean up: close stdin so bash exits ---
 

@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/urfave/cli/v3"
+	"github.com/vercel/bridge/pkg/container"
 	"github.com/vercel/bridge/pkg/identity"
 	"github.com/vercel/bridge/pkg/interact"
 	"k8s.io/client-go/tools/clientcmd"
@@ -50,8 +50,9 @@ func runDebug(ctx context.Context, c *cli.Command) error {
 	collectDeviceIdentity(&b)
 	collectKubeContext(&b)
 	collectHostLogs(&b)
-	containers := collectRunningContainers(ctx, &b)
-	collectContainerDiagnostics(ctx, &b, containers)
+	ct := container.NewDockerClient()
+	containers := collectRunningContainers(ctx, &b, ct)
+	collectContainerDiagnostics(ctx, &b, ct, containers)
 
 	if c.Bool("stdout") {
 		fmt.Fprint(c.Root().Writer, b.String())
@@ -141,36 +142,23 @@ func collectHostLogs(b *strings.Builder) {
 }
 
 // collectRunningContainers lists bridge containers and returns their IDs.
-func collectRunningContainers(ctx context.Context, b *strings.Builder) []string {
-	cmd := exec.CommandContext(ctx, "docker", "ps",
-		"--filter", "label="+containerLabelKeyBridgeDeployment,
-		"--format", "{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Label \"bridge.deployment\"}}",
-	)
-	out, err := cmd.Output()
+func collectRunningContainers(ctx context.Context, b *strings.Builder, ct container.Client) []string {
+	output, ids, err := ct.List(ctx, container.ListOpts{
+		Labels: map[string]string{labelBridgeDeployment: ""},
+	})
 	if err != nil {
 		writeSection(b, "RUNNING BRIDGE CONTAINERS", fmt.Sprintf("error: %v", err))
 		return nil
 	}
-
-	output := strings.TrimSpace(string(out))
 	if output == "" {
 		writeSection(b, "RUNNING BRIDGE CONTAINERS", "(none)")
 		return nil
 	}
-
 	writeSection(b, "RUNNING BRIDGE CONTAINERS", output)
-
-	// Extract container IDs (first column).
-	var ids []string
-	for _, line := range strings.Split(output, "\n") {
-		if id, _, ok := strings.Cut(line, "\t"); ok && id != "" {
-			ids = append(ids, id)
-		}
-	}
 	return ids
 }
 
-func collectContainerDiagnostics(ctx context.Context, b *strings.Builder, containerIDs []string) {
+func collectContainerDiagnostics(ctx context.Context, b *strings.Builder, ct container.Client, containerIDs []string) {
 	for _, id := range containerIDs {
 		short := id
 		if len(short) > 12 {
@@ -180,27 +168,25 @@ func collectContainerDiagnostics(ctx context.Context, b *strings.Builder, contai
 		sectionPrefix := fmt.Sprintf("CONTAINER %s", short)
 
 		// Intercept log
-		writeSection(b, sectionPrefix+" INTERCEPT LOG", dockerExec(ctx, id, "cat", "/tmp/bridge-intercept.log"))
+		writeSection(b, sectionPrefix+" INTERCEPT LOG", ctExec(ctx, ct, id, "cat", "/tmp/bridge-intercept.log"))
 
 		// iptables rules
-		writeSection(b, sectionPrefix+" IPTABLES", dockerExec(ctx, id, "iptables", "-t", "nat", "-L", "BRIDGE_INTERCEPT", "-n", "-v"))
+		writeSection(b, sectionPrefix+" IPTABLES", ctExec(ctx, ct, id, "iptables", "-t", "nat", "-L", "BRIDGE_INTERCEPT", "-n", "-v"))
 
 		// Bridge env
-		writeSection(b, sectionPrefix+" BRIDGE ENV", dockerExec(ctx, id, "cat", "/etc/profile.d/bridge.sh"))
+		writeSection(b, sectionPrefix+" BRIDGE ENV", ctExec(ctx, ct, id, "cat", "/etc/profile.d/bridge.sh"))
 
 		// Port listeners
-		writeSection(b, sectionPrefix+" PORT LISTENERS", dockerExec(ctx, id, "sh", "-c", "ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null"))
+		writeSection(b, sectionPrefix+" PORT LISTENERS", ctExec(ctx, ct, id, "sh", "-c", "ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null"))
 	}
 }
 
-func dockerExec(ctx context.Context, containerID string, args ...string) string {
-	cmdArgs := append([]string{"exec", containerID}, args...)
-	cmd := exec.CommandContext(ctx, "docker", cmdArgs...)
-	out, err := cmd.CombinedOutput()
+func ctExec(ctx context.Context, ct container.Client, containerID string, args ...string) string {
+	out, err := ct.Exec(ctx, containerID, args...)
 	if err != nil {
-		return fmt.Sprintf("error: %v\n%s", err, string(out))
+		return fmt.Sprintf("error: %v\n%s", err, out)
 	}
-	result := strings.TrimSpace(string(out))
+	result := strings.TrimSpace(out)
 	if result == "" {
 		return "(empty)"
 	}

@@ -226,6 +226,10 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("failed to setup iptables: %w", err)
 	}
 
+	// Start the accept loop before signalling readiness so that incoming
+	// connections are handled immediately.
+	proxyComp.Start()
+
 	// Create cancellable context for signal handling
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -248,7 +252,7 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	slog.Info("Intercept ready")
 
 	// Block until context is cancelled
-	proxyComp.Run(ctx)
+	proxyComp.Wait(ctx)
 
 	// Cleanup in order: DNS → resolv.conf → registry → proxy
 	if dns != nil {

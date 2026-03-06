@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 )
 
 // Client wraps the devcontainer CLI.
@@ -24,21 +23,79 @@ type Client struct {
 	Stderr io.Writer
 }
 
-// Up runs `devcontainer up`, removing any existing container so config
-// changes (e.g. new bridge server address) take effect.
-func (c *Client) Up(ctx context.Context) error {
+// LogFormat controls the devcontainer CLI log output format.
+type LogFormat string
+
+const (
+	LogFormatText LogFormat = "text"
+	LogFormatJSON LogFormat = "json"
+)
+
+// UpOpts configures a devcontainer up invocation.
+type UpOpts struct {
+	// LogFormat sets the --log-format flag. Defaults to LogFormatText.
+	LogFormat LogFormat
+}
+
+// BuildHandle represents a running devcontainer build process.
+type BuildHandle interface {
+	// Output returns a reader for the combined stdout/stderr of the process.
+	Output() io.Reader
+	// Wait waits for the process to exit and returns any error.
+	// The caller should drain Output() before calling Wait.
+	Wait() error
+}
+
+// Up starts `devcontainer up` in the background and returns a BuildHandle.
+// The caller should read from Output() until EOF, then call Wait() to
+// collect the exit status.
+func (c *Client) Up(ctx context.Context, opts UpOpts) (BuildHandle, error) {
 	args := []string{"up", "--workspace-folder", c.WorkspaceFolder, "--remove-existing-container"}
 	if c.ConfigPath != "" {
 		args = append(args, "--config", c.ConfigPath)
 	}
+	logFmt := opts.LogFormat
+	if logFmt == "" {
+		logFmt = LogFormatText
+	}
+	args = append(args, "--log-format", string(logFmt))
 	args = append(args, c.UpArgs...)
 	cmd := exec.CommandContext(ctx, "devcontainer", args...)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("devcontainer up: %w\n%s", err, out)
+
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+
+	if err := cmd.Start(); err != nil {
+		pr.Close()
+		pw.Close()
+		return nil, fmt.Errorf("devcontainer up: %w", err)
 	}
-	return nil
+
+	h := &buildHandle{output: pr, done: make(chan struct{})}
+
+	go func() {
+		h.waitErr = cmd.Wait()
+		pw.Close()
+		close(h.done)
+	}()
+
+	return h, nil
+}
+
+type buildHandle struct {
+	output  *io.PipeReader
+	done    chan struct{}
+	waitErr error
+}
+
+func (h *buildHandle) Output() io.Reader {
+	return h.output
+}
+
+func (h *buildHandle) Wait() error {
+	<-h.done
+	return h.waitErr
 }
 
 // Exec runs `devcontainer exec` with the given command.
@@ -80,30 +137,6 @@ func (c *Client) ExecOutput(ctx context.Context, cmdArgs []string) (string, erro
 	cmd := exec.CommandContext(ctx, "devcontainer", args...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
-}
-
-// ContainerID returns the running container ID for this devcontainer.
-func (c *Client) ContainerID(ctx context.Context) (string, error) {
-	label := fmt.Sprintf("devcontainer.local_folder=%s", c.WorkspaceFolder)
-	cmd := exec.CommandContext(ctx, "docker", "ps", "-q", "--filter", "label="+label)
-	out, err := cmd.Output()
-	if err != nil || len(out) == 0 {
-		return "", fmt.Errorf("no running devcontainer found for workspace %s", c.WorkspaceFolder)
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// Stop stops the devcontainer by running `docker stop` on the container.
-func (c *Client) Stop(ctx context.Context) error {
-	containerID, err := c.ContainerID(ctx)
-	if err != nil {
-		return err
-	}
-	stop := exec.CommandContext(ctx, "docker", "stop", containerID)
-	if stopOut, err := stop.CombinedOutput(); err != nil {
-		return fmt.Errorf("docker stop: %w\n%s", err, stopOut)
-	}
-	return nil
 }
 
 func (c *Client) stdinOrDefault() io.Reader {

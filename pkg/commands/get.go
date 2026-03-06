@@ -42,14 +42,20 @@ func runGet(ctx context.Context, c *cli.Command) error {
 	name := c.StringArg("name")
 	adminAddr := c.String("admin-addr")
 
-	p := interact.NewPrinter(c.Root().Writer)
+	w := c.Root().Writer
+	p := interact.NewPrinter(w)
 
 	deviceID, err := identity.GetDeviceID()
 	if err != nil {
 		return fmt.Errorf("failed to get device identity: %w", err)
 	}
 
+	sp := interact.NewSpinner(w, "Connecting to bridge administrator...")
+	ctx = interact.WithSpinner(ctx, sp)
+	go sp.Start(ctx)
+
 	adm, _, err := connectAdmin(ctx, adminAddr, deviceID)
+	sp.Stop()
 	if err != nil {
 		return err
 	}

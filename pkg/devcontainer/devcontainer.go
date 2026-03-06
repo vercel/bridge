@@ -171,6 +171,14 @@ func (c *Config) EnsureContainerEnv(k, v string) {
 	c.ContainerEnv[k] = v
 }
 
+// EnsureRemoteEnv sets a key in RemoteEnv, creating the map if needed.
+func (c *Config) EnsureRemoteEnv(k, v string) {
+	if c.RemoteEnv == nil {
+		c.RemoteEnv = make(map[string]string)
+	}
+	c.RemoteEnv[k] = v
+}
+
 // EnsureRunArgs appends additional docker run arguments.
 func (c *Config) EnsureRunArgs(args ...string) {
 	c.RunArgs = append(c.RunArgs, args...)

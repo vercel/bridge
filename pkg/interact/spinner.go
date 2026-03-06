@@ -2,6 +2,8 @@ package interact
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"sync/atomic"
 	"time"
 
@@ -9,6 +11,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// Spinner displays a progress indicator with a title.
+type Spinner interface {
+	SetTitle(title string)
+	Start(ctx context.Context) error
+	Stop()
+}
 
 // bridgeFrames animates a deck being laid between two ornate pillars.
 var bridgeFrames = bubbles.Spinner{
@@ -43,28 +52,27 @@ var bridgeFrames = bubbles.Spinner{
 	FPS: time.Second / 8,
 }
 
-// Spinner displays an animated spinner with a title in the terminal.
-type Spinner struct {
+// prettySpinner displays an animated spinner with a title in the terminal.
+type prettySpinner struct {
 	title *atomic.Value
 	prog  *tea.Program
 	done  chan struct{}
 }
 
-// NewSpinner creates a new spinner. Call Start to display it.
-func NewSpinner(title string) *Spinner {
+// NewPrettySpinner creates a new animated spinner. Call Start to display it.
+func NewPrettySpinner(title string) Spinner {
 	t := &atomic.Value{}
 	t.Store(title)
-	return &Spinner{title: t, done: make(chan struct{})}
+	return &prettySpinner{title: t, done: make(chan struct{})}
 }
 
-// SetTitle updates the spinner title while it is running.
-func (s *Spinner) SetTitle(title string) {
+func (s *prettySpinner) SetTitle(title string) {
 	s.title.Store(title)
 }
 
-// Start begins displaying the spinner. It blocks until Stop is called.
-// Typically run in a goroutine.
-func (s *Spinner) Start(ctx context.Context) error {
+func (s *prettySpinner) Start(ctx context.Context) error {
+	s.done = make(chan struct{})
+
 	theme := NewTheme()
 	model := &spinnerModel{
 		spinner:    bubbles.New(bubbles.WithSpinner(bridgeFrames), bubbles.WithStyle(theme.Spinner)),
@@ -79,11 +87,46 @@ func (s *Spinner) Start(ctx context.Context) error {
 	return err
 }
 
-// Stop stops the spinner and waits for it to fully exit.
-func (s *Spinner) Stop() {
+func (s *prettySpinner) Stop() {
 	if s.prog != nil {
 		s.prog.Send(stopMsg{})
 		<-s.done
+		s.prog = nil
+	}
+}
+
+// plainSpinner prints the title with "..." and does not animate.
+type plainSpinner struct {
+	w     io.Writer
+	title *atomic.Value
+	done  chan struct{}
+}
+
+// NewPlainSpinner creates a non-animated spinner for agent output.
+func NewPlainSpinner(w io.Writer, title string) Spinner {
+	t := &atomic.Value{}
+	t.Store(title)
+	return &plainSpinner{w: w, title: t, done: make(chan struct{})}
+}
+
+func (s *plainSpinner) SetTitle(title string) {
+	s.title.Store(title)
+	fmt.Fprintf(s.w, "%s...\n", title)
+}
+
+func (s *plainSpinner) Start(_ context.Context) error {
+	s.done = make(chan struct{})
+	t, _ := s.title.Load().(string)
+	fmt.Fprintf(s.w, "%s...\n", t)
+	<-s.done
+	return nil
+}
+
+func (s *plainSpinner) Stop() {
+	select {
+	case <-s.done:
+	default:
+		close(s.done)
 	}
 }
 

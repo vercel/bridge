@@ -3,14 +3,11 @@ package commands
 import (
 	"context"
 	"log/slog"
-	"os"
 	"strings"
-	"sync"
 
 	"github.com/urfave/cli/v3"
 	"github.com/vercel/bridge/pkg/identity"
 	"github.com/vercel/bridge/pkg/logging"
-	"golang.org/x/term"
 )
 
 var Version = "dev"
@@ -88,12 +85,6 @@ func (f *funcValueSource) GoString() string { return "&funcValueSource{}" }
 func FuncSource(fn func() string) cli.ValueSource {
 	return &funcValueSource{fn: fn}
 }
-
-// isAgent returns true when stdin is not a terminal, indicating the command
-// is being driven by an automated agent rather than a human.
-var isAgent = sync.OnceValue(func() bool {
-	return !term.IsTerminal(int(os.Stdin.Fd()))
-})
 
 func parseLogLevel(s string) slog.Level {
 	switch strings.ToLower(s) {

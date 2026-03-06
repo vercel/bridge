@@ -99,9 +99,8 @@ func (p *ProxyComponent) SetupIptables() error {
 	return nil
 }
 
-// Run starts the transparent proxy accept loop and blocks until the context
-// is cancelled.
-func (p *ProxyComponent) Run(ctx context.Context) {
+// Start begins the transparent proxy accept loop in the background.
+func (p *ProxyComponent) Start() {
 	slog.Info("Transparent proxy listening", "port", p.port)
 
 	go func() {
@@ -114,7 +113,10 @@ func (p *ProxyComponent) Run(ctx context.Context) {
 			p.handleOutbound(conn)
 		}
 	}()
+}
 
+// Wait blocks until the context is cancelled.
+func (p *ProxyComponent) Wait(ctx context.Context) {
 	<-ctx.Done()
 }
 

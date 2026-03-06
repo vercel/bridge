@@ -16,6 +16,8 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/vercel/bridge/e2e/testutil"
+	"github.com/vercel/bridge/pkg/container"
+	"github.com/vercel/bridge/pkg/intercept"
 )
 
 // InterceptSuite exercises the core intercept → proxy → DNS → tunnel data path
@@ -198,25 +200,30 @@ func (s *InterceptSuite) TestIntercept() {
 	serverAddr := proxyIP + ":9090"
 	exitCode, reader, err := interceptC.Exec(s.ctx, []string{
 		"sh", "-c",
-		fmt.Sprintf(`bridge --log-paths stderr intercept --server-addr %s --forward-domains "*" > /tmp/bridge.log 2>&1 &`, serverAddr),
+		fmt.Sprintf(`bridge --log-paths stderr intercept --server-addr %s --forward-domains "*" > /tmp/bridge-intercept.log 2>&1 &`, serverAddr),
 	})
 	require.NoError(t, err, "failed to exec bridge intercept")
 	io.Copy(io.Discard, reader)
 	require.Equal(t, 0, exitCode, "bridge intercept exec failed")
 
-	// Poll for intercept + iptables readiness.
-	s.Require().Eventually(func() bool {
-		exitCode, reader, err := interceptC.Exec(s.ctx, []string{
-			"sh", "-c", "cat /tmp/bridge.log",
-		})
-		if err != nil || exitCode != 0 {
-			return false
-		}
-		data, _ := io.ReadAll(reader)
-		logContent := string(data)
-		return strings.Contains(logContent, "iptables rules configured")
-	}, 60*time.Second, 2*time.Second, "bridge intercept did not become ready")
+	// Wait for intercept readiness.
+	ct := container.NewDockerClient()
+	require.NoError(t, intercept.WaitForReady(s.ctx, ct, interceptC.GetContainerID()), "bridge intercept did not become ready")
 	t.Log("Bridge intercept is ready")
+
+	// Pre-warm DNS: musl (Alpine) sends A and AAAA queries in parallel.
+	// The first wget often fails because the AAAA response arrives before the
+	// A response and musl treats the NXDOMAIN/empty AAAA as a resolution failure.
+	// A pre-warm nslookup populates the conntrack/NAT tables so subsequent
+	// lookups resolve reliably.
+	exitCode, reader, err = interceptC.Exec(s.ctx, []string{
+		"sh", "-c", "nslookup testserver 127.0.0.1 || true",
+	})
+	require.NoError(t, err, "nslookup exec failed")
+	io.Copy(io.Discard, reader)
+	t.Logf("[nslookup pre-warm] exit=%d", exitCode)
+
+	time.Sleep(1 * time.Second)
 
 	// 4. Verify: wget testserver:8080 through the tunnel.
 	// The intercept container can't resolve "testserver" directly (different network).
@@ -232,7 +239,7 @@ func (s *InterceptSuite) TestIntercept() {
 
 	// Dump intercept log on failure for debugging.
 	if exitCode != 0 {
-		exitCode, reader, err = interceptC.Exec(s.ctx, []string{"cat", "/tmp/bridge.log"})
+		exitCode, reader, err = interceptC.Exec(s.ctx, []string{"cat", "/tmp/bridge-intercept.log"})
 		if err == nil {
 			data, _ := io.ReadAll(reader)
 			t.Logf("[intercept-log]\n%s", string(data))
@@ -270,24 +277,16 @@ func (s *InterceptSuite) TestIngress() {
 	serverAddr := proxyIP + ":9090"
 	exitCode, reader, err = interceptC.Exec(s.ctx, []string{
 		"sh", "-c",
-		fmt.Sprintf(`bridge --log-paths stderr intercept --server-addr %s --app-port 8080 > /tmp/bridge.log 2>&1 &`, serverAddr),
+		fmt.Sprintf(`bridge --log-paths stderr intercept --server-addr %s --app-port 8080 > /tmp/bridge-intercept.log 2>&1 &`, serverAddr),
 	})
 	require.NoError(t, err, "failed to exec bridge intercept")
 	io.Copy(io.Discard, reader)
 	require.Equal(t, 0, exitCode, "bridge intercept exec failed")
 
-	// 5. Poll for tunnel readiness in intercept log.
-	s.Require().Eventually(func() bool {
-		exitCode, reader, err := interceptC.Exec(s.ctx, []string{
-			"sh", "-c", "cat /tmp/bridge.log",
-		})
-		if err != nil || exitCode != 0 {
-			return false
-		}
-		data, _ := io.ReadAll(reader)
-		return strings.Contains(string(data), "Tunnel connected")
-	}, 60*time.Second, 2*time.Second, "tunnel did not connect")
-	t.Log("Tunnel is connected")
+	// 5. Wait for intercept readiness.
+	ct := container.NewDockerClient()
+	require.NoError(t, intercept.WaitForReady(s.ctx, ct, interceptC.GetContainerID()), "intercept did not become ready")
+	t.Log("Intercept is ready")
 
 	// 6. Poll for tunnel connected on the proxy side.
 	s.Require().Eventually(func() bool {
@@ -316,7 +315,7 @@ func (s *InterceptSuite) TestIngress() {
 			data, _ := io.ReadAll(logs)
 			t.Logf("[proxy-log]\n%s", string(data))
 		}
-		exitCode, reader, err = interceptC.Exec(s.ctx, []string{"cat", "/tmp/bridge.log"})
+		exitCode, reader, err = interceptC.Exec(s.ctx, []string{"cat", "/tmp/bridge-intercept.log"})
 		if err == nil {
 			data, _ := io.ReadAll(reader)
 			t.Logf("[intercept-log]\n%s", string(data))

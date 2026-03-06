@@ -15,9 +15,12 @@ import (
 // the remote administrator first; if unavailable, falls back to a local admin
 // backed by the user's kubeconfig. The returned bool is true when the local
 // fallback was used. The caller must defer adm.Close().
+//
+// Expects a Spinner in ctx (via interact.WithSpinner).
 func connectAdmin(ctx context.Context, adminAddr, deviceID string) (admin.Service, bool, error) {
-	sp := interact.NewSpinner("Connecting to bridge administrator...")
-	go sp.Start(ctx)
+	sp := interact.GetSpinner(ctx)
+
+	sp.SetTitle("Connecting to bridge administrator...")
 
 	remote, dialErr := admin.NewClient(adminAddr)
 	if dialErr == nil {
@@ -26,19 +29,15 @@ func connectAdmin(ctx context.Context, adminAddr, deviceID string) (admin.Servic
 		_, probeErr := remote.ListBridges(probeCtx, &bridgev1.ListBridgesRequest{DeviceId: deviceID})
 		cancel()
 		if probeErr == nil {
-			sp.Stop()
 			return remote, false, nil
 		}
 		remote.Close()
 	}
-	sp.Stop()
 
 	// Remote unavailable — fall back to local.
-	sp = interact.NewSpinner("Initializing local administrator...")
-	go sp.Start(ctx)
+	sp.SetTitle("Initializing local administrator...")
 
 	local, err := admin.NewService(admin.LocalConfig{})
-	sp.Stop()
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to initialize: %w", err)
 	}
