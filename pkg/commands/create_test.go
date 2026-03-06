@@ -2,6 +2,9 @@ package commands
 
 import (
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/vercel/bridge/pkg/devcontainer"
@@ -70,5 +73,46 @@ func TestResolveAppPorts_Empty(t *testing.T) {
 	resolveAppPorts(cfg) // should not panic
 	if len(cfg.AppPort) != 0 {
 		t.Errorf("expected empty appPort, got %v", cfg.AppPort)
+	}
+}
+
+func TestWriteEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.env")
+
+	vars := map[string]string{
+		"SIMPLE":        "value",
+		"WITH_SPACES":   `["East US"]`,
+		"WITH_QUOTES":   `say "hello"`,
+		"WITH_NEWLINE":  "line1\nline2",
+		"EMPTY":         "",
+		"HASH_IN_VALUE": "before#after",
+	}
+
+	if err := writeEnvFile(path, vars); err != nil {
+		t.Fatalf("writeEnvFile: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	content := string(data)
+
+	// Docker --env-file: everything after '=' is the literal value, no quoting.
+	expected := map[string]string{
+		"SIMPLE":        "value",
+		"WITH_SPACES":   `["East US"]`,
+		"WITH_QUOTES":   `say "hello"`,
+		"WITH_NEWLINE":  "line1 line2",
+		"EMPTY":         "",
+		"HASH_IN_VALUE": "before#after",
+	}
+
+	for k, want := range expected {
+		line := k + "=" + want
+		if !strings.Contains(content, line+"\n") {
+			t.Errorf("missing or incorrect line for %s\nwant: %s\ngot file:\n%s", k, line, content)
+		}
 	}
 }

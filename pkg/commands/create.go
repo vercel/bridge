@@ -507,10 +507,11 @@ func writeEnvFile(path string, vars map[string]string) error {
 	var b strings.Builder
 	for _, k := range keys {
 		v := vars[k]
-		// Quote values that contain spaces, quotes, or newlines.
-		if strings.ContainsAny(v, " \t\n\r\"'\\#") {
-			v = "\"" + strings.ReplaceAll(strings.ReplaceAll(v, "\\", "\\\\"), "\"", "\\\"") + "\""
-		}
+		// Docker --env-file treats everything after '=' as the literal value.
+		// Do not add quotes — they would be included verbatim in the value.
+		// Newlines are not supported; replace with spaces to avoid breaking the format.
+		v = strings.ReplaceAll(v, "\n", " ")
+		v = strings.ReplaceAll(v, "\r", "")
 		fmt.Fprintf(&b, "%s=%s\n", k, v)
 	}
 	return os.WriteFile(path, []byte(b.String()), 0600)
