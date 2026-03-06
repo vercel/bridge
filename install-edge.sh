@@ -50,8 +50,8 @@ main() {
     fi
 
     if [ "$os" = "darwin" ]; then
-        # Remove macOS quarantine attribute to prevent Gatekeeper killing the binary
-        sudo xattr -d com.apple.quarantine "${INSTALL_DIR}/bridge" 2>/dev/null || true
+        # Remove macOS quarantine/provenance attributes to prevent Gatekeeper killing the binary
+        sudo xattr -cr "${INSTALL_DIR}/bridge" 2>/dev/null || true
     fi
 
     echo "bridge (edge) installed to ${INSTALL_DIR}/bridge"
