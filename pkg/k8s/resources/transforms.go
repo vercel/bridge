@@ -158,15 +158,24 @@ func TransformSelectors() Transformer {
 		if err != nil {
 			return &DeploymentNotFoundError{Name: tc.SourceName, Namespace: tc.SourceNamespace}
 		}
-		podLabels := map[string]string{
+		selectorLabels := map[string]string{
 			meta.LabelBridgeType:       meta.BridgeTypeProxy,
 			meta.LabelBridgeDeployment: deployName,
 		}
 		if deviceID, ok := deploy.Labels[meta.LabelDeviceID]; ok {
-			podLabels[meta.LabelDeviceID] = deviceID
+			selectorLabels[meta.LabelDeviceID] = deviceID
 		}
-		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: podLabels}
-		deploy.Spec.Template.ObjectMeta.Labels = podLabels
+		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: selectorLabels}
+		// Merge bridge labels into existing pod template labels so original
+		// labels (e.g. app, version) are preserved.
+		existing := deploy.Spec.Template.ObjectMeta.Labels
+		if existing == nil {
+			existing = make(map[string]string)
+		}
+		for k, v := range selectorLabels {
+			existing[k] = v
+		}
+		deploy.Spec.Template.ObjectMeta.Labels = existing
 		return nil
 	})
 }
