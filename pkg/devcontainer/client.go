@@ -14,6 +14,9 @@ type Client struct {
 	WorkspaceFolder string
 	ConfigPath      string // optional override
 
+	// UpArgs are additional arguments passed to `devcontainer up`.
+	UpArgs []string
+
 	// Stdin, Stdout, Stderr override the default os streams for ExecAttached.
 	// When nil, the corresponding os.Stdin/os.Stdout/os.Stderr is used.
 	Stdin  io.Reader
@@ -28,6 +31,7 @@ func (c *Client) Up(ctx context.Context) error {
 	if c.ConfigPath != "" {
 		args = append(args, "--config", c.ConfigPath)
 	}
+	args = append(args, c.UpArgs...)
 	cmd := exec.CommandContext(ctx, "devcontainer", args...)
 	cmd.Stdout = nil
 	cmd.Stderr = nil

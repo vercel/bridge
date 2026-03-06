@@ -27,6 +27,10 @@ func Debug() *cli.Command {
 				Aliases: []string{"o"},
 				Usage:   "Output file path (default: bridge-debug-<timestamp>.txt in current dir)",
 			},
+			&cli.BoolFlag{
+				Name:  "stdout",
+				Usage: "Print diagnostic output to stdout instead of writing to a file",
+			},
 		},
 		Action: runDebug,
 	}
@@ -48,6 +52,11 @@ func runDebug(ctx context.Context, c *cli.Command) error {
 	collectHostLogs(&b)
 	containers := collectRunningContainers(ctx, &b)
 	collectContainerDiagnostics(ctx, &b, containers)
+
+	if c.Bool("stdout") {
+		fmt.Fprint(c.Root().Writer, b.String())
+		return nil
+	}
 
 	if err := os.WriteFile(outputPath, []byte(b.String()), 0644); err != nil {
 		return fmt.Errorf("failed to write debug output: %w", err)

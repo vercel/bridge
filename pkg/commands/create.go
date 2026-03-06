@@ -100,6 +100,11 @@ func Create() *cli.Command {
 					FuncSource(linuxBinaryPath),
 				),
 			},
+			&cli.StringFlag{
+				Name:    "devcontainer-up-args",
+				Usage:   "Additional arguments to pass to devcontainer up (e.g. \"--rebuild\")",
+				Sources: cli.EnvVars("BRIDGE_DEVCONTAINER_UP_ARGS"),
+			},
 		},
 		Before: preflightCreate,
 		Arguments: []cli.Argument{
@@ -295,7 +300,7 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 		return err
 	}
 	if connectFlag {
-		return startDevcontainer(ctx, p, dcConfigPath, createResp.DeploymentName, portMappings, r)
+		return startDevcontainer(ctx, p, dcConfigPath, createResp.DeploymentName, portMappings, c.String("devcontainer-up-args"), r)
 	}
 
 	return nil
@@ -554,12 +559,13 @@ func resolveAppPorts(cfg *devcontainer.Config) {
 }
 
 // startDevcontainer starts the devcontainer and attaches an interactive shell.
-func startDevcontainer(ctx context.Context, p interact.Printer, dcConfigPath, deploymentName string, portMappings []devcontainer.PortMapping, r io.Reader) error {
+func startDevcontainer(ctx context.Context, p interact.Printer, dcConfigPath, deploymentName string, portMappings []devcontainer.PortMapping, upArgs string, r io.Reader) error {
 	// <workspace>/.devcontainer/bridge-<name>/devcontainer.json → <workspace>
 	workspaceFolder, _ := filepath.Abs(filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath))))
 	dcClient := &devcontainer.Client{
 		WorkspaceFolder: workspaceFolder,
 		ConfigPath:      dcConfigPath,
+		UpArgs:          splitArgs(upArgs),
 		Stdin:           r,
 		Stdout:          os.Stdout,
 		Stderr:          os.Stderr,
@@ -601,6 +607,16 @@ func startDevcontainer(ctx context.Context, p interact.Printer, dcConfigPath, de
 
 	slog.Debug("Devcontainer started, attaching shell")
 	return dcClient.ExecAttached(ctx, []string{"bash"})
+}
+
+// splitArgs splits a space-separated string into individual arguments,
+// returning nil for an empty string.
+func splitArgs(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	return strings.Fields(s)
 }
 
 // resolveSourceFlag interprets the --source flag value and returns an fs.FS
