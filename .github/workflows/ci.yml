@@ -40,6 +40,9 @@ jobs:
         with:
           go-version: '1.23'
 
+      - name: Build linux binary
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/bridge-linux ./cmd/bridge
+
       - name: Install devcontainer CLI
         run: npm install -g @devcontainers/cli
 
