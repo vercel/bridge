@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/urfave/cli/v3"
@@ -302,11 +303,15 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	// Use the user-specified listen port, or fall back to the first app port
+	// Use the user-specified listen port, or fall back to the PORT env var
 	// from the source deployment, or 3000 as a last resort.
 	appPort := c.Int("listen")
-	if appPort == 0 && len(createResp.AppPorts) > 0 {
-		appPort = int(createResp.AppPorts[0])
+	if appPort == 0 {
+		if portStr, ok := createResp.EnvVars["PORT"]; ok {
+			if v, err := strconv.Atoi(portStr); err == nil && v > 0 {
+				appPort = v
+			}
+		}
 	}
 	if appPort == 0 {
 		appPort = 3000
