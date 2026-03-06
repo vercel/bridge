@@ -224,6 +224,28 @@ func TestRebaseBuildPaths_NoBuild(t *testing.T) {
 	cfg.RebaseBuildPaths(".devcontainer", filepath.Join(".devcontainer", "bridge-foo"))
 }
 
+func TestRebaseBuildPaths_NoContext(t *testing.T) {
+	input := `{
+  "build": {
+    "dockerfile": "Dockerfile"
+  }
+}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	cfg.RebaseBuildPaths(".devcontainer", filepath.Join(".devcontainer", "bridge-foo"))
+
+	wantDockerfile := filepath.Join("..", "Dockerfile")
+	if cfg.Build.Dockerfile != wantDockerfile {
+		t.Errorf("dockerfile = %q, want %q", cfg.Build.Dockerfile, wantDockerfile)
+	}
+	if cfg.Build.Context != ".." {
+		t.Errorf("context = %q, want %q", cfg.Build.Context, "..")
+	}
+}
+
 func TestRebaseBuildPaths_AbsolutePaths(t *testing.T) {
 	input := `{
   "build": {

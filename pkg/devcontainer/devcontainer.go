@@ -206,6 +206,9 @@ func (c *Config) RebaseBuildPaths(origDir, newDir string) {
 	}
 
 	c.Build.Dockerfile = rebase(c.Build.Dockerfile)
+	if c.Build.Context == "" {
+		c.Build.Context = "."
+	}
 	c.Build.Context = rebase(c.Build.Context)
 }
 
