@@ -143,6 +143,9 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 		return nil, fmt.Errorf("no deployment found in bundle")
 	}
 
+	// Capture volume mount paths before transforms strip projected volumes.
+	preTransformMountPaths, _ := resources.GetVolumeMountPaths(bundle, sourceName)
+
 	sourceNS := resources.FindNamespace(bundle)
 	if sourceNS == "" {
 		sourceNS = targetNS
@@ -181,7 +184,6 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 		return nil, err
 	}
 	appPorts, _ := resources.GetAppPorts(bundle, deployName)
-	volumeMountPaths, _ := resources.GetVolumeMountPaths(bundle, deployName)
 
 	// Wait for the pod to be ready.
 	pod, err := kube.WaitForPod(ctx, l.client, targetNS, meta.DeploymentSelector(deployName), 2*time.Minute)
@@ -208,7 +210,7 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 		Port:             grpcPort,
 		DeploymentName:   deployName,
 		EnvVars:          envVars,
-		VolumeMountPaths: volumeMountPaths,
+		VolumeMountPaths: preTransformMountPaths,
 		AppPorts:         appPorts,
 	}, nil
 }
