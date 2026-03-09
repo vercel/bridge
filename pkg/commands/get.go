@@ -16,7 +16,7 @@ import (
 func Get() *cli.Command {
 	return &cli.Command{
 		Name:  "get",
-		Usage: "List bridges or show details of a specific bridge",
+		Usage: "List or inspect running bridges",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "admin-addr",
@@ -28,7 +28,7 @@ func Get() *cli.Command {
 		Arguments: []cli.Argument{
 			&cli.StringArg{
 				Name:      "name",
-				UsageText: "Name of the bridge to inspect (optional — omit to list all)",
+				UsageText: "Name of the bridge to inspect (omit to list all)",
 				Config: cli.StringConfig{
 					TrimSpace: true,
 				},
@@ -52,9 +52,9 @@ func runGet(ctx context.Context, c *cli.Command) error {
 
 	sp := interact.NewSpinner(w, "Connecting to bridge administrator...")
 	ctx = interact.WithSpinner(ctx, sp)
-	go sp.Start(ctx)
+	sp.Start(ctx)
 
-	adm, _, err := connectAdmin(ctx, adminAddr, deviceID)
+	adm, err := connectAdmin(ctx, adminAddr)
 	sp.Stop()
 	if err != nil {
 		return err

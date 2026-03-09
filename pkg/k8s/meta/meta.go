@@ -27,6 +27,10 @@ const (
 
 	// ProxySelector is the label selector string for bridge proxy resources.
 	ProxySelector = LabelBridgeType + "=" + BridgeTypeProxy
+
+	// EnvInterceptorAddr is the environment variable that configures the
+	// interceptor gRPC server listen address.
+	EnvInterceptorAddr = "BRIDGE_INTERCEPTOR_ADDR"
 )
 
 // DeploymentSelector returns a label selector that matches pods for a specific bridge deployment.

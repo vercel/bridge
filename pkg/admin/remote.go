@@ -12,16 +12,16 @@ import (
 	"github.com/vercel/bridge/pkg/k8s/k8spf"
 )
 
-// remoteAdmin implements Service by calling the in-cluster administrator via gRPC.
-type remoteAdmin struct {
+// Client implements Service by calling the in-cluster administrator via gRPC.
+type Client struct {
 	conn    *grpc.ClientConn
 	client  bridgev1.AdministratorServiceClient
 	builder *k8spf.Builder
 }
 
-// NewClient creates a remote Service that connects to the administrator gRPC
+// NewClient creates a Client that connects to the administrator gRPC
 // server at the given address (e.g. "k8spf:///administrator.bridge:9090").
-func NewClient(addr string) (Service, error) {
+func NewClient(addr string) (*Client, error) {
 	builder := k8spf.NewBuilder(k8spf.BuilderConfig{})
 	conn, err := grpc.NewClient(addr,
 		append(builder.DialOptions(),
@@ -32,14 +32,14 @@ func NewClient(addr string) (Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to administrator: %w", err)
 	}
-	return &remoteAdmin{
+	return &Client{
 		conn:    conn,
 		client:  bridgev1.NewAdministratorServiceClient(conn),
 		builder: builder,
 	}, nil
 }
 
-func (r *remoteAdmin) CreateBridge(ctx context.Context, req *bridgev1.CreateBridgeRequest) (*bridgev1.CreateBridgeResponse, error) {
+func (r *Client) CreateBridge(ctx context.Context, req *bridgev1.CreateBridgeRequest) (*bridgev1.CreateBridgeResponse, error) {
 	resp, err := r.client.CreateBridge(ctx, req)
 	if err != nil {
 		return nil, userError(err)
@@ -47,7 +47,7 @@ func (r *remoteAdmin) CreateBridge(ctx context.Context, req *bridgev1.CreateBrid
 	return resp, nil
 }
 
-func (r *remoteAdmin) ListBridges(ctx context.Context, req *bridgev1.ListBridgesRequest) (*bridgev1.ListBridgesResponse, error) {
+func (r *Client) ListBridges(ctx context.Context, req *bridgev1.ListBridgesRequest) (*bridgev1.ListBridgesResponse, error) {
 	resp, err := r.client.ListBridges(ctx, req)
 	if err != nil {
 		return nil, userError(err)
@@ -55,7 +55,7 @@ func (r *remoteAdmin) ListBridges(ctx context.Context, req *bridgev1.ListBridges
 	return resp, nil
 }
 
-func (r *remoteAdmin) DeleteBridge(ctx context.Context, req *bridgev1.DeleteBridgeRequest) (*bridgev1.DeleteBridgeResponse, error) {
+func (r *Client) DeleteBridge(ctx context.Context, req *bridgev1.DeleteBridgeRequest) (*bridgev1.DeleteBridgeResponse, error) {
 	resp, err := r.client.DeleteBridge(ctx, req)
 	if err != nil {
 		return nil, userError(err)
@@ -63,8 +63,13 @@ func (r *remoteAdmin) DeleteBridge(ctx context.Context, req *bridgev1.DeleteBrid
 	return resp, nil
 }
 
+// Conn returns the underlying gRPC client connection.
+func (r *Client) Conn() *grpc.ClientConn {
+	return r.conn
+}
+
 // Close releases the gRPC connection and the underlying port-forward pool.
-func (r *remoteAdmin) Close() error {
+func (r *Client) Close() error {
 	if r.builder != nil {
 		r.builder.Close()
 	}

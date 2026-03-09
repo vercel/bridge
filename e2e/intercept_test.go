@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	dockercontainer "github.com/docker/docker/api/types/container"
+	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
@@ -19,6 +21,10 @@ import (
 	"github.com/vercel/bridge/pkg/container"
 	"github.com/vercel/bridge/pkg/intercept"
 )
+
+// interceptorPort is the port the intercept gRPC health server listens on
+// inside the test containers. Matches the BRIDGE_INTERCEPTOR_ADDR env var.
+const interceptorPort = "18080"
 
 // InterceptSuite exercises the core intercept → proxy → DNS → tunnel data path
 // using plain Docker containers (no devcontainers, no Kubernetes).
@@ -140,19 +146,33 @@ func (s *InterceptSuite) startProxy(t *testing.T, cmd []string) (testcontainers.
 }
 
 // startIntercept starts an intercept container on the bridge network only.
+// The interceptor gRPC health port is exposed to the host so that
+// intercept.WaitForReady can verify readiness from the test process.
 func (s *InterceptSuite) startIntercept(t *testing.T) testcontainers.Container {
 	interceptC, err := testcontainers.GenericContainer(s.ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:      s.interceptImg,
-			Cmd:        []string{"sleep", "300"},
-			Privileged: true,
-			Networks:   []string{s.bridgeNet.Name},
+			Image:        s.interceptImg,
+			Cmd:          []string{"sleep", "300"},
+			Privileged:   true,
+			Networks:     []string{s.bridgeNet.Name},
+			Env:          map[string]string{"BRIDGE_INTERCEPTOR_ADDR": ":" + interceptorPort},
+			ExposedPorts: []string{interceptorPort + "/tcp"},
+			HostConfigModifier: func(hc *dockercontainer.HostConfig) {
+				hc.Privileged = true
+				hc.PortBindings = nat.PortMap{
+					interceptorPort + "/tcp": []nat.PortBinding{{HostPort: interceptorPort}},
+				}
+			},
 			WaitingFor: wait.ForLog("").WithStartupTimeout(10 * time.Second),
 		},
 		Started: true,
 	})
 	require.NoError(t, err, "failed to start intercept container")
 	t.Cleanup(func() {
+		if exitCode, reader, err := interceptC.Exec(context.Background(), []string{"cat", "/tmp/bridge-intercept.log"}); err == nil && exitCode == 0 {
+			data, _ := io.ReadAll(reader)
+			t.Logf("[intercept log]\n%s", string(data))
+		}
 		if logs, err := interceptC.Logs(s.ctx); err == nil {
 			data, _ := io.ReadAll(logs)
 			t.Logf("[intercept container logs]\n%s", string(data))

@@ -18,6 +18,7 @@ import (
 	bridgedns "github.com/vercel/bridge/pkg/dns"
 	"github.com/vercel/bridge/pkg/ippool"
 	"github.com/vercel/bridge/pkg/k8s/k8spf"
+	"github.com/vercel/bridge/pkg/k8s/meta"
 	"github.com/vercel/bridge/pkg/plumbing"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -65,6 +66,12 @@ func Intercept() *cli.Command {
 				Name:    "ignore-env-vars",
 				Usage:   "Environment variables to unset before connecting (e.g. AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY)",
 				Sources: cli.EnvVars("BRIDGE_IGNORE_ENV_VARS"),
+			},
+			&cli.StringFlag{
+				Name:    "addr",
+				Usage:   "Address for the intercept gRPC server to listen on",
+				Value:   ":8080",
+				Sources: cli.EnvVars(meta.EnvInterceptorAddr),
 			},
 		},
 		Action: runIntercept,
@@ -243,12 +250,20 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		cancel()
 	}()
 
+	// Start the intercept gRPC server (health check endpoint).
+	interceptSrv, err := newInterceptServer(c.String("addr"), conn)
+	if err != nil {
+		return err
+	}
+	defer interceptSrv.Stop()
+
 	// Test hook: simulate a crash after full initialization.
 	if os.Getenv("__TEST_FAIL_INTERCEPT") == "true" {
 		return fmt.Errorf("injected test failure")
 	}
 
 	// Intercept is fully initialized.
+	interceptSrv.SetReady()
 	slog.Info("Intercept ready")
 
 	// Block until context is cancelled

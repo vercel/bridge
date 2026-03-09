@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/urfave/cli/v3"
 	"k8s.io/client-go/tools/clientcmd"
@@ -24,6 +25,7 @@ import (
 	"github.com/vercel/bridge/pkg/identity"
 	"github.com/vercel/bridge/pkg/interact"
 	"github.com/vercel/bridge/pkg/intercept"
+	"github.com/vercel/bridge/pkg/k8s/meta"
 	"github.com/vercel/bridge/pkg/netutil"
 )
 
@@ -38,22 +40,22 @@ const labelBridgeDeployment = "bridge.deployment"
 func Create() *cli.Command {
 	return &cli.Command{
 		Name:  "create",
-		Usage: "Create a bridge to a Kubernetes deployment",
+		Usage: "Generate a devcontainer connected to a target deployment",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:    "connect",
 				Aliases: []string{"c"},
-				Usage:   "Start a Devcontainer and connect to the bridge after creation",
+				Usage:   "Start the devcontainer and exec into it after creation",
 			},
 			&cli.StringFlag{
 				Name:    "namespace",
 				Aliases: []string{"n"},
-				Usage:   "Source namespace of the deployment",
+				Usage:   "Namespace of the target deployment",
 				Sources: cli.EnvVars("BRIDGE_SOURCE_NAMESPACE"),
 			},
 			&cli.StringFlag{
 				Name:    "admin-addr",
-				Usage:   "Address of the bridge administrator (e.g. localhost:9090 or k8spf:///pod.ns:9090)",
+				Usage:   "Address of the bridge administrator",
 				Value:   defaultAdminAddr,
 				Sources: cli.EnvVars("BRIDGE_ADMIN_ADDR"),
 			},
@@ -65,12 +67,12 @@ func Create() *cli.Command {
 			&cli.StringFlag{
 				Name:    "devcontainer-config",
 				Aliases: []string{"f"},
-				Usage:   "Path to the base devcontainer.json config file",
+				Usage:   "Path to a base devcontainer.json to extend",
 			},
 			&cli.IntFlag{
 				Name:    "listen",
 				Aliases: []string{"l"},
-				Usage:   "App listening port to forward inbound requests to (defaults to the source deployment's first container port)",
+				Usage:   "Port your app listens on (defaults to PORT env var, then 3000)",
 			},
 			&cli.StringFlag{
 				Name:   "feature-ref",
@@ -83,7 +85,7 @@ func Create() *cli.Command {
 			},
 			&cli.StringFlag{
 				Name:    "proxy-image",
-				Usage:   "Bridge proxy container image (used for local admin fallback)",
+				Usage:   "Bridge proxy container image",
 				Value:   defaultProxyImage,
 				Hidden:  true,
 				Sources: cli.EnvVars("BRIDGE_PROXY_IMAGE"),
@@ -91,7 +93,7 @@ func Create() *cli.Command {
 			&cli.StringFlag{
 				Name:    "source",
 				Aliases: []string{"s"},
-				Usage:   "Path to a folder, glob, or single YAML file to use as the bridge source",
+				Usage:   "Path to Kubernetes manifests (folder, glob, or YAML file)",
 			},
 			&cli.StringFlag{
 				Name:   "container-binary-path",
@@ -112,7 +114,7 @@ func Create() *cli.Command {
 		Arguments: []cli.Argument{
 			&cli.StringArg{
 				Name:      "deployment",
-				UsageText: "Name of the source Deployment to bridge (optional)",
+				UsageText: "Name of the target deployment",
 				Config: cli.StringConfig{
 					TrimSpace: true,
 				},
@@ -135,12 +137,6 @@ func linuxBinaryPath() string {
 	}
 	return filepath.Join(home, ".bridge", "bin", "bridge-linux")
 }
-
-// errAdminUnavailable is a sentinel error returned when the remote
-// administrator cannot be reached.
-type errAdminUnavailable struct{}
-
-func (errAdminUnavailable) Error() string { return "administrator unavailable" }
 
 // preflightCreate runs pre-flight checks before the create command executes.
 func preflightCreate(ctx context.Context, c *cli.Command) (context.Context, error) {
@@ -214,26 +210,15 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	// Single spinner reused across all phases, stored in context for child funcs.
 	sp := interact.NewSpinner(w, "Connecting to bridge administrator...")
 	ctx = interact.WithSpinner(ctx, sp)
-	go sp.Start(ctx)
+	sp.Start(ctx)
 
-	// Step 2: Connect to administrator (remote, with local fallback).
-	adm, isLocal, err := connectAdmin(ctx, adminAddr, deviceID)
+	// Step 2: Connect to administrator.
+	adm, err := connectAdmin(ctx, adminAddr)
 	if err != nil {
 		sp.Stop()
 		return err
 	}
 	defer adm.Close()
-
-	if isLocal && !yes {
-		sp.Stop()
-		if !confirmLocalFallback(p, r) {
-			p.Println("Aborted.")
-			return nil
-		}
-		sp = interact.NewSpinner(w, "")
-		ctx = interact.WithSpinner(ctx, sp)
-		go sp.Start(ctx)
-	}
 
 	// Step 3: Check for existing bridges.
 	// Skip duplicate detection when using --source without a deployment name,
@@ -265,9 +250,7 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 						return nil
 					}
 					yes = true
-					sp = interact.NewSpinner(w, "")
-					ctx = interact.WithSpinner(ctx, sp)
-					go sp.Start(ctx)
+					sp.Start(ctx)
 					break
 				}
 			}
@@ -305,7 +288,6 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	}
 	// Use the user-specified listen port, or fall back to the PORT env var
 	// from the source deployment, or 3000 as a last resort.
-	slog.Debug("EnvVars from create response", "env_vars", createResp.EnvVars)
 	appPort := c.Int("listen")
 	if appPort == 0 {
 		if portStr, ok := createResp.EnvVars["PORT"]; ok {
@@ -317,19 +299,34 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	if appPort == 0 {
 		appPort = 3000
 	}
-	dcConfigPath, portMappings, err := generateDevcontainerConfig(p, baseConfig, featureRef, appPort, containerBinaryPath, deploymentName, createResp)
+	interceptPort, err := netutil.FindFreePort()
+	if err != nil {
+		return fmt.Errorf("failed to allocate intercept server port: %w", err)
+	}
+	dcConfigPath, portMappings, err := generateDevcontainerConfig(p, baseConfig, featureRef, appPort, interceptPort, containerBinaryPath, deploymentName, createResp)
 	if err != nil {
 		return err
 	}
 	if connectFlag {
-		sp = interact.NewSpinner(w, "")
-		ctx = interact.WithSpinner(ctx, sp)
-		go sp.Start(ctx)
-		dcErr := startDevcontainer(ctx, w, p, container.NewDockerClient(), dcConfigPath, createResp.DeploymentName, portMappings, c.String("devcontainer-up-args"), r)
+		ct := container.NewDockerClient()
+		labels := map[string]string{labelBridgeDeployment: createResp.DeploymentName}
+
+		// Stop any existing container for this bridge so ports are released.
+		ct.StopAll(ctx, container.StopAllOpts{Labels: labels})
+
+		sp.Start(ctx)
+		if err := startDevcontainer(ctx, w, ct, dcConfigPath, createResp.DeploymentName, c.String("devcontainer-up-args")); err != nil {
+			return err
+		}
+
+		printPortMappings(p, portMappings)
+
+		workspaceFolder, _ := filepath.Abs(filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath))))
+		dcErr := execInDevcontainer(ctx, workspaceFolder, dcConfigPath, r, []string{"bash"})
 
 		// Clean up the bridge when the user exits the devcontainer.
 		sp.SetTitle("Removing bridge...")
-		go sp.Start(ctx)
+		sp.Start(ctx)
 
 		container.NewDockerClient().StopAll(ctx, container.StopAllOpts{
 			Labels: map[string]string{labelBridgeDeployment: createResp.DeploymentName},
@@ -364,22 +361,10 @@ func promptYN(r io.Reader) string {
 // It respects the KUBECONFIG env var by bind-mounting it into the container,
 // unless the base config already sets containerEnv.KUBECONFIG.
 // Returns the path to the generated config.
-func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef string, appPort int, containerBinaryPath, deploymentName string, resp *bridgev1.CreateBridgeResponse) (string, []devcontainer.PortMapping, error) {
+func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef string, appPort, interceptPort int, containerBinaryPath, deploymentName string, resp *bridgev1.CreateBridgeResponse) (string, []devcontainer.PortMapping, error) {
 	dcName := resp.DeploymentName
-
-	// Place the generated config under the .devcontainer/ directory that contains
-	// the base config. If the base config isn't already in a .devcontainer/ folder,
-	// create one next to it.
-	baseParent := filepath.Dir(baseConfigPath)
-	var dcDir string
-	if filepath.Base(baseParent) == ".devcontainer" {
-		// Base is at <workspace>/.devcontainer/devcontainer.json — use the same .devcontainer/.
-		dcDir = filepath.Join(baseParent, fmt.Sprintf("bridge-%s", dcName))
-	} else {
-		// Base is elsewhere — create a .devcontainer/ directory next to it.
-		dcDir = filepath.Join(baseParent, ".devcontainer", fmt.Sprintf("bridge-%s", dcName))
-	}
-	dcConfigPath := filepath.Join(dcDir, "devcontainer.json")
+	dcConfigPath := bridgeConfigPath(baseConfigPath, dcName)
+	dcDir := filepath.Dir(dcConfigPath)
 
 	// Load from base config, then overlay bridge settings.
 	cfg, err := devcontainer.Load(baseConfigPath)
@@ -410,7 +395,12 @@ func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef s
 		featureOpts["copyFiles"] = strings.Join(resp.VolumeMountPaths, ",")
 	}
 	cfg.SetFeature(featureRef, featureOpts)
-	cfg.AppPort = devcontainer.PortMappings{{HostPort: appPort, ContainerPort: appPort}}
+	interceptAddr := fmt.Sprintf(":%d", interceptPort)
+	cfg.AppPort = devcontainer.PortMappings{
+		{HostPort: appPort, ContainerPort: appPort},
+		{HostPort: interceptPort, ContainerPort: interceptPort},
+	}
+	cfg.EnsureContainerEnv(meta.EnvInterceptorAddr, interceptAddr)
 	cfg.EnsureCapAdd("NET_ADMIN")
 	cfg.EnsureRunArgs("-l", labelBridgeDeployment+"="+dcName)
 	cfg.EnsureContainerEnv("WORKLOAD_NAME", deploymentName)
@@ -451,7 +441,7 @@ func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef s
 	}
 
 	// Ensure generated bridge config directories are gitignored.
-	ensureGitignore(baseParent, "bridge-*/")
+	ensureGitignore(filepath.Dir(dcDir), "bridge-*/")
 
 	p.Info(fmt.Sprintf("Devcontainer config written to %s", dcConfigPath))
 	return dcConfigPath, cfg.AppPort, nil
@@ -591,9 +581,10 @@ func resolveAppPorts(cfg *devcontainer.Config) {
 	}
 }
 
-// startDevcontainer starts the devcontainer and attaches an interactive shell.
-// Expects a Spinner in ctx via interact.WithSpinner.
-func startDevcontainer(ctx context.Context, w io.Writer, p interact.Printer, ct container.Client, dcConfigPath, deploymentName string, portMappings []devcontainer.PortMapping, upArgs string, r io.Reader) error {
+// startDevcontainer builds and starts the devcontainer, then waits for the
+// intercept process to become ready. Expects a Spinner in ctx via
+// interact.WithSpinner.
+func startDevcontainer(ctx context.Context, w io.Writer, ct container.Client, dcConfigPath, deploymentName, upArgs string) error {
 	sp := interact.GetSpinner(ctx)
 
 	// <workspace>/.devcontainer/bridge-<name>/devcontainer.json → <workspace>
@@ -602,18 +593,11 @@ func startDevcontainer(ctx context.Context, w io.Writer, p interact.Printer, ct 
 		WorkspaceFolder: workspaceFolder,
 		ConfigPath:      dcConfigPath,
 		UpArgs:          splitArgs(upArgs),
-		Stdin:           r,
-		Stdout:          os.Stdout,
-		Stderr:          os.Stderr,
 	}
 
 	labels := map[string]string{labelBridgeDeployment: deploymentName}
 
 	slog.Debug("Starting devcontainer", "config", dcConfigPath, "workspace", workspaceFolder)
-
-	// Stop any existing container for this bridge so ports are released.
-	sp.SetTitle("Stopping existing containers...")
-	ct.StopAll(ctx, container.StopAllOpts{Labels: labels})
 
 	// Stop the spinner while the viewport streams build output.
 	sp.Stop()
@@ -637,35 +621,36 @@ func startDevcontainer(ctx context.Context, w io.Writer, p interact.Printer, ct 
 	vp.Clear()
 
 	// Resume spinner for the connection phase.
-	sp = interact.NewSpinner(w, "Connecting container to proxy...")
-	go sp.Start(ctx)
+	sp.SetTitle("Connecting container to proxy...")
+	sp.Start(ctx)
 	containerID, err := container.WaitForID(ctx, ct, container.FindOpts{Labels: labels})
 	if err != nil {
 		sp.Stop()
-		ct.StopAll(ctx, container.StopAllOpts{Labels: labels})
 		return err
 	}
-	err = intercept.WaitForReady(ctx, ct, containerID)
+	readyCtx, readyCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer readyCancel()
+	if err := intercept.WaitForReady(readyCtx, ct, containerID); err != nil {
+		sp.Stop()
+		return fmt.Errorf("container failed to start: %w", err)
+	}
 	sp.Stop()
-	if err != nil {
-		// Clean up the container and report the error.
-		ct.StopAll(ctx, container.StopAllOpts{Labels: labels})
-		return err
-	}
+	return nil
+}
 
-	if len(portMappings) > 0 {
-		p.Newline()
-		for _, m := range portMappings {
-			if m.HostPort == m.ContainerPort {
-				p.Info(fmt.Sprintf("Port %d exposed", m.ContainerPort))
-			} else {
-				p.Info(fmt.Sprintf("Port %d → container:%d", m.HostPort, m.ContainerPort))
-			}
+// printPortMappings displays the resolved port mappings to the user.
+func printPortMappings(p interact.Printer, mappings []devcontainer.PortMapping) {
+	if len(mappings) == 0 {
+		return
+	}
+	p.Newline()
+	for _, m := range mappings {
+		if m.HostPort == m.ContainerPort {
+			p.Info(fmt.Sprintf("Port %d exposed", m.ContainerPort))
+		} else {
+			p.Info(fmt.Sprintf("Port %d → container:%d", m.HostPort, m.ContainerPort))
 		}
 	}
-
-	slog.Debug("Devcontainer started, attaching shell")
-	return dcClient.ExecAttached(ctx, []string{"bash"})
 }
 
 // splitArgs splits a space-separated string into individual arguments,

@@ -12,6 +12,8 @@ import (
 	"github.com/urfave/cli/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
@@ -103,6 +105,10 @@ func runAdministrator(ctx context.Context, c *cli.Command) error {
 
 	srv := grpc.NewServer(grpc.MaxRecvMsgSize(16 << 20))
 	bridgev1.RegisterAdministratorServiceServer(srv, &administratorServer{admin: localAdm})
+
+	healthSrv := health.NewServer()
+	healthpb.RegisterHealthServer(srv, healthSrv)
+	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {

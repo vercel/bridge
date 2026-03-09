@@ -259,13 +259,25 @@ func (l *adminService) DeleteBridge(ctx context.Context, req *bridgev1.DeleteBri
 	if req.Name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	if req.Namespace == "" {
-		return nil, fmt.Errorf("namespace is required")
+
+	// Resolve namespace from the bridge deployment if not provided.
+	ns := req.Namespace
+	if ns == "" {
+		deploys, err := l.client.AppsV1().Deployments("").List(ctx, metav1.ListOptions{
+			LabelSelector: meta.DeploymentSelector(req.Name) + "," + meta.DeviceSelector(req.DeviceId),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to find bridge: %w", err)
+		}
+		if len(deploys.Items) == 0 {
+			return nil, fmt.Errorf("no bridge named %q found", req.Name)
+		}
+		ns = deploys.Items[0].Namespace
 	}
 
-	slog.Info("Deleting bridge", "device_id", req.DeviceId, "namespace", req.Namespace, "name", req.Name)
+	slog.Info("Deleting bridge", "device_id", req.DeviceId, "namespace", ns, "name", req.Name)
 
-	if err := resources.DeleteBridgeResources(ctx, l.client, req.Namespace, req.Name, req.DeviceId); err != nil {
+	if err := resources.DeleteBridgeResources(ctx, l.client, ns, req.Name, req.DeviceId); err != nil {
 		slog.Error("Failed to delete bridge", "device_id", req.DeviceId, "namespace", req.Namespace, "name", req.Name, "error", err)
 		return nil, err
 	}

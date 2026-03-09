@@ -15,7 +15,7 @@ import (
 // Spinner displays a progress indicator with a title.
 type Spinner interface {
 	SetTitle(title string)
-	Start(ctx context.Context) error
+	Start(ctx context.Context)
 	Stop()
 }
 
@@ -63,14 +63,14 @@ type prettySpinner struct {
 func NewPrettySpinner(title string) Spinner {
 	t := &atomic.Value{}
 	t.Store(title)
-	return &prettySpinner{title: t, done: make(chan struct{})}
+	return &prettySpinner{title: t}
 }
 
 func (s *prettySpinner) SetTitle(title string) {
 	s.title.Store(title)
 }
 
-func (s *prettySpinner) Start(ctx context.Context) error {
+func (s *prettySpinner) Start(ctx context.Context) {
 	s.done = make(chan struct{})
 
 	theme := NewTheme()
@@ -82,9 +82,10 @@ func (s *prettySpinner) Start(ctx context.Context) error {
 
 	s.prog = tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(nil))
 
-	_, err := s.prog.Run()
-	close(s.done)
-	return err
+	go func() {
+		s.prog.Run()
+		close(s.done)
+	}()
 }
 
 func (s *prettySpinner) Stop() {
@@ -106,7 +107,7 @@ type plainSpinner struct {
 func NewPlainSpinner(w io.Writer, title string) Spinner {
 	t := &atomic.Value{}
 	t.Store(title)
-	return &plainSpinner{w: w, title: t, done: make(chan struct{})}
+	return &plainSpinner{w: w, title: t}
 }
 
 func (s *plainSpinner) SetTitle(title string) {
@@ -114,20 +115,22 @@ func (s *plainSpinner) SetTitle(title string) {
 	fmt.Fprintf(s.w, "%s...\n", title)
 }
 
-func (s *plainSpinner) Start(_ context.Context) error {
+func (s *plainSpinner) Start(_ context.Context) {
 	s.done = make(chan struct{})
 	t, _ := s.title.Load().(string)
 	fmt.Fprintf(s.w, "%s...\n", t)
-	<-s.done
-	return nil
 }
 
 func (s *plainSpinner) Stop() {
+	if s.done == nil {
+		return
+	}
 	select {
 	case <-s.done:
 	default:
 		close(s.done)
 	}
+	s.done = nil
 }
 
 type stopMsg struct{}

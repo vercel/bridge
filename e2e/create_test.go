@@ -109,6 +109,7 @@ func (s *CreateSuite) newBridgeCreateApp(reader io.Reader, writer io.Writer, wor
 		"--connect",
 		"--feature-ref", "../local-features/bridge-feature",
 		"--container-binary-path", s.bridgeBin,
+		"--proxy-image", s.administratorRef,
 		"-f", filepath.Join(workspaceDir, ".devcontainer", "devcontainer.json"),
 	)
 	return app, args
@@ -520,6 +521,110 @@ spec:
 	stdinW.Close()
 
 	require.NoError(t, <-errCh, "bridge create --source failed")
+}
+
+// TestExec verifies the `bridge exec` flow: first creates k8s resources via
+// `bridge create` (without --connect), then uses `bridge exec` to auto-start
+// the devcontainer and run a command that exercises the network tunnel.
+func (s *CreateSuite) TestExec() {
+	t := s.T()
+
+	// --- Setup ---
+
+	dir := createWorkspace(t, s.bridgeBin, s.projectRoot, s.cluster)
+
+	origKubeconfig := os.Getenv("KUBECONFIG")
+	os.Setenv("KUBECONFIG", s.cluster.KubeConfigPath)
+	t.Cleanup(func() {
+		if origKubeconfig != "" {
+			os.Setenv("KUBECONFIG", origKubeconfig)
+		} else {
+			os.Unsetenv("KUBECONFIG")
+		}
+	})
+
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { os.Chdir(origDir) })
+
+	_, err = identity.EnsureDeviceID()
+	require.NoError(t, err)
+
+	deviceID, _ := identity.GetDeviceID()
+	bridgeName := identity.BridgeResourceName(deviceID, testutil.UserserviceName)
+
+	t.Cleanup(func() {
+		container.NewDockerClient().StopAll(s.ctx, container.StopAllOpts{Labels: bridgeLabels(bridgeName)})
+		os.RemoveAll(dir)
+	})
+
+	// --- Step 1: Run `bridge create` WITHOUT --connect to set up k8s resources ---
+
+	adminAddr := fmt.Sprintf("k8spf:///%s.%s:9090", s.adminPod.Name, testutil.AdministratorNamespace)
+	baseConfig := filepath.Join(dir, ".devcontainer", "devcontainer.json")
+
+	createApp := commands.NewApp()
+	createApp.Reader = strings.NewReader("")
+	createApp.Writer = io.Discard
+
+	createArgs := []string{
+		"bridge", "create", testutil.UserserviceName,
+		"-n", testutil.UserserviceNamespace,
+		"--yes",
+		"--feature-ref", "../local-features/bridge-feature",
+		"--container-binary-path", s.bridgeBin,
+		"--proxy-image", s.administratorRef,
+		"-f", baseConfig,
+		"--admin-addr", adminAddr,
+	}
+	err = createApp.Run(s.ctx, createArgs)
+	require.NoError(t, err, "bridge create failed")
+	t.Log("bridge create (no --connect) completed")
+
+	// Verify the generated devcontainer config exists.
+	generatedConfig := filepath.Join(dir, ".devcontainer",
+		fmt.Sprintf("bridge-%s", bridgeName), "devcontainer.json")
+	_, err = os.Stat(generatedConfig)
+	require.NoError(t, err, "bridge create should have generated devcontainer config")
+
+	// Wait for the bridge pod to be ready before running exec.
+	pod, err := kube.WaitForPod(s.ctx, s.cluster.Clientset, testutil.UserserviceNamespace,
+		meta.DeploymentSelector(bridgeName), 1*time.Minute)
+	require.NoError(t, err, "bridge pod not ready")
+	t.Logf("Bridge pod ready: %s", pod.Name)
+
+	// --- Step 2: Run `bridge exec` to auto-start devcontainer and execute command ---
+
+	targetURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/",
+		testutil.UserserviceServiceName, testutil.UserserviceNamespace, testutil.UserservicePort)
+
+	execApp := commands.NewApp()
+	execApp.Writer = io.Discard
+
+	// Redirect os.Stdout to capture exec output — execInDevcontainer
+	// writes directly to os.Stdout, not to app.Writer.
+	origStdout := os.Stdout
+	stdoutR, stdoutW, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = stdoutW
+
+	execArgs := []string{
+		"bridge", "exec",
+		"-f", baseConfig,
+		testutil.UserserviceName,
+		"--", "wget", "-O", "-", "-T", "10", targetURL,
+	}
+	execErr := execApp.Run(s.ctx, execArgs)
+
+	stdoutW.Close()
+	os.Stdout = origStdout
+
+	output, _ := io.ReadAll(stdoutR)
+	t.Logf("[exec] output: %s", strings.TrimSpace(string(output)))
+
+	require.NoError(t, execErr, "bridge exec failed")
+	require.Contains(t, string(output), "ok", "expected test server response from bridge exec")
 }
 
 // runBridgeGet executes `bridge get` with the given extra args and returns

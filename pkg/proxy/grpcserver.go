@@ -17,6 +17,8 @@ import (
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 )
 
@@ -67,6 +69,9 @@ func NewGRPCServer(addr string, listenPorts []ListenPort) *GRPCServer {
 	}
 	s.server = grpc.NewServer()
 	bridgev1.RegisterBridgeProxyServiceServer(s.server, s)
+	healthSrv := health.NewServer()
+	healthpb.RegisterHealthServer(s.server, healthSrv)
+	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 	return s
 }
 

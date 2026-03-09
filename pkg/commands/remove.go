@@ -17,7 +17,7 @@ func Remove() *cli.Command {
 	return &cli.Command{
 		Name:    "remove",
 		Aliases: []string{"rm"},
-		Usage:   "Remove a bridge",
+		Usage:   "Tear down a running bridge",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "admin-addr",
@@ -50,9 +50,7 @@ func runRemove(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("bridge name is required")
 	}
 	adminAddr := c.String("admin-addr")
-	yes := c.Bool("yes") || interact.IsAgent()
 
-	r := c.Root().Reader
 	w := c.Root().Writer
 	p := interact.NewPrinter(w)
 
@@ -63,51 +61,20 @@ func runRemove(ctx context.Context, c *cli.Command) error {
 
 	sp := interact.NewSpinner(w, "Connecting to bridge administrator...")
 	ctx = interact.WithSpinner(ctx, sp)
-	go sp.Start(ctx)
+	sp.Start(ctx)
 
-	adm, isLocal, err := connectAdmin(ctx, adminAddr, deviceID)
+	adm, err := connectAdmin(ctx, adminAddr)
 	if err != nil {
 		sp.Stop()
 		return err
 	}
 	defer adm.Close()
 
-	if isLocal && !yes {
-		sp.Stop()
-		if !confirmLocalFallback(p, r) {
-			p.Println("Aborted.")
-			return nil
-		}
-		sp = interact.NewSpinner(w, "")
-		ctx = interact.WithSpinner(ctx, sp)
-		go sp.Start(ctx)
-	}
-
-	listResp, err := adm.ListBridges(ctx, &bridgev1.ListBridgesRequest{DeviceId: deviceID})
-	if err != nil {
-		sp.Stop()
-		return fmt.Errorf("failed to list bridges: %w", err)
-	}
-
-	// Find the bridge by deployment name.
-	var found *bridgev1.BridgeInfo
-	for _, b := range listResp.Bridges {
-		if b.DeploymentName == name {
-			found = b
-			break
-		}
-	}
-	if found == nil {
-		sp.Stop()
-		return fmt.Errorf("no bridge named %q found", name)
-	}
-
 	sp.SetTitle("Removing bridge...")
 
 	_, err = adm.DeleteBridge(ctx, &bridgev1.DeleteBridgeRequest{
-		DeviceId:  deviceID,
-		Name:      name,
-		Namespace: found.Namespace,
+		DeviceId: deviceID,
+		Name:     name,
 	})
 	sp.Stop()
 	if err != nil {

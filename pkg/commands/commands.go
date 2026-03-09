@@ -17,7 +17,7 @@ var BridgeFeatureTag = ""
 func NewApp() *cli.Command {
 	return &cli.Command{
 		Name:    "bridge",
-		Usage:   "Bridge CLI",
+		Usage:   "Develop locally with the network, DNS, IAM, and environment of a Kubernetes deployment",
 		Version: Version,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -55,6 +55,7 @@ func NewApp() *cli.Command {
 			Server(),
 			Intercept(),
 			Create(),
+			Exec(),
 			Get(),
 			Remove(),
 			Administrator(),

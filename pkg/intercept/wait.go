@@ -2,48 +2,21 @@ package intercept
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/vercel/bridge/pkg/container"
+	"github.com/vercel/bridge/pkg/grpcutil"
 )
 
-// WaitForReady polls the intercept log inside the container until it sees
-// "Intercept ready" or "Intercept crashed". The caller controls the timeout
-// via the context.
+// WaitForReady connects to the intercept gRPC server inside the container and
+// polls the standard health check until it reports SERVING. The caller controls
+// the timeout via the context.
 func WaitForReady(ctx context.Context, ct container.Client, containerID string) error {
-	const (
-		poll    = 500 * time.Millisecond
-		logPath = "/tmp/bridge-intercept.log"
-	)
-
-	for {
-		if ctx.Err() != nil {
-			log := ct.ReadFile(ctx, containerID, logPath)
-			if log == "" {
-				return fmt.Errorf("container failed to start (no logs available): %w", ctx.Err())
-			}
-			return fmt.Errorf("container failed to start:\n%s\n%w", logTail(log, 10), ctx.Err())
-		}
-
-		log := ct.ReadFile(ctx, containerID, logPath)
-		if strings.Contains(log, "Intercept ready") {
-			return nil
-		}
-		if strings.Contains(log, "Intercept crashed") {
-			return fmt.Errorf("container failed to start:\n%s", logTail(log, 10))
-		}
-
-		time.Sleep(poll)
+	conn, err := Connect(ctx, ct, containerID)
+	if err != nil {
+		return err
 	}
-}
+	defer conn.Close()
 
-// logTail returns the last n lines of s.
-func logTail(s string, n int) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return strings.Join(lines, "\n")
+	return grpcutil.WaitForHealthy(ctx, conn, 500*time.Millisecond)
 }
