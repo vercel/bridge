@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/urfave/cli/v3"
 
@@ -57,7 +58,11 @@ func runExec(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("failed to get device identity: %w", err)
 	}
 
-	bridgeName := identity.BridgeResourceName(deviceID, deploymentName)
+	suffix := "-" + identity.ShortDeviceID(deviceID)
+	bridgeName := deploymentName
+	if !strings.HasSuffix(bridgeName, suffix) {
+		bridgeName = identity.BridgeResourceName(deviceID, deploymentName)
+	}
 	ct := container.NewDockerClient()
 	labels := map[string]string{labelBridgeDeployment: bridgeName}
 
