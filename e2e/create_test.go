@@ -611,7 +611,6 @@ func (s *CreateSuite) TestExec() {
 
 	execArgs := []string{
 		"bridge", "exec",
-		"-f", baseConfig,
 		testutil.UserserviceName,
 		"--", "wget", "-O", "-", "-T", "10", targetURL,
 	}

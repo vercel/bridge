@@ -36,16 +36,36 @@ const defaultAdminAddr = "k8spf:///administrator.bridge:9090?workload=deployment
 const defaultProxyImage = "ghcr.io/vercel/bridge-cli:latest"
 const labelBridgeDeployment = "bridge.deployment"
 
+const createUsageText = `bridge create <deployment> [flags]
+
+Examples:
+  # Create from an existing deployment
+  bridge create my-api -n production
+
+  # Create from a directory of Kubernetes manifests
+  bridge create --source ./k8s/
+
+  # Create then run a command with bridge exec
+  bridge create my-api
+  bridge exec my-api -- npm test
+
+  # Create then use devcontainer up and devcontainer exec
+  bridge create my-api
+  devcontainer up --config .devcontainer/bridge-<name>/devcontainer.json
+  devcontainer exec --config .devcontainer/bridge-<name>/devcontainer.json npm test`
+
 // Create returns the CLI command for creating a bridge.
 func Create() *cli.Command {
 	return &cli.Command{
-		Name:  "create",
-		Usage: "Generate a devcontainer connected to a target deployment",
+		Name:      "create",
+		Usage:     "Generate a devcontainer connected to a target deployment",
+		UsageText: createUsageText,
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:    "connect",
 				Aliases: []string{"c"},
 				Usage:   "Start the devcontainer and exec into it after creation",
+				Hidden:  interact.IsAgent(),
 			},
 			&cli.StringFlag{
 				Name:    "namespace",
@@ -63,6 +83,7 @@ func Create() *cli.Command {
 				Name:    "yes",
 				Aliases: []string{"y"},
 				Usage:   "Auto-accept all confirmation prompts",
+				Hidden:  interact.IsAgent(),
 			},
 			&cli.StringFlag{
 				Name:    "devcontainer-config",
@@ -107,6 +128,7 @@ func Create() *cli.Command {
 			&cli.StringFlag{
 				Name:    "devcontainer-up-args",
 				Usage:   "Additional arguments to pass to devcontainer up (e.g. \"--rebuild\")",
+				Hidden:  interact.IsAgent(),
 				Sources: cli.EnvVars("BRIDGE_DEVCONTAINER_UP_ARGS"),
 			},
 		},
@@ -258,7 +280,7 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	}
 
 	// Step 4: Create bridge.
-	sp.SetTitle("Creating bridge...")
+	sp.SetTitle("Creating bridge server...")
 
 	createResp, err := adm.CreateBridge(ctx, &bridgev1.CreateBridgeRequest{
 		DeviceId:         deviceID,
@@ -427,7 +449,6 @@ func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef s
 			return "", nil, fmt.Errorf("failed to write env file: %w", err)
 		}
 		cfg.EnsureRunArgs("--env-file", envFilePath)
-		p.Info(fmt.Sprintf("Environment variables written to %s (%d vars)", envFilePath, len(resp.EnvVars)))
 
 		// The source pod's env vars may include AWS credentials that override
 		// the developer's local ~/.aws config. Tell the intercept process to

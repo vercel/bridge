@@ -14,18 +14,27 @@ import (
 	"github.com/vercel/bridge/pkg/devcontainer"
 	"github.com/vercel/bridge/pkg/identity"
 	"github.com/vercel/bridge/pkg/interact"
+	"github.com/vercel/bridge/pkg/intercept"
 )
+
+const execUsageText = `bridge exec <deployment> <command...>
+
+Examples:
+  bridge exec my-api -- curl http://redis:6379
+  bridge exec my-api -- npm test
+  bridge exec my-api -- wget -O - http://svc.ns.svc.cluster.local/`
 
 // Exec returns the CLI command for running a command as a deployment.
 func Exec() *cli.Command {
 	return &cli.Command{
-		Name:  "exec",
-		Usage: "Run a command in a deployment's environment",
+		Name:      "exec",
+		Usage:     "Run a command in a deployment's environment",
+		UsageText: execUsageText,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "devcontainer-config",
 				Aliases: []string{"f"},
-				Usage:   "Path to a base devcontainer.json to extend",
+				Usage:   "Path to a devcontainer.json to use (overrides the auto-derived config)",
 			},
 		},
 		Before: preflightCreate,
@@ -52,17 +61,26 @@ func runExec(ctx context.Context, c *cli.Command) error {
 	ct := container.NewDockerClient()
 	labels := map[string]string{labelBridgeDeployment: bridgeName}
 
-	// Resolve the base devcontainer config to derive the bridge config path.
-	baseConfig, err := devcontainer.ResolveConfigPath(c.String("devcontainer-config"))
-	if err != nil {
-		return err
+	// Resolve the devcontainer config path. When -f is provided, use it
+	// directly; otherwise derive it from the base config and bridge name.
+	var dcConfigPath string
+	if explicit := c.String("devcontainer-config"); explicit != "" {
+		dcConfigPath = explicit
+	} else {
+		baseConfig, err := devcontainer.ResolveConfigPath("")
+		if err != nil {
+			return err
+		}
+		dcConfigPath = bridgeConfigPath(baseConfig, bridgeName)
 	}
-	dcConfigPath := bridgeConfigPath(baseConfig, bridgeName)
 	workspaceFolder, _ := filepath.Abs(filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath))))
 
 	// Check if a container is already running for this bridge.
-	if _, findErr := ct.FindID(ctx, container.FindOpts{Labels: labels}); findErr == nil {
-		slog.Debug("Container already running, executing command", "bridge", bridgeName)
+	if containerID, findErr := ct.FindID(ctx, container.FindOpts{Labels: labels}); findErr == nil {
+		slog.Debug("Container already running, checking health", "bridge", bridgeName)
+		if err := intercept.WaitForReady(ctx, ct, containerID); err != nil {
+			return fmt.Errorf("interceptor is not healthy: %w", err)
+		}
 		return execInDevcontainer(ctx, workspaceFolder, dcConfigPath, nil, cmdArgs)
 	}
 
