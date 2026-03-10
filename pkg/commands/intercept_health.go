@@ -67,12 +67,12 @@ func (s *interceptServer) Check(ctx context.Context, _ *healthpb.HealthCheckRequ
 	if err != nil {
 		msg := fmt.Sprintf("proxy server: %v", err)
 		slog.Warn("Health check failed", "error", msg)
-		return nil, status.Errorf(codes.Unavailable, msg)
+		return nil, status.Errorf(codes.Unavailable, "%s", msg)
 	}
 	if resp.GetStatus() != healthpb.HealthCheckResponse_SERVING {
 		msg := fmt.Sprintf("proxy server: status %s", resp.GetStatus())
 		slog.Warn("Health check failed", "error", msg)
-		return nil, status.Errorf(codes.Unavailable, msg)
+		return nil, status.Errorf(codes.Unavailable, "%s", msg)
 	}
 
 	return &healthpb.HealthCheckResponse{
