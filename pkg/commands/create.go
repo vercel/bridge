@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -633,8 +634,11 @@ func startDevcontainer(ctx context.Context, w io.Writer, ct container.Client, dc
 		return fmt.Errorf("failed to start devcontainer: %w", err)
 	}
 
+	// Tee the build output into the log so that `bridge debug` captures it.
+	buildOutput := io.TeeReader(proc.Output(), &slogLineWriter{})
+
 	vp := interact.NewViewport(w, interact.ViewportOpts{Title: "Building devcontainer..."})
-	vp.Run(ctx, proc.Output())
+	vp.Run(ctx, buildOutput)
 
 	if err := proc.Wait(); err != nil {
 		return fmt.Errorf("failed to start devcontainer: %w", err)
@@ -714,4 +718,25 @@ func resolveSourceFlag(sourcePath string) (fs.FS, string, error) {
 		dir = "."
 	}
 	return os.DirFS(dir), filepath.Base(sourcePath), nil
+}
+
+// slogLineWriter is an io.Writer that logs each complete line via slog.Debug.
+type slogLineWriter struct {
+	buf []byte
+}
+
+func (w *slogLineWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		idx := bytes.IndexByte(w.buf, '\n')
+		if idx < 0 {
+			break
+		}
+		line := strings.TrimRight(string(w.buf[:idx]), "\r")
+		w.buf = w.buf[idx+1:]
+		if line != "" {
+			slog.Debug("devcontainer up", "output", line)
+		}
+	}
+	return len(p), nil
 }
