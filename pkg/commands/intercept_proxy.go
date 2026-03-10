@@ -19,19 +19,21 @@ const (
 
 // ProxyComponent manages the transparent proxy listener, tunnel client, and iptables rules.
 type ProxyComponent struct {
-	tunnel   plumbing.Tunnel
-	listener net.Listener
-	port     int
-	registry *conntrack.Registry
-	dnsPort  int
+	tunnel     plumbing.Tunnel
+	listener   net.Listener
+	port       int
+	registry   *conntrack.Registry
+	dnsPort    int
+	excludeGID int
 }
 
 // ProxyConfig holds configuration for starting the proxy component.
 type ProxyConfig struct {
-	Tunnel    plumbing.Tunnel
-	ProxyPort int // 0 = random
-	Registry  *conntrack.Registry
-	DNSPort   int // If >0, redirect all UDP :53 traffic to this port
+	Tunnel     plumbing.Tunnel
+	ProxyPort  int // 0 = random
+	Registry   *conntrack.Registry
+	DNSPort    int // If >0, redirect all UDP :53 traffic to this port
+	ExcludeGID int // If >0, exclude this GID from DNS redirect
 }
 
 // StartProxy creates a transparent proxy listener and initializes the tunnel client.
@@ -44,11 +46,12 @@ func StartProxy(cfg ProxyConfig) (*ProxyComponent, error) {
 	addr := listener.Addr().(*net.TCPAddr)
 
 	p := &ProxyComponent{
-		tunnel:   cfg.Tunnel,
-		listener: listener,
-		port:     addr.Port,
-		registry: cfg.Registry,
-		dnsPort:  cfg.DNSPort,
+		tunnel:     cfg.Tunnel,
+		listener:   listener,
+		port:       addr.Port,
+		registry:   cfg.Registry,
+		dnsPort:    cfg.DNSPort,
+		excludeGID: cfg.ExcludeGID,
 	}
 
 	return p, nil
@@ -82,6 +85,19 @@ func (p *ProxyComponent) SetupIptables() error {
 	// instead of /etc/resolv.conf. The DNS server's own fallback queries use
 	// TCP, so they are not affected by this rule.
 	if p.dnsPort > 0 {
+		// Exclude bridge's own GID from the DNS redirect. When the gRPC
+		// connection drops and reconnects, the k8spf dialer calls
+		// resolvePod → K8s API → aws eks get-token, which needs real DNS
+		// to reach sts.amazonaws.com. Without this exclusion, the query
+		// loops back to our DNS server which depends on the broken tunnel.
+		if p.excludeGID > 0 {
+			cmds = append(cmds,
+				[]string{"iptables", "-t", "nat", "-A", "BRIDGE_INTERCEPT",
+					"-p", "udp", "--dport", "53",
+					"-m", "owner", "--gid-owner", fmt.Sprintf("%d", p.excludeGID),
+					"-j", "RETURN"},
+			)
+		}
 		cmds = append(cmds,
 			[]string{"iptables", "-t", "nat", "-A", "BRIDGE_INTERCEPT", "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-ports", fmt.Sprintf("%d", p.dnsPort)},
 			[]string{"iptables", "-t", "nat", "-A", "OUTPUT", "-p", "udp", "--dport", "53", "-j", "BRIDGE_INTERCEPT"},

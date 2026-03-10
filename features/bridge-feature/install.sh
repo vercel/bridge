@@ -30,6 +30,30 @@ install_dependencies() {
     fi
 }
 
+# Create a dedicated group for running bridge intercept.
+# Running under a separate GID allows iptables --gid-owner rules to exclude
+# bridge's own DNS traffic from the UDP redirect, preventing a circular
+# dependency when gRPC reconnects and the aws CLI needs real DNS to reach
+# the STS endpoint for EKS authentication.
+create_bridge_group() {
+    if getent group _bridge &> /dev/null; then
+        echo "Group _bridge already exists"
+        return
+    fi
+
+    echo "Creating _bridge group..."
+    if command -v addgroup &> /dev/null && command -v apk &> /dev/null; then
+        # Alpine
+        addgroup -S _bridge
+    elif command -v groupadd &> /dev/null; then
+        # Debian / RHEL
+        groupadd --system _bridge
+    else
+        echo "ERROR: could not create _bridge group (no addgroup/groupadd found)" >&2
+        exit 1
+    fi
+}
+
 # Write environment configuration to /etc/profile.d (sourced by entrypoint)
 write_env_config() {
     cat > /etc/profile.d/bridge.sh << EOF
@@ -56,9 +80,12 @@ EOF
 # Source profile in case env vars aren't inherited
 [ -f /etc/profile.d/bridge.sh ] && source /etc/profile.d/bridge.sh
 
-# Run bridge intercept as root (required for iptables).
+# Run bridge intercept as root under the _bridge group (required for iptables).
+# The dedicated GID lets iptables exclude bridge's own DNS traffic from the
+# UDP redirect via --gid-owner, breaking the circular dependency when gRPC
+# reconnects and the aws CLI needs real DNS.
 if [ -n "$BRIDGE_SERVER_ADDR" ]; then
-    sudo -E bash -c '
+    sudo -E sg _bridge -c '
         exec /usr/local/bin/bridge --log-paths stderr intercept
     ' > /tmp/bridge-intercept.log 2>&1 &
 fi
@@ -73,6 +100,7 @@ main() {
     echo "Installing Bridge Tunnel Client..."
 
     install_dependencies
+    create_bridge_group
     write_env_config
     create_entrypoint
 

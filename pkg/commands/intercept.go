@@ -213,11 +213,17 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	if dns != nil {
 		dnsPortForIPTables = dns.Port()
 	}
+
+	// Pass the current process GID so iptables can exclude bridge's own DNS
+	// traffic from the UDP redirect. This prevents a circular dependency when
+	// gRPC reconnects and needs real DNS for EKS auth. GID 0 (root) is not
+	// excluded since that would bypass the redirect for most container processes.
 	proxyComp, err := StartProxy(ProxyConfig{
-		Tunnel:    tun,
-		ProxyPort: proxyPort,
-		Registry:  registry,
-		DNSPort:   dnsPortForIPTables,
+		Tunnel:     tun,
+		ProxyPort:  proxyPort,
+		Registry:   registry,
+		DNSPort:    dnsPortForIPTables,
+		ExcludeGID: os.Getgid(),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to start proxy listener: %w", err)
