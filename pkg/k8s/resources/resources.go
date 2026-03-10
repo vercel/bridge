@@ -185,6 +185,7 @@ func injectProxyImage(deploy *appsv1.Deployment, proxyImage string) {
 	}
 
 	c.Image = proxyImage
+	c.ImagePullPolicy = "" // clear so k8s defaults to Always for :latest tags
 	c.Command = args
 	c.Args = nil
 	c.Ports = []corev1.ContainerPort{
