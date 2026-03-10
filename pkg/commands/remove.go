@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/urfave/cli/v3"
 
@@ -57,6 +58,14 @@ func runRemove(ctx context.Context, c *cli.Command) error {
 	deviceID, err := identity.GetDeviceID()
 	if err != nil {
 		return fmt.Errorf("failed to get device identity: %w", err)
+	}
+
+	// Normalize the name: if the user passes the short deployment name
+	// (e.g. "api-feature-flags"), append the device suffix so it matches
+	// the bridge resource name used by create/exec.
+	suffix := "-" + identity.ShortDeviceID(deviceID)
+	if !strings.HasSuffix(name, suffix) {
+		name = identity.BridgeResourceName(deviceID, name)
 	}
 
 	sp := interact.NewSpinner(w, "Connecting to bridge administrator...")
