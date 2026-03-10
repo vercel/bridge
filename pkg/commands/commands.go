@@ -7,18 +7,33 @@ import (
 
 	"github.com/urfave/cli/v3"
 	"github.com/vercel/bridge/pkg/identity"
+	"github.com/vercel/bridge/pkg/interact"
 	"github.com/vercel/bridge/pkg/logging"
 )
 
 var Version = "dev"
 var BridgeFeatureTag = ""
 
+func rootUsageText() string {
+	if interact.IsAgent() {
+		return `bridge <command> [flags]
+
+Example:
+  bridge create my-api && bridge exec my-api -- npm test`
+	}
+	return `bridge <command> [flags]
+
+Example:
+  bridge create -c my-api -n production`
+}
+
 // NewApp returns the root CLI command with all subcommands registered.
 func NewApp() *cli.Command {
 	return &cli.Command{
-		Name:    "bridge",
-		Usage:   "Develop locally with the network, DNS, IAM, and environment of a Kubernetes deployment",
-		Version: Version,
+		Name:      "bridge",
+		Usage:     "Develop locally with the network, DNS, IAM, and environment of a Kubernetes deployment",
+		UsageText: rootUsageText(),
+		Version:   Version,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "log-level",
