@@ -28,6 +28,19 @@ install_dependencies() {
             yum install -y iptables || echo "WARNING: failed to install iptables (will retry at runtime)" >&2
         fi
     fi
+
+    # Install sg (switch group) if not present. Required by the entrypoint
+    # to run bridge intercept under the _bridge group for iptables GID exclusion.
+    if ! command -v sg &> /dev/null; then
+        echo "Installing sg..."
+        if command -v apt-get &> /dev/null; then
+            apt-get update && apt-get install -y login || true
+        elif command -v apk &> /dev/null; then
+            apk add --no-cache shadow-login || true
+        elif command -v yum &> /dev/null; then
+            yum install -y shadow-utils || true
+        fi
+    fi
 }
 
 # Create a dedicated group for running bridge intercept.
