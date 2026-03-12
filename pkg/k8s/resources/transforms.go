@@ -1,6 +1,8 @@
 package resources
 
 import (
+	"strings"
+
 	"github.com/vercel/bridge/pkg/k8s/meta"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -79,6 +81,82 @@ func filterMounts(mounts []corev1.VolumeMount, validVolumes map[string]bool) []c
 		}
 	}
 	return kept
+}
+
+// StripUnreferencedLabels returns a Transformer that removes all labels from
+// Deployments (both object metadata and pod template metadata) except those
+// referenced by fieldRef expressions in the pod spec (e.g. downward API env
+// vars like metadata.labels['key']). This prevents existing Services from
+// selecting bridge pods via inherited source labels while preserving labels
+// required by the pod's runtime configuration.
+// Runs before InjectLabels — operates on original source labels.
+func StripUnreferencedLabels() Transformer {
+	return TransformFunc(func(_ *TransformContext, b *Bundle) error {
+		for _, r := range b.Resources {
+			deploy, ok := r.Object.(*appsv1.Deployment)
+			if !ok {
+				continue
+			}
+			referenced := collectFieldRefLabels(&deploy.Spec.Template.Spec)
+			deploy.Labels = keepOnly(deploy.Labels, referenced)
+			deploy.Spec.Template.Labels = keepOnly(deploy.Spec.Template.Labels, referenced)
+		}
+		return nil
+	})
+}
+
+// collectFieldRefLabels scans all containers in a pod spec for env vars that
+// use fieldRef with metadata.labels['...'] and returns the set of label keys.
+func collectFieldRefLabels(podSpec *corev1.PodSpec) map[string]bool {
+	keys := make(map[string]bool)
+	for _, c := range podSpec.Containers {
+		addFieldRefLabels(&c, keys)
+	}
+	for _, c := range podSpec.InitContainers {
+		addFieldRefLabels(&c, keys)
+	}
+	return keys
+}
+
+func addFieldRefLabels(c *corev1.Container, keys map[string]bool) {
+	for _, env := range c.Env {
+		if env.ValueFrom == nil || env.ValueFrom.FieldRef == nil {
+			continue
+		}
+		if key, ok := parseLabelFieldPath(env.ValueFrom.FieldRef.FieldPath); ok {
+			keys[key] = true
+		}
+	}
+}
+
+// parseLabelFieldPath extracts the label key from a fieldPath like
+// metadata.labels['app'] or metadata.labels['app.kubernetes.io/name'].
+func parseLabelFieldPath(fieldPath string) (string, bool) {
+	const prefix = "metadata.labels['"
+	const suffix = "']"
+	if strings.HasPrefix(fieldPath, prefix) && strings.HasSuffix(fieldPath, suffix) {
+		key := fieldPath[len(prefix) : len(fieldPath)-len(suffix)]
+		return key, true
+	}
+	return "", false
+}
+
+// keepOnly returns a new map containing only the keys present in the keep set.
+// Returns nil if no labels remain or labels is nil.
+func keepOnly(labels map[string]string, keep map[string]bool) map[string]string {
+	if len(labels) == 0 {
+		return nil
+	}
+	filtered := make(map[string]string)
+	for k, v := range labels {
+		if keep[k] {
+			filtered[k] = v
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
 }
 
 // InjectProxyImage returns a Transformer that finds the target Deployment and

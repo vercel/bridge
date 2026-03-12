@@ -112,6 +112,7 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 		resources.SetNamespace(targetNS),
 		resources.PruneAllMetadata(),
 		resources.StripOrphanedVolumes(),
+		resources.StripUnreferencedLabels(),
 		resources.InjectProxyImage(proxyImage),
 		resources.ClearClusterIPs(),
 		resources.SuffixNames(suffix),

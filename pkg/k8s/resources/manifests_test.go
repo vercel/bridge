@@ -58,6 +58,7 @@ func testCreateFromManifests(t *testing.T, client *k8stesting.Clientset, sourceM
 
 	transforms := []Transformer{
 		PruneAllMetadata(),
+		StripUnreferencedLabels(),
 		InjectProxyImage(testProxyImage),
 		SuffixNames(testSuffix),
 		InjectLabels(),
@@ -487,6 +488,7 @@ data:
 
 	transforms := []Transformer{
 		PruneAllMetadata(),
+		StripUnreferencedLabels(),
 		InjectProxyImage(testProxyImage),
 		SuffixNames(testSuffix),
 		InjectLabels(),
@@ -578,6 +580,197 @@ data:
 	bridgeCM, err := client.CoreV1().ConfigMaps("default").Get(context.Background(), "app-config"+suffix, metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "bridge-value", bridgeCM.Data["DB_HOST"])
+}
+
+func TestStripUnreferencedLabels_RemovesSourceLabels(t *testing.T) {
+	manifests := packTestManifests(t, map[string]string{
+		"deploy.yaml": `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  labels:
+    app: my-app
+    version: v1
+spec:
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+        version: v1
+    spec:
+      containers:
+      - name: app
+        image: my-app:latest
+        ports:
+        - containerPort: 3000
+`,
+	})
+
+	client := k8stesting.NewSimpleClientset()
+	deployName, _, err := testCreateFromManifests(t, client, manifests, "default")
+	require.NoError(t, err)
+
+	deploy, err := client.AppsV1().Deployments("default").Get(context.Background(), deployName, metav1.GetOptions{})
+	require.NoError(t, err)
+
+	// Source labels (app, version) should be stripped.
+	assert.Empty(t, deploy.Labels["app"], "source label 'app' should be stripped from deployment metadata")
+	assert.Empty(t, deploy.Labels["version"], "source label 'version' should be stripped from deployment metadata")
+
+	// Bridge labels should still be present (injected after strip).
+	assert.Equal(t, meta.BridgeTypeProxy, deploy.Labels[meta.LabelBridgeType])
+}
+
+func TestStripUnreferencedLabels_PreservesFieldRefLabels(t *testing.T) {
+	manifests := packTestManifests(t, map[string]string{
+		"deploy.yaml": `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  labels:
+    app: my-app
+    version: v1
+    region: us-east-1
+spec:
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+        version: v1
+        region: us-east-1
+    spec:
+      containers:
+      - name: app
+        image: my-app:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: APP_VERSION
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['version']
+        - name: REGION
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['region']
+`,
+	})
+
+	client := k8stesting.NewSimpleClientset()
+	deployName, _, err := testCreateFromManifests(t, client, manifests, "default")
+	require.NoError(t, err)
+
+	deploy, err := client.AppsV1().Deployments("default").Get(context.Background(), deployName, metav1.GetOptions{})
+	require.NoError(t, err)
+
+	// Labels referenced by fieldRef should be preserved.
+	assert.Equal(t, "v1", deploy.Labels["version"], "fieldRef-referenced label 'version' should be preserved")
+	assert.Equal(t, "us-east-1", deploy.Labels["region"], "fieldRef-referenced label 'region' should be preserved")
+
+	// Non-referenced source labels should be stripped.
+	assert.Empty(t, deploy.Labels["app"], "non-referenced label 'app' should be stripped")
+
+	// Pod template labels should also preserve fieldRef-referenced labels.
+	podLabels := deploy.Spec.Template.Labels
+	assert.Equal(t, "v1", podLabels["version"])
+	assert.Equal(t, "us-east-1", podLabels["region"])
+}
+
+func TestStripUnreferencedLabels_InitContainerFieldRef(t *testing.T) {
+	manifests := packTestManifests(t, map[string]string{
+		"deploy.yaml": `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  labels:
+    app: my-app
+    tier: backend
+spec:
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+        tier: backend
+    spec:
+      initContainers:
+      - name: init
+        image: init:latest
+        env:
+        - name: TIER
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['tier']
+      containers:
+      - name: app
+        image: my-app:latest
+        ports:
+        - containerPort: 3000
+`,
+	})
+
+	client := k8stesting.NewSimpleClientset()
+	deployName, _, err := testCreateFromManifests(t, client, manifests, "default")
+	require.NoError(t, err)
+
+	deploy, err := client.AppsV1().Deployments("default").Get(context.Background(), deployName, metav1.GetOptions{})
+	require.NoError(t, err)
+
+	// Label referenced by initContainer fieldRef should be preserved.
+	assert.Equal(t, "backend", deploy.Labels["tier"], "fieldRef label from initContainer should be preserved")
+
+	// Non-referenced label should be stripped.
+	assert.Empty(t, deploy.Labels["app"])
+}
+
+func TestStripUnreferencedLabels_NoFieldRefs(t *testing.T) {
+	manifests := packTestManifests(t, map[string]string{
+		"deploy.yaml": `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  labels:
+    app: my-app
+    team: platform
+spec:
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+        team: platform
+    spec:
+      containers:
+      - name: app
+        image: my-app:latest
+        ports:
+        - containerPort: 3000
+`,
+	})
+
+	client := k8stesting.NewSimpleClientset()
+	deployName, _, err := testCreateFromManifests(t, client, manifests, "default")
+	require.NoError(t, err)
+
+	deploy, err := client.AppsV1().Deployments("default").Get(context.Background(), deployName, metav1.GetOptions{})
+	require.NoError(t, err)
+
+	// All source labels should be stripped when there are no fieldRefs.
+	assert.Empty(t, deploy.Labels["app"])
+	assert.Empty(t, deploy.Labels["team"])
+
+	// Bridge labels should still be present.
+	assert.Equal(t, meta.BridgeTypeProxy, deploy.Labels[meta.LabelBridgeType])
 }
 
 // packTestManifests creates a tar.gz archive from a map of filename to YAML content.
