@@ -88,20 +88,9 @@ func runExec(ctx context.Context, c *cli.Command) error {
 		return execInDevcontainer(ctx, workspaceFolder, dcConfigPath, nil, cmdArgs)
 	}
 
-	// No running container — resolve the config path from -f or the CWD
-	// and check if a bridge config exists on disk.
-	var dcConfigPath string
-	if explicit := c.String("devcontainer-config"); explicit != "" {
-		dcConfigPath = explicit
-	} else {
-		baseConfig, err := devcontainer.ResolveConfigPath("")
-		if err != nil {
-			return err
-		}
-		dcConfigPath = bridgeConfigPath(baseConfig, bridgeName)
-	}
-
-	if _, err := os.Stat(dcConfigPath); err != nil {
+	// No running container — resolve the devcontainer config to use.
+	dcConfigPath, err := resolveExecConfig(c.String("devcontainer-config"), bridgeName)
+	if err != nil {
 		return fmt.Errorf("no bridge found for %q — run: bridge create %s", deploymentName, deploymentName)
 	}
 
@@ -131,12 +120,64 @@ func execInDevcontainer(ctx context.Context, workspaceFolder, configPath string,
 	return dcClient.ExecAttached(ctx, cmdArgs)
 }
 
-// bridgeConfigPath returns the expected devcontainer config path for a bridge,
-// given the base config path and bridge deployment name.
-func bridgeConfigPath(baseConfigPath, bridgeName string) string {
-	baseParent := filepath.Dir(baseConfigPath)
-	if filepath.Base(baseParent) == ".devcontainer" {
-		return filepath.Join(baseParent, fmt.Sprintf("bridge-%s", bridgeName), "devcontainer.json")
+// resolveExecConfig determines the devcontainer.json to use for exec when no
+// container is running. If explicit is set, it is used as-is when it already
+// contains the bridge feature; otherwise it is treated as a base config and the
+// bridge config path is derived from it. When explicit is empty, the standard
+// devcontainer resolution is used as the base.
+func resolveExecConfig(explicit, bridgeName string) (string, error) {
+	var basePath string
+	if explicit != "" {
+		basePath = explicit
+	} else {
+		resolved, err := devcontainer.ResolveConfigPath("")
+		if err != nil {
+			return "", err
+		}
+		basePath = resolved
 	}
-	return filepath.Join(baseParent, ".devcontainer", fmt.Sprintf("bridge-%s", bridgeName), "devcontainer.json")
+
+	// If the config at basePath already has the bridge feature, use it directly.
+	if hasBridgeFeature(basePath) {
+		return basePath, nil
+	}
+
+	// Otherwise derive the generated bridge config path from the base.
+	derived := bridgeConfigPath(basePath, bridgeName)
+	if _, err := os.Stat(derived); err != nil {
+		return "", err
+	}
+	return derived, nil
+}
+
+// hasBridgeFeature returns true if the devcontainer.json at path contains a
+// bridge feature entry.
+func hasBridgeFeature(path string) bool {
+	cfg, err := devcontainer.Load(path)
+	if err != nil {
+		return false
+	}
+	for key := range cfg.Features {
+		if strings.Contains(key, "bridge") {
+			return true
+		}
+	}
+	return false
+}
+
+// bridgeConfigPath returns the expected devcontainer config path for a bridge,
+// given the base config path and bridge deployment name. The bridge config is
+// always placed as a subdirectory of the nearest .devcontainer ancestor. If no
+// .devcontainer directory exists in the path, one is created next to the base
+// config.
+func bridgeConfigPath(baseConfigPath, bridgeName string) string {
+	bridgeDir := fmt.Sprintf("bridge-%s", bridgeName)
+	dir := filepath.Dir(baseConfigPath)
+	for dir != "." && dir != "/" {
+		if filepath.Base(dir) == ".devcontainer" {
+			return filepath.Join(dir, bridgeDir, "devcontainer.json")
+		}
+		dir = filepath.Dir(dir)
+	}
+	return filepath.Join(filepath.Dir(baseConfigPath), ".devcontainer", bridgeDir, "devcontainer.json")
 }
