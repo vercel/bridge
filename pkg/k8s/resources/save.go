@@ -14,16 +14,14 @@ import (
 )
 
 // Save persists every resource in the bundle, dispatching to the appropriate
-// upsert helper based on the concrete type.
+// upsert helper based on the concrete type. Dependencies (ServiceAccounts,
+// Secrets, ConfigMaps) are saved before workloads (Deployments, Services) so
+// they exist when the pod is admitted.
 func Save(ctx context.Context, client kubernetes.Interface, dynClient dynamic.Interface, b *Bundle) error {
 	for _, r := range b.Resources {
 		switch obj := r.Object.(type) {
-		case *appsv1.Deployment:
-			if err := upsertDeployment(ctx, client, obj); err != nil {
-				return err
-			}
-		case *corev1.Service:
-			if err := upsertService(ctx, client, obj); err != nil {
+		case *corev1.ServiceAccount:
+			if err := upsertServiceAccount(ctx, client, obj); err != nil {
 				return err
 			}
 		case *corev1.Secret:
@@ -34,8 +32,16 @@ func Save(ctx context.Context, client kubernetes.Interface, dynClient dynamic.In
 			if err := upsertConfigMap(ctx, client, obj.Namespace, obj); err != nil {
 				return err
 			}
-		case *corev1.ServiceAccount:
-			if err := upsertServiceAccount(ctx, client, obj); err != nil {
+		}
+	}
+	for _, r := range b.Resources {
+		switch obj := r.Object.(type) {
+		case *appsv1.Deployment:
+			if err := upsertDeployment(ctx, client, obj); err != nil {
+				return err
+			}
+		case *corev1.Service:
+			if err := upsertService(ctx, client, obj); err != nil {
 				return err
 			}
 		case *unstructured.Unstructured:

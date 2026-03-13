@@ -7,13 +7,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 const (
-	maxLogFileSize = 10 * 1024 * 1024 // 10 MB
-	logDir         = ".bridge/logs"
-	logFileName    = "bridge.log"
-	logFileBackup  = "bridge.log.1"
+	logDir      = ".bridge/logs"
+	logFileName = "bridge.log"
 )
 
 // multiHandler fans out slog records to multiple handlers.
@@ -68,10 +68,10 @@ func Setup(level slog.Level, logPaths []string) (cleanup func(), err error) {
 	var closers []io.Closer
 
 	// Always include the default rolling log file.
-	logFile, fileErr := openLogFile()
+	logWriter, fileErr := openLogWriter()
 	if fileErr == nil {
-		handlers = append(handlers, newJSONHandler(logFile, slog.LevelDebug))
-		closers = append(closers, logFile)
+		handlers = append(handlers, newJSONHandler(logWriter, slog.LevelDebug))
+		closers = append(closers, logWriter)
 	}
 
 	// Add any extra destinations from --log-paths.
@@ -131,9 +131,10 @@ func newJSONHandler(w io.Writer, level slog.Level) slog.Handler {
 	})
 }
 
-// openLogFile opens the log file at ~/.bridge/logs/bridge.log, rotating the
-// existing file to bridge.log.1 if it exceeds maxLogFileSize.
-func openLogFile() (*os.File, error) {
+// openLogWriter returns a lumberjack rolling writer for ~/.bridge/logs/bridge.log.
+// It rotates when the file exceeds 10 MB, keeps 3 old files, and discards logs
+// older than 7 days.
+func openLogWriter() (*lumberjack.Logger, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("cannot determine home directory: %w", err)
@@ -144,14 +145,11 @@ func openLogFile() (*os.File, error) {
 		return nil, fmt.Errorf("cannot create log directory: %w", err)
 	}
 
-	logPath := filepath.Join(dir, logFileName)
-
-	// Simple rotation: if the file exceeds the size limit, rename to .1.
-	if info, err := os.Stat(logPath); err == nil && info.Size() > maxLogFileSize {
-		backupPath := filepath.Join(dir, logFileBackup)
-		_ = os.Remove(backupPath)
-		_ = os.Rename(logPath, backupPath)
-	}
-
-	return os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	return &lumberjack.Logger{
+		Filename:   filepath.Join(dir, logFileName),
+		MaxSize:    10, // MB
+		MaxBackups: 3,
+		MaxAge:     7, // days
+		Compress:   true,
+	}, nil
 }

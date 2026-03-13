@@ -3,9 +3,7 @@ package resources
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
-	"github.com/vercel/bridge/pkg/k8s/kube"
 	"github.com/vercel/bridge/pkg/k8s/meta"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -16,9 +14,9 @@ import (
 )
 
 // SourceFromNamespace fetches a source deployment from the cluster and returns
-// a Bundle containing just that deployment. When a live pod is available, its
-// container spec is used instead of the deployment template to capture runtime
-// mutations (e.g. injected sidecars).
+// a Bundle containing just that deployment. Only the deployment spec is used —
+// not the live pod — so that webhook-injected env vars and volume mounts (e.g.
+// IRSA) are absent and get cleanly re-injected on the bridge pod.
 func SourceFromNamespace(ctx context.Context, client kubernetes.Interface, namespace, deployment string) (*Bundle, error) {
 	srcDeploy, err := client.AppsV1().Deployments(namespace).Get(ctx, deployment, metav1.GetOptions{})
 	if err != nil {
@@ -26,21 +24,6 @@ func SourceFromNamespace(ctx context.Context, client kubernetes.Interface, names
 			return nil, &DeploymentNotFoundError{Name: deployment, Namespace: namespace}
 		}
 		return nil, fmt.Errorf("failed to get source deployment %s/%s: %w", namespace, deployment, err)
-	}
-
-	// Use a live pod's container spec when available — it reflects runtime
-	// mutations (e.g. injected sidecars, admission webhooks) that the
-	// deployment template doesn't capture. Fall back to the template spec.
-	sourceContainers := srcDeploy.Spec.Template.Spec.Containers
-	if podName, err := kube.GetFirstPodForDeployment(ctx, client, namespace, deployment); err == nil {
-		if pod, err := client.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{}); err == nil && len(pod.Spec.Containers) > 0 {
-			slog.Info("Using live pod for source configuration", "pod", podName)
-			sourceContainers = pod.Spec.Containers
-		}
-	}
-
-	if len(sourceContainers) > 0 {
-		srcDeploy.Spec.Template.Spec.Containers = sourceContainers
 	}
 
 	return &Bundle{
