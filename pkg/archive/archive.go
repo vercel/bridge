@@ -79,6 +79,39 @@ func PackGlobFiles(fsys fs.FS, pattern string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// PackSingleFile creates a tar.gz archive containing a single file with the
+// given name and content.
+func PackSingleFile(name string, content []byte) ([]byte, error) {
+	if len(content) == 0 {
+		return nil, fmt.Errorf("empty content for %q", name)
+	}
+
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	header := &tar.Header{
+		Name: name,
+		Size: int64(len(content)),
+		Mode: 0644,
+	}
+	if err := tw.WriteHeader(header); err != nil {
+		return nil, fmt.Errorf("failed to write tar header for %q: %w", name, err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		return nil, fmt.Errorf("failed to write tar data for %q: %w", name, err)
+	}
+
+	if err := tw.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close tar writer: %w", err)
+	}
+	if err := gw.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
 // Unpack extracts a tar.gz archive and returns a map of filename to file
 // contents. It validates against path traversal attacks.
 func Unpack(data []byte) (map[string][]byte, error) {

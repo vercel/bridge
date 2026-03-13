@@ -109,6 +109,22 @@ func TestUnpackPathTraversal(t *testing.T) {
 	assert.Len(t, files, 1)
 }
 
+func TestPackSingleFile(t *testing.T) {
+	content := []byte("apiVersion: apps/v1\nkind: Deployment\n")
+	data, err := PackSingleFile("manifests.yaml", content)
+	require.NoError(t, err)
+
+	files, err := Unpack(data)
+	require.NoError(t, err)
+	assert.Len(t, files, 1)
+	assert.Equal(t, content, files["manifests.yaml"])
+}
+
+func TestPackSingleFileEmptyContent(t *testing.T) {
+	_, err := PackSingleFile("manifests.yaml", nil)
+	assert.ErrorContains(t, err, "empty content")
+}
+
 func TestPackWithOSDirFS(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.yaml"), []byte("app"), 0644))

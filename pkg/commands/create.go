@@ -115,7 +115,7 @@ func Create() *cli.Command {
 			&cli.StringFlag{
 				Name:    "source",
 				Aliases: []string{"s"},
-				Usage:   "Path to Kubernetes manifests (folder, glob, or YAML file)",
+				Usage:   "Path to Kubernetes manifests (folder, glob, or YAML file), or a stage name (e.g. 'staging')",
 			},
 			&cli.StringFlag{
 				Name:   "container-binary-path",
@@ -200,18 +200,32 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	w := c.Root().Writer
 	p := interact.NewPrinter(w)
 
-	// Pack source manifests if --source is specified.
+	// Pack source manifests if --source is specified. The value can be a
+	// filesystem path (directory, glob, or file) or a stage name like
+	// "staging" which renders manifests via the workspace render script.
 	var sourceManifests []byte
 	if sourcePath != "" {
-		fsys, pattern, err := resolveSourceFlag(sourcePath)
-		if err != nil {
-			return fmt.Errorf("failed to resolve source path: %w", err)
+		if isStageSource(sourcePath) {
+			rendered, err := renderStageManifests(ctx, deploymentName, sourcePath)
+			if err != nil {
+				return fmt.Errorf("failed to render stage manifests: %w", err)
+			}
+			sourceManifests, err = archive.PackSingleFile("manifests.yaml", rendered)
+			if err != nil {
+				return fmt.Errorf("failed to pack rendered manifests: %w", err)
+			}
+			slog.Info("Packed stage manifests", "stage", sourcePath, "size", len(sourceManifests))
+		} else {
+			fsys, pattern, err := resolveSourceFlag(sourcePath)
+			if err != nil {
+				return fmt.Errorf("failed to resolve source path: %w", err)
+			}
+			sourceManifests, err = archive.PackGlobFiles(fsys, pattern)
+			if err != nil {
+				return fmt.Errorf("failed to pack source manifests: %w", err)
+			}
+			slog.Info("Packed source manifests", "path", sourcePath, "size", len(sourceManifests))
 		}
-		sourceManifests, err = archive.PackGlobFiles(fsys, pattern)
-		if err != nil {
-			return fmt.Errorf("failed to pack source manifests: %w", err)
-		}
-		slog.Info("Packed source manifests", "path", sourcePath, "size", len(sourceManifests))
 	}
 
 	// Step 1: Resolve device identity.
@@ -707,6 +721,55 @@ func splitArgs(s string) []string {
 		return nil
 	}
 	return strings.Fields(s)
+}
+
+// supportedStages lists stage names that can be passed to -s instead of a
+// filesystem path. Add entries here as new stages become available.
+var supportedStages = map[string]bool{
+	"staging": true,
+}
+
+// isStageSource returns true when the -s flag value is a stage name rather
+// than a filesystem path. A value is treated as a stage name when it contains
+// no glob metacharacters and does not resolve to an existing file or directory.
+func isStageSource(source string) bool {
+	if strings.ContainsAny(source, "*?[") {
+		return false
+	}
+	_, err := os.Stat(source)
+	return err != nil
+}
+
+// renderStageManifests runs the workspace-root render script for the given
+// stage and returns the rendered YAML bytes.
+func renderStageManifests(ctx context.Context, serviceName, stage string) ([]byte, error) {
+	if serviceName == "" {
+		return nil, fmt.Errorf("service name is required when using a stage source")
+	}
+	if !supportedStages[stage] {
+		return nil, fmt.Errorf("unsupported stage %q (supported: %s)", stage, strings.Join(supportedStageNames(), ", "))
+	}
+
+	cmd := exec.CommandContext(ctx, "pnpm", "-w", "render-staging-overlay", serviceName)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("render-staging-overlay failed: %w\nstderr: %s", err, stderr.String())
+	}
+	if stdout.Len() == 0 {
+		return nil, fmt.Errorf("render-staging-overlay produced no output for %s/%s", serviceName, stage)
+	}
+	return stdout.Bytes(), nil
+}
+
+func supportedStageNames() []string {
+	names := make([]string, 0, len(supportedStages))
+	for name := range supportedStages {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // resolveSourceFlag interprets the --source flag value and returns an fs.FS

@@ -1,12 +1,15 @@
 package commands
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/vercel/bridge/pkg/devcontainer"
 	"github.com/vercel/bridge/pkg/netutil"
 )
@@ -100,6 +103,35 @@ func TestResolveAppPorts_Empty(t *testing.T) {
 	if len(cfg.AppPort) != 0 {
 		t.Errorf("expected empty appPort, got %v", cfg.AppPort)
 	}
+}
+
+func TestRenderStageManifests(t *testing.T) {
+	t.Run("unsupported stage returns error", func(t *testing.T) {
+		_, err := renderStageManifests(context.Background(), "my-service", "production")
+		assert.ErrorContains(t, err, "unsupported stage")
+	})
+
+	t.Run("empty service name returns error", func(t *testing.T) {
+		_, err := renderStageManifests(context.Background(), "", "staging")
+		assert.ErrorContains(t, err, "service name")
+	})
+}
+
+func TestIsStageSource(t *testing.T) {
+	// Stage names: not a filesystem path, no glob chars
+	assert.True(t, isStageSource("staging"))
+
+	// Filesystem paths: directories, files, globs
+	dir := t.TempDir()
+	assert.False(t, isStageSource(dir))
+
+	f := filepath.Join(dir, "app.yaml")
+	require.NoError(t, os.WriteFile(f, []byte("test"), 0644))
+	assert.False(t, isStageSource(f))
+
+	assert.False(t, isStageSource("_infra/*.yaml"))
+	assert.False(t, isStageSource("manifests[0].yaml"))
+	assert.False(t, isStageSource("dir?/app.yaml"))
 }
 
 func TestWriteEnvFile(t *testing.T) {
