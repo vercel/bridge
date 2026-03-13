@@ -92,16 +92,6 @@ func GetAppPorts(b *Bundle, deployName string) ([]int32, error) {
 	return appPorts(deploy), nil
 }
 
-// GetVolumeMountPaths returns the volume mount paths from the named
-// deployment's first container.
-func GetVolumeMountPaths(b *Bundle, deployName string) ([]string, error) {
-	deploy, err := findApplicationDeployment(b, deployName)
-	if err != nil {
-		return nil, &DeploymentNotFoundError{Name: deployName}
-	}
-	return volumeMountPaths(deploy), nil
-}
-
 func grpcPort(deploy *appsv1.Deployment) int32 {
 	if containers := deploy.Spec.Template.Spec.Containers; len(containers) > 0 {
 		for _, p := range containers[0].Ports {

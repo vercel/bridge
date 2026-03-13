@@ -144,9 +144,6 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 		return nil, fmt.Errorf("no deployment found in bundle")
 	}
 
-	// Capture volume mount paths before transforms strip projected volumes.
-	preTransformMountPaths, _ := resources.GetVolumeMountPaths(bundle, sourceName)
-
 	sourceNS := resources.FindNamespace(bundle)
 	if sourceNS == "" {
 		sourceNS = targetNS
@@ -193,6 +190,10 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 		return nil, fmt.Errorf("failed waiting for pod: %w", err)
 	}
 
+	// Gather volume mount paths from the live pod so we capture projected
+	// volumes injected by webhooks (e.g. IRSA tokens) at pod creation time.
+	volumeMountPaths := podVolumeMountPaths(pod)
+
 	// Fetch environment variables from the proxy pod.
 	var envVars map[string]string
 	if pod.Status.PodIP != "" {
@@ -211,7 +212,7 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 		Port:             grpcPort,
 		DeploymentName:   deployName,
 		EnvVars:          envVars,
-		VolumeMountPaths: preTransformMountPaths,
+		VolumeMountPaths: volumeMountPaths,
 		AppPorts:         appPorts,
 	}, nil
 }
@@ -306,6 +307,20 @@ func (l *adminService) newPodDialer(pod *corev1.Pod, port int) (plumbing.GRPCCon
 		return nil, "", fmt.Errorf("create port-forward dialer: %w", err)
 	}
 	return dialer, "passthrough:///pod", nil
+}
+
+// podVolumeMountPaths returns the volume mount paths from the first container
+// of a live pod. This captures mounts injected by webhooks (e.g. IRSA tokens)
+// that aren't present in the deployment spec.
+func podVolumeMountPaths(pod *corev1.Pod) []string {
+	if len(pod.Spec.Containers) == 0 {
+		return nil
+	}
+	var paths []string
+	for _, vm := range pod.Spec.Containers[0].VolumeMounts {
+		paths = append(paths, vm.MountPath)
+	}
+	return paths
 }
 
 func (l *adminService) fetchProxyMetadata(ctx context.Context, pod *corev1.Pod, port int) (map[string]string, error) {

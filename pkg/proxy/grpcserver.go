@@ -125,7 +125,7 @@ func (s *GRPCServer) ResolveDNSQuery(ctx context.Context, req *bridgev1.ProxyRes
 
 // systemEnvPrefixes lists env var prefixes that are filtered out of GetMetadata
 // responses because they are injected by the container runtime, not the app config.
-var systemEnvPrefixes = []string{"BRIDGE_", "KUBERNETES_"}
+var systemEnvPrefixes = []string{"BRIDGE_"}
 
 // systemEnvVars lists exact env var names filtered out of GetMetadata responses.
 var systemEnvVars = map[string]bool{
