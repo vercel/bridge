@@ -17,7 +17,7 @@ import (
 func Remove() *cli.Command {
 	return &cli.Command{
 		Name:    "remove",
-		Aliases: []string{"rm"},
+		Aliases: []string{"rm", "delete"},
 		Usage:   "Tear down a running bridge",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -32,23 +32,14 @@ func Remove() *cli.Command {
 				Usage:   "Auto-accept all confirmation prompts",
 			},
 		},
-		Arguments: []cli.Argument{
-			&cli.StringArg{
-				Name:      "name",
-				UsageText: "Name of the bridge to remove",
-				Config: cli.StringConfig{
-					TrimSpace: true,
-				},
-			},
-		},
 		Action: runRemove,
 	}
 }
 
 func runRemove(ctx context.Context, c *cli.Command) error {
-	name := c.StringArg("name")
-	if name == "" {
-		return fmt.Errorf("bridge name is required")
+	names := c.Args().Slice()
+	if len(names) == 0 {
+		return fmt.Errorf("at least one bridge name is required")
 	}
 	adminAddr := c.String("admin-addr")
 
@@ -60,13 +51,7 @@ func runRemove(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("failed to get device identity: %w", err)
 	}
 
-	// Normalize the name: if the user passes the short deployment name
-	// (e.g. "api-feature-flags"), append the device suffix so it matches
-	// the bridge resource name used by create/exec.
 	suffix := "-" + identity.ShortDeviceID(deviceID)
-	if !strings.HasSuffix(name, suffix) {
-		name = identity.BridgeResourceName(deviceID, name)
-	}
 
 	sp := interact.NewSpinner(w, "Connecting to bridge administrator...")
 	ctx = interact.WithSpinner(ctx, sp)
@@ -79,23 +64,39 @@ func runRemove(ctx context.Context, c *cli.Command) error {
 	}
 	defer adm.Close()
 
-	sp.SetTitle("Removing bridge...")
+	var errs []error
+	ct := container.NewDockerClient()
+	for _, name := range names {
+		if !strings.HasSuffix(name, suffix) {
+			name = identity.BridgeResourceName(deviceID, name)
+		}
 
-	_, err = adm.DeleteBridge(ctx, &bridgev1.DeleteBridgeRequest{
-		DeviceId: deviceID,
-		Name:     name,
-	})
-	sp.Stop()
-	if err != nil {
-		return fmt.Errorf("failed to remove bridge: %w", err)
+		sp.SetTitle(fmt.Sprintf("Removing bridge %q...", name))
+
+		_, err = adm.DeleteBridge(ctx, &bridgev1.DeleteBridgeRequest{
+			DeviceId: deviceID,
+			Name:     name,
+		})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("failed to remove bridge %q: %w", name, err))
+			continue
+		}
+
+		ct.StopAll(ctx, container.StopAllOpts{
+			Labels: map[string]string{labelBridgeDeployment: name},
+		})
+
+		p.Newline()
+		p.Success(fmt.Sprintf("Bridge %q removed", name))
 	}
+	sp.Stop()
 
-	// Clean up local containers for this bridge.
-	container.NewDockerClient().StopAll(ctx, container.StopAllOpts{
-		Labels: map[string]string{labelBridgeDeployment: name},
-	})
-
-	p.Newline()
-	p.Success(fmt.Sprintf("Bridge %q removed", name))
+	if len(errs) > 0 {
+		msgs := make([]string, len(errs))
+		for i, e := range errs {
+			msgs[i] = e.Error()
+		}
+		return fmt.Errorf("%s", strings.Join(msgs, "\n"))
+	}
 	return nil
 }
