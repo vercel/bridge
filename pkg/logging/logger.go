@@ -68,10 +68,14 @@ func Setup(level slog.Level, logPaths []string) (cleanup func(), err error) {
 	var closers []io.Closer
 
 	// Always include the default rolling log file.
-	logWriter, fileErr := openLogWriter()
-	if fileErr == nil {
-		handlers = append(handlers, newJSONHandler(logWriter, slog.LevelDebug))
-		closers = append(closers, logWriter)
+	home, homeErr := os.UserHomeDir()
+	if homeErr == nil {
+		dir := filepath.Join(home, logDir)
+		if err := os.MkdirAll(dir, 0755); err == nil {
+			w := newRollingWriter(filepath.Join(dir, logFileName))
+			handlers = append(handlers, newJSONHandler(w, slog.LevelDebug))
+			closers = append(closers, w)
+		}
 	}
 
 	// Add any extra destinations from --log-paths.
@@ -82,13 +86,9 @@ func Setup(level slog.Level, logPaths []string) (cleanup func(), err error) {
 		case "stderr":
 			handlers = append(handlers, newJSONHandler(os.Stderr, level))
 		default:
-			f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-			if err != nil {
-				// Skip paths we can't open; don't fail the whole CLI.
-				continue
-			}
-			handlers = append(handlers, newJSONHandler(f, level))
-			closers = append(closers, f)
+			w := newRollingWriter(p)
+			handlers = append(handlers, newJSONHandler(w, level))
+			closers = append(closers, w)
 		}
 	}
 
@@ -101,7 +101,7 @@ func Setup(level slog.Level, logPaths []string) (cleanup func(), err error) {
 	if len(handlers) == 0 {
 		// Nothing worked at all — set a silent discard handler.
 		slog.SetDefault(slog.New(slog.NewJSONHandler(io.Discard, nil)))
-		return cleanupFn, fileErr
+		return cleanupFn, homeErr
 	}
 
 	if len(handlers) == 1 {
@@ -110,7 +110,7 @@ func Setup(level slog.Level, logPaths []string) (cleanup func(), err error) {
 		slog.SetDefault(slog.New(&multiHandler{handlers: handlers}))
 	}
 
-	return cleanupFn, fileErr
+	return cleanupFn, homeErr
 }
 
 // newJSONHandler returns a slog JSON handler with source shortening.
@@ -131,25 +131,15 @@ func newJSONHandler(w io.Writer, level slog.Level) slog.Handler {
 	})
 }
 
-// openLogWriter returns a lumberjack rolling writer for ~/.bridge/logs/bridge.log.
+// newRollingWriter returns a lumberjack rolling writer for the given path.
 // It rotates when the file exceeds 10 MB, keeps 3 old files, and discards logs
 // older than 7 days.
-func openLogWriter() (*lumberjack.Logger, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("cannot determine home directory: %w", err)
-	}
-
-	dir := filepath.Join(home, logDir)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("cannot create log directory: %w", err)
-	}
-
+func newRollingWriter(filename string) *lumberjack.Logger {
 	return &lumberjack.Logger{
-		Filename:   filepath.Join(dir, logFileName),
+		Filename:   filename,
 		MaxSize:    10, // MB
 		MaxBackups: 3,
 		MaxAge:     7, // days
 		Compress:   true,
-	}, nil
+	}
 }
