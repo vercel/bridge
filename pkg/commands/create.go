@@ -592,14 +592,28 @@ func currentKubeContext() string {
 }
 
 // resolveAppPorts checks each appPort entry in the config and remaps the host
-// port to the next free port if it's already in use.
+// port to the next free port if it's already in use. It tracks ports already
+// claimed by earlier entries so that two appPorts requesting the same (or
+// overlapping) host port never resolve to the same value.
 func resolveAppPorts(cfg *devcontainer.Config) {
+	claimed := make(map[int]struct{})
 	for i := range cfg.AppPort {
 		m := &cfg.AppPort[i]
 		free, err := netutil.FindFreePortFrom(m.HostPort)
-		if err == nil {
-			m.HostPort = free
+		if err != nil {
+			continue
 		}
+		// If another entry already claimed this port, scan upward for the
+		// next one that is both OS-free and unclaimed.
+		for _, taken := claimed[free]; taken; _, taken = claimed[free] {
+			next, err := netutil.FindFreePortFrom(free + 1)
+			if err != nil {
+				break
+			}
+			free = next
+		}
+		claimed[free] = struct{}{}
+		m.HostPort = free
 	}
 }
 

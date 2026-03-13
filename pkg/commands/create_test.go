@@ -68,6 +68,32 @@ func TestResolveAppPorts_ConflictRemaps(t *testing.T) {
 	}
 }
 
+func TestResolveAppPorts_CrossCheck(t *testing.T) {
+	// Two entries requesting the same host port must resolve to different ports.
+	freePort, err := netutil.FindFreePort()
+	if err != nil {
+		t.Fatalf("FindFreePort: %v", err)
+	}
+
+	cfg := &devcontainer.Config{
+		AppPort: []devcontainer.PortMapping{
+			{HostPort: freePort, ContainerPort: 3000},
+			{HostPort: freePort, ContainerPort: 4000},
+		},
+	}
+	resolveAppPorts(cfg)
+	if cfg.AppPort[0].HostPort == cfg.AppPort[1].HostPort {
+		t.Errorf("both appPorts resolved to the same host port %d", cfg.AppPort[0].HostPort)
+	}
+	// Container ports must be preserved.
+	if cfg.AppPort[0].ContainerPort != 3000 {
+		t.Errorf("appPort[0].ContainerPort = %d, want 3000", cfg.AppPort[0].ContainerPort)
+	}
+	if cfg.AppPort[1].ContainerPort != 4000 {
+		t.Errorf("appPort[1].ContainerPort = %d, want 4000", cfg.AppPort[1].ContainerPort)
+	}
+}
+
 func TestResolveAppPorts_Empty(t *testing.T) {
 	cfg := &devcontainer.Config{}
 	resolveAppPorts(cfg) // should not panic

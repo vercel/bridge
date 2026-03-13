@@ -42,6 +42,9 @@ type Client interface {
 	// ReadFile reads a file from inside the container. Returns empty string on error.
 	ReadFile(ctx context.Context, containerID, path string) string
 
+	// InspectLabel returns the value of a single label on a container.
+	InspectLabel(ctx context.Context, containerID, label string) (string, error)
+
 	// List returns formatted output and IDs for all running containers
 	// matching the given options.
 	List(ctx context.Context, opts ListOpts) (string, []string, error)
@@ -122,6 +125,16 @@ func (c *dockerClient) ReadFile(ctx context.Context, containerID, path string) s
 		return ""
 	}
 	return string(out)
+}
+
+func (c *dockerClient) InspectLabel(ctx context.Context, containerID, label string) (string, error) {
+	tmpl := fmt.Sprintf(`{{index .Config.Labels %q}}`, label)
+	cmd := exec.CommandContext(ctx, c.runtime, "inspect", "--format", tmpl, containerID)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("%s inspect: %w", c.runtime, err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (c *dockerClient) List(ctx context.Context, opts ListOpts) (string, []string, error) {

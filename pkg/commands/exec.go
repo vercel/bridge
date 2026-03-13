@@ -16,6 +16,7 @@ import (
 	"github.com/vercel/bridge/pkg/identity"
 	"github.com/vercel/bridge/pkg/interact"
 	"github.com/vercel/bridge/pkg/intercept"
+	"github.com/vercel/bridge/pkg/k8s/meta"
 )
 
 const execUsageText = `bridge exec <deployment> <command...>
@@ -66,8 +67,29 @@ func runExec(ctx context.Context, c *cli.Command) error {
 	ct := container.NewDockerClient()
 	labels := map[string]string{labelBridgeDeployment: bridgeName}
 
-	// Resolve the devcontainer config path. When -f is provided, use it
-	// directly; otherwise derive it from the base config and bridge name.
+	// Check if a container is already running for this bridge. When it is,
+	// read the config path from the container's devcontainer.config_file
+	// label so exec works regardless of the CWD or -f flag used at create time.
+	if containerID, findErr := ct.FindID(ctx, container.FindOpts{Labels: labels}); findErr == nil {
+		slog.Debug("Container already running, checking health", "bridge", bridgeName)
+		if err := intercept.WaitForReady(ctx, ct, containerID); err != nil {
+			return fmt.Errorf("interceptor is not healthy: %w", err)
+		}
+
+		dcConfigPath := c.String("devcontainer-config")
+		if dcConfigPath == "" {
+			label, err := ct.InspectLabel(ctx, containerID, meta.LabelDevcontainerConfigFile)
+			if err != nil || label == "" {
+				return fmt.Errorf("could not determine config path for running bridge %q", deploymentName)
+			}
+			dcConfigPath = label
+		}
+		workspaceFolder, _ := filepath.Abs(filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath))))
+		return execInDevcontainer(ctx, workspaceFolder, dcConfigPath, nil, cmdArgs)
+	}
+
+	// No running container — resolve the config path from -f or the CWD
+	// and check if a bridge config exists on disk.
 	var dcConfigPath string
 	if explicit := c.String("devcontainer-config"); explicit != "" {
 		dcConfigPath = explicit
@@ -78,18 +100,7 @@ func runExec(ctx context.Context, c *cli.Command) error {
 		}
 		dcConfigPath = bridgeConfigPath(baseConfig, bridgeName)
 	}
-	workspaceFolder, _ := filepath.Abs(filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath))))
 
-	// Check if a container is already running for this bridge.
-	if containerID, findErr := ct.FindID(ctx, container.FindOpts{Labels: labels}); findErr == nil {
-		slog.Debug("Container already running, checking health", "bridge", bridgeName)
-		if err := intercept.WaitForReady(ctx, ct, containerID); err != nil {
-			return fmt.Errorf("interceptor is not healthy: %w", err)
-		}
-		return execInDevcontainer(ctx, workspaceFolder, dcConfigPath, nil, cmdArgs)
-	}
-
-	// No running container — check if a bridge config exists.
 	if _, err := os.Stat(dcConfigPath); err != nil {
 		return fmt.Errorf("no bridge found for %q — run: bridge create %s", deploymentName, deploymentName)
 	}
@@ -103,6 +114,7 @@ func runExec(ctx context.Context, c *cli.Command) error {
 		return err
 	}
 
+	workspaceFolder, _ := filepath.Abs(filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath))))
 	return execInDevcontainer(ctx, workspaceFolder, dcConfigPath, nil, cmdArgs)
 }
 

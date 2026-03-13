@@ -28,6 +28,11 @@ const (
 	// ProxySelector is the label selector string for bridge proxy resources.
 	ProxySelector = LabelBridgeType + "=" + BridgeTypeProxy
 
+	// LabelDevcontainerConfigFile is the Docker label set by the devcontainer
+	// CLI that records the absolute path to the devcontainer.json used to
+	// create the container.
+	LabelDevcontainerConfigFile = "devcontainer.config_file"
+
 	// EnvInterceptorAddr is the environment variable that configures the
 	// interceptor gRPC server listen address.
 	EnvInterceptorAddr = "BRIDGE_INTERCEPTOR_ADDR"
