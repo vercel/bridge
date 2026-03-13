@@ -76,13 +76,11 @@ func runExec(ctx context.Context, c *cli.Command) error {
 			return fmt.Errorf("interceptor is not healthy: %w", err)
 		}
 
-		dcConfigPath := c.String("devcontainer-config")
-		if dcConfigPath == "" {
-			label, err := ct.InspectLabel(ctx, containerID, meta.LabelDevcontainerConfigFile)
-			if err != nil || label == "" {
-				return fmt.Errorf("could not determine config path for running bridge %q", deploymentName)
-			}
-			dcConfigPath = label
+		// Always read the config from the container — this is the config it
+		// was actually created with, regardless of what -f points to now.
+		dcConfigPath, err := ct.InspectLabel(ctx, containerID, meta.LabelDevcontainerConfigFile)
+		if err != nil || dcConfigPath == "" {
+			return fmt.Errorf("could not determine config path for running bridge %q", deploymentName)
 		}
 		workspaceFolder, _ := filepath.Abs(filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath))))
 		return execInDevcontainer(ctx, workspaceFolder, dcConfigPath, nil, cmdArgs)

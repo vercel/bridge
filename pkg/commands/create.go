@@ -419,10 +419,17 @@ func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef s
 	}
 	cfg.SetFeature(featureRef, featureOpts)
 	interceptAddr := fmt.Sprintf(":%d", interceptPort)
-	cfg.AppPort = devcontainer.PortMappings{
-		{HostPort: appPort, ContainerPort: appPort},
-		{HostPort: interceptPort, ContainerPort: interceptPort},
+	// Remove any existing entry for the app port to avoid duplicates.
+	filtered := cfg.AppPort[:0]
+	for _, m := range cfg.AppPort {
+		if m.ContainerPort != appPort {
+			filtered = append(filtered, m)
+		}
 	}
+	cfg.AppPort = append(filtered,
+		devcontainer.PortMapping{HostPort: appPort, ContainerPort: appPort},
+		devcontainer.PortMapping{HostPort: interceptPort, ContainerPort: interceptPort},
+	)
 	cfg.EnsureContainerEnv(meta.EnvInterceptorAddr, interceptAddr)
 	cfg.EnsureCapAdd("NET_ADMIN")
 	cfg.EnsureRunArgs("-l", labelBridgeDeployment+"="+dcName)
