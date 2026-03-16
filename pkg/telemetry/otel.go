@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
@@ -20,6 +21,10 @@ import (
 // from standard OTEL_* environment variables. Returns a shutdown function
 // that flushes and closes the providers.
 func Init(ctx context.Context, serviceName, serviceVersion string) (shutdown func(context.Context) error, err error) {
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+		slog.Error("OpenTelemetry error", "error", err)
+	}))
+
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
 			semconv.ServiceName(serviceName),
