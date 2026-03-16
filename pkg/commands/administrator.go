@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/urfave/cli/v3"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -21,6 +22,7 @@ import (
 	"github.com/vercel/bridge/pkg/k8s/kube"
 	"github.com/vercel/bridge/pkg/k8s/resources"
 	"github.com/vercel/bridge/pkg/logging"
+	"github.com/vercel/bridge/pkg/telemetry"
 
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -103,7 +105,17 @@ func runAdministrator(ctx context.Context, c *cli.Command) error {
 		ServiceAccountNamespace: c.String("namespace"),
 	})
 
-	srv := grpc.NewServer(grpc.MaxRecvMsgSize(16 << 20))
+	otelShutdown, err := telemetry.Init(ctx, "bridge-administrator", "0.1.0")
+	if err != nil {
+		return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
+	}
+	defer otelShutdown(ctx)
+
+	srv := grpc.NewServer(
+		grpc.MaxRecvMsgSize(16<<20),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		grpc.ChainUnaryInterceptor(telemetry.BridgeMetricsInterceptor()),
+	)
 	bridgev1.RegisterAdministratorServiceServer(srv, &administratorServer{admin: localAdm})
 
 	healthSrv := health.NewServer()

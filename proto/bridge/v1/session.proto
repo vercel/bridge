@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package bridge.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Session represents a local bridge session stored on the developer's machine.
+message Session {
+  // The name of the bridge (e.g. "my-api-abc123").
+  string name = 1;
+
+  // When the session was created.
+  google.protobuf.Timestamp time_created = 2 [json_name = "time_created"];
+
+  // The absolute path to the generated devcontainer.json for this bridge.
+  string devcontainer_config_path = 3 [json_name = "devcontainer_config_path"];
+}

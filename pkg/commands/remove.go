@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/urfave/cli/v3"
@@ -11,6 +12,7 @@ import (
 	"github.com/vercel/bridge/pkg/container"
 	"github.com/vercel/bridge/pkg/identity"
 	"github.com/vercel/bridge/pkg/interact"
+	"github.com/vercel/bridge/pkg/session"
 )
 
 // Remove returns the CLI command for removing a bridge.
@@ -85,6 +87,10 @@ func runRemove(ctx context.Context, c *cli.Command) error {
 		ct.StopAll(ctx, container.StopAllOpts{
 			Labels: map[string]string{labelBridgeDeployment: name},
 		})
+
+		if err := session.Delete(name); err != nil {
+			slog.Warn("Failed to delete session", "name", name, "error", err)
+		}
 
 		p.Newline()
 		p.Success(fmt.Sprintf("Bridge %q removed", name))

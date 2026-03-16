@@ -28,6 +28,7 @@ import (
 	"github.com/vercel/bridge/pkg/intercept"
 	"github.com/vercel/bridge/pkg/k8s/meta"
 	"github.com/vercel/bridge/pkg/netutil"
+	"github.com/vercel/bridge/pkg/session"
 )
 
 const featureRefBase = "ghcr.io/vercel/bridge/bridge-feature"
@@ -330,6 +331,13 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
+	// Save local session so that exec can look up the config path by name.
+	absDCConfigPath, _ := filepath.Abs(dcConfigPath)
+	if err := session.Save(createResp.DeploymentName, absDCConfigPath); err != nil {
+		slog.Warn("Failed to save session", "error", err)
+	}
+
 	if connectFlag {
 		ct := container.NewDockerClient()
 		labels := map[string]string{labelBridgeDeployment: createResp.DeploymentName}
@@ -760,4 +768,21 @@ func (w *slogLineWriter) Write(p []byte) (int, error) {
 		}
 	}
 	return len(p), nil
+}
+
+// bridgeConfigPath returns the expected devcontainer config path for a bridge,
+// given the base config path and bridge deployment name. The bridge config is
+// always placed as a subdirectory of the nearest .devcontainer ancestor. If no
+// .devcontainer directory exists in the path, one is created next to the base
+// config.
+func bridgeConfigPath(baseConfigPath, bridgeName string) string {
+	bridgeDir := fmt.Sprintf("bridge-%s", bridgeName)
+	dir := filepath.Dir(baseConfigPath)
+	for dir != "." && dir != "/" {
+		if filepath.Base(dir) == ".devcontainer" {
+			return filepath.Join(dir, bridgeDir, "devcontainer.json")
+		}
+		dir = filepath.Dir(dir)
+	}
+	return filepath.Join(filepath.Dir(baseConfigPath), ".devcontainer", bridgeDir, "devcontainer.json")
 }

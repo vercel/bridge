@@ -90,12 +90,6 @@ func BridgeResourceName(deviceID, name string) string {
 	return name + "-" + ShortDeviceID(deviceID)
 }
 
-// NamespaceForDevice returns the Kubernetes namespace name for a given device ID.
-// Deprecated: bridge resources are now created in the source namespace.
-func NamespaceForDevice(deviceID string) string {
-	return "bridge-" + ShortDeviceID(deviceID)
-}
-
 func deviceIDPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
