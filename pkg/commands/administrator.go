@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os/signal"
 	"syscall"
 
@@ -69,6 +70,12 @@ func Administrator() *cli.Command {
 				Usage:   "Override the default kubeconfig namespace (out-of-cluster only)",
 				Sources: cli.EnvVars("BRIDGE_KUBE_NAMESPACE"),
 			},
+			&cli.StringFlag{
+				Name:    "metrics-addr",
+				Usage:   "Address to bind the Prometheus metrics server to",
+				Value:   ":9091",
+				Sources: cli.EnvVars("BRIDGE_METRICS_ADDR"),
+			},
 		},
 		Action: runAdministrator,
 	}
@@ -105,11 +112,22 @@ func runAdministrator(ctx context.Context, c *cli.Command) error {
 		ServiceAccountNamespace: c.String("namespace"),
 	})
 
-	otelShutdown, err := telemetry.Init(ctx, "bridge-administrator", "0.1.0")
+	metricsHandler, otelShutdown, err := telemetry.Init(ctx, "bridge-administrator", "0.1.0")
 	if err != nil {
 		return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
 	}
 	defer otelShutdown(ctx)
+
+	metricsAddr := c.String("metrics-addr")
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", metricsHandler)
+	metricsServer := &http.Server{Addr: metricsAddr, Handler: metricsMux}
+	go func() {
+		slog.Info("Metrics server starting", "addr", metricsAddr)
+		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("Metrics server failed", "error", err)
+		}
+	}()
 
 	srv := grpc.NewServer(
 		grpc.MaxRecvMsgSize(16<<20),
