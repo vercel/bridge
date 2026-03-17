@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package bridge.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/struct.proto";
+
+// Reactor intercepts HTTP requests matching a hostname and routes them
+// to actions based on CEL expressions.
+message Reactor {
+  // Hostname glob pattern this reactor intercepts (e.g. "flags.vercel.com",
+  // "*.google.com", "**.internal"). Used for routing and TLS cert minting.
+  string host = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).required = true
+  ];
+
+  // Ordered list of routes. First match wins.
+  repeated ReactorRoute routes = 2 [(buf.validate.field).repeated.min_items = 1];
+}
+
+// ReactorRoute pairs a route match with an action to take when matched.
+message ReactorRoute {
+  // Determines whether this route matches an incoming request.
+  ReactorRouteMatch match = 1 [(buf.validate.field).required = true];
+
+  // What to do when matched.
+  ReactorAction action = 2 [(buf.validate.field).required = true];
+}
+
+// ReactorRouteMatch evaluates incoming HTTP requests.
+message ReactorRouteMatch {
+  // CEL expression evaluated against a ReactorHttpRequest.
+  // Must return a boolean.
+  string cel = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).required = true
+  ];
+}
+
+// ReactorAction defines what response to produce for a matched route.
+message ReactorAction {
+  // Static HTTP response.
+  ReactorHttpResponse http_response = 1 [
+    json_name = "http_response",
+    (buf.validate.field).required = true
+  ];
+}
+
+// ReactorHttpResponse is a static HTTP response returned by a reactor route.
+message ReactorHttpResponse {
+  // HTTP status code.
+  int32 status = 1 [(buf.validate.field).int32 = {
+    gte: 100
+    lte: 599
+  }];
+
+  // Response body. Marshalled as JSON and sent as the response.
+  google.protobuf.Value body = 2;
+
+  // Response headers.
+  map<string, string> headers = 3;
+}
+
+// ReactorHttpRequest is the request shape available in CEL expressions as `request`.
+message ReactorHttpRequest {
+  string method = 1;
+  string host = 2;
+  string path = 3;
+  map<string, string> headers = 4;
+  map<string, string> query = 5;
+  string body = 6;
+}

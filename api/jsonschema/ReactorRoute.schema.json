@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "ReactorRoute pairs a route match with an action to take when matched.",
+  "properties": {
+    "action": {
+      "additionalProperties": false,
+      "description": "What to do when matched.",
+      "properties": {
+        "http_response": {
+          "additionalProperties": false,
+          "description": "Static HTTP response.",
+          "properties": {
+            "body": {
+              "description": "Response body. Marshalled as JSON and sent as the response.",
+              "title": "Value"
+            },
+            "headers": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Response headers.",
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "maximum": 599,
+                  "minimum": 100,
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^-?[0-9]+$",
+                  "type": "string"
+                }
+              ],
+              "default": 0,
+              "description": "HTTP status code."
+            }
+          },
+          "title": "Reactor Http Response",
+          "type": "object"
+        }
+      },
+      "required": [
+        "http_response"
+      ],
+      "title": "Reactor Action",
+      "type": "object"
+    },
+    "match": {
+      "additionalProperties": false,
+      "description": "Determines whether this route matches an incoming request.",
+      "properties": {
+        "cel": {
+          "description": "CEL expression evaluated against a ReactorHttpRequest.\n Must return a boolean.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "cel"
+      ],
+      "title": "Reactor Route Match",
+      "type": "object"
+    }
+  },
+  "required": [
+    "match",
+    "action"
+  ],
+  "title": "Reactor Route",
+  "type": "object"
+}

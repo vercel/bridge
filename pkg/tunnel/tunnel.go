@@ -1,4 +1,4 @@
-package plumbing
+package tunnel
 
 import (
 	"context"
@@ -11,20 +11,22 @@ import (
 
 	"github.com/puzpuzpuz/xsync/v3"
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
+	"github.com/vercel/bridge/pkg/mitm"
+	"github.com/vercel/bridge/pkg/plumbing"
 )
 
-// TunnelStream abstracts a bidirectional gRPC stream. Both the server-side
+// Stream abstracts a bidirectional gRPC stream. Both the server-side
 // BidiStreamingServer and client-side TunnelNetworkClient satisfy this
 // interface directly since both directions use TunnelNetworkMessage.
-type TunnelStream interface {
+type Stream interface {
 	Send(*bridgev1.TunnelNetworkMessage) error
 	Recv() (*bridgev1.TunnelNetworkMessage, error)
 }
 
 // Tunnel is a wrapper around a Tunnel gRPC stream that is responsible for managing the connections it is currently multiplexing. It is intended to be used by both client and server-side
 type Tunnel interface {
-	// AddConn Adds a connection to the map of connections that are tracked under this Tunnel. When a conn is added, it is placed into a sync map and a goroutine is spawned that reads from the conn. Whenever data is received from the conn, its data is forwarded to the underlying gRPC stream. A destination override may be provided to override the call for original destination from the Conn.
-	AddConn(conn net.Conn, destOverride string)
+	// AddConn Adds a connection to the map of connections that are tracked under this Tunnel. When a conn is added, it is placed into a sync map and a goroutine is spawned that reads from the conn. Whenever data is received from the conn, its data is forwarded to the underlying gRPC stream. A destination override may be provided to override the call for original destination from the Conn. The hostname is the DNS name associated with this connection (may be empty).
+	AddConn(conn net.Conn, destOverride string, hostname string)
 
 	// Start starts the pump for the Tunnel. It has a loop for receiving messages which are routed based on their connection ID.
 	Start(ctx context.Context)
@@ -36,20 +38,34 @@ type Tunnel interface {
 	Done() <-chan struct{}
 }
 
-// NewTunnel constructor for Tunnel. When a message is received down the stream and a corresponding connection ID cannot be found, the dialer is called to instantiate that connection. The client-side uses the StaticPortDialer while the server-side uses a standard ContextDialer.
-func NewTunnel(dialer ContextDialer, stream TunnelStream) Tunnel {
-	return &tunnel{
+// Option configures a Tunnel.
+type Option func(*tunnelImpl)
+
+// WithHijacker sets a hijacker that can intercept outbound connections
+// before the tunnel dials the real destination.
+func WithHijacker(h mitm.Hijacker) Option {
+	return func(t *tunnelImpl) { t.hijacker = h }
+}
+
+// New creates a Tunnel. When a message is received down the stream and a corresponding connection ID cannot be found, the dialer is called to instantiate that connection. The client-side uses the StaticPortDialer while the server-side uses a standard ContextDialer.
+func New(dialer plumbing.ContextDialer, stream Stream, opts ...Option) Tunnel {
+	t := &tunnelImpl{
 		dialer: dialer,
 		stream: stream,
 		sendCh: make(chan *bridgev1.TunnelNetworkMessage, 64),
 		conns:  xsync.NewMapOf[string, net.Conn](),
 		done:   make(chan struct{}),
 	}
+	for _, o := range opts {
+		o(t)
+	}
+	return t
 }
 
-type tunnel struct {
-	dialer    ContextDialer
-	stream    TunnelStream
+type tunnelImpl struct {
+	dialer    plumbing.ContextDialer
+	hijacker  mitm.Hijacker
+	stream    Stream
 	sendCh    chan *bridgev1.TunnelNetworkMessage
 	conns     *xsync.MapOf[string, net.Conn]
 	done      chan struct{}
@@ -58,9 +74,9 @@ type tunnel struct {
 	closeOnce sync.Once
 }
 
-func (t *tunnel) Done() <-chan struct{} { return t.done }
+func (t *tunnelImpl) Done() <-chan struct{} { return t.done }
 
-func (t *tunnel) AddConn(conn net.Conn, destOverride string) {
+func (t *tunnelImpl) AddConn(conn net.Conn, destOverride string, hostname string) {
 	srcAddr := conn.RemoteAddr().String()
 	dstAddr := conn.LocalAddr().String()
 	if destOverride != "" {
@@ -73,18 +89,18 @@ func (t *tunnel) AddConn(conn net.Conn, destOverride string) {
 	dstHost, dstPortStr, _ := net.SplitHostPort(dstAddr)
 	dstPort, _ := strconv.Atoi(dstPortStr)
 
-	connID := ConnectionID(srcHost, srcPort, dstHost, dstPort)
+	connID := plumbing.ConnectionID(srcHost, srcPort, dstHost, dstPort)
 	src := &bridgev1.TunnelAddress{Ip: srcHost, Port: int32(srcPort)}
 	dst := &bridgev1.TunnelAddress{Ip: dstHost, Port: int32(dstPort)}
 
-	slog.Debug("Tunnel: adding connection", "conn_id", connID, "src", srcAddr, "dst", dstAddr)
+	slog.Debug("Tunnel: adding connection", "conn_id", connID, "src", srcAddr, "dst", dstAddr, "hostname", hostname)
 
 	t.conns.Store(connID, conn)
-	go t.readFromConn(conn, connID, src, dst)
+	go t.readFromConn(conn, connID, src, dst, hostname)
 }
 
 // readFromConn reads from a net.Conn and forwards data to the stream via sendCh.
-func (t *tunnel) readFromConn(conn net.Conn, connID string, src, dst *bridgev1.TunnelAddress) {
+func (t *tunnelImpl) readFromConn(conn net.Conn, connID string, src, dst *bridgev1.TunnelAddress, hostname string) {
 	defer func() {
 		conn.Close()
 		t.conns.Delete(connID)
@@ -102,6 +118,7 @@ func (t *tunnel) readFromConn(conn net.Conn, connID string, src, dst *bridgev1.T
 				Source:       src,
 				Dest:         dst,
 				Data:         data,
+				Hostname:     hostname,
 			}:
 			case <-t.ctx.Done():
 				return
@@ -113,7 +130,7 @@ func (t *tunnel) readFromConn(conn net.Conn, connID string, src, dst *bridgev1.T
 	}
 }
 
-func (t *tunnel) Close() error {
+func (t *tunnelImpl) Close() error {
 	t.closeOnce.Do(func() {
 		t.cancel()
 		t.closeAll()
@@ -122,7 +139,7 @@ func (t *tunnel) Close() error {
 	return nil
 }
 
-func (t *tunnel) Start(ctx context.Context) {
+func (t *tunnelImpl) Start(ctx context.Context) {
 	t.ctx, t.cancel = context.WithCancel(ctx)
 
 	// Single goroutine drains the send channel onto the stream.
@@ -201,35 +218,46 @@ func (t *tunnel) Start(ctx context.Context) {
 	}()
 }
 
-func (t *tunnel) handleNewConn(msg *bridgev1.TunnelNetworkMessage) {
+func (t *tunnelImpl) handleNewConn(msg *bridgev1.TunnelNetworkMessage) {
 	dest := msg.GetDest()
 	if dest == nil {
 		slog.Info("Tunnel: ignoring message with no dest", "conn_id", msg.GetConnectionId())
 		return
 	}
 
-	addr := fmt.Sprintf("%s:%d", dest.GetIp(), dest.GetPort())
-	slog.Info("Tunnel: dialing new connection", "conn_id", msg.GetConnectionId(), "dest", addr)
-	conn, err := t.dialer.DialContext(t.ctx, "tcp", addr)
+	connID := msg.GetConnectionId()
+	hostname := msg.GetHostname()
+
+	// Resolve the connection: hijacker gets first shot, then fall through to the dialer.
+	var conn net.Conn
+	var err error
+
+	if t.hijacker != nil && t.hijacker.ShouldHijack(msg) {
+		conn, err = t.hijacker.Hijack(t.ctx, msg)
+		if err != nil {
+			slog.Info("Tunnel: hijack failed, falling back to dialer", "conn_id", connID, "hostname", hostname, "error", err)
+		}
+	}
+
+	if conn == nil {
+		addr := fmt.Sprintf("%s:%d", dest.GetIp(), dest.GetPort())
+		conn, err = t.dialer.DialContext(t.ctx, "tcp", addr)
+	}
+
 	if err != nil {
-		slog.Info("Tunnel: dial failed", "conn_id", msg.GetConnectionId(), "dest", addr, "error", err)
+		slog.Info("Tunnel: connect failed", "conn_id", connID, "hostname", hostname, "error", err)
 		select {
 		case t.sendCh <- &bridgev1.TunnelNetworkMessage{
-			ConnectionId: msg.GetConnectionId(),
-			Error:        fmt.Sprintf("failed to dial %s: %v", addr, err),
+			ConnectionId: connID,
+			Error:        err.Error(),
 		}:
 		case <-t.ctx.Done():
 		}
 		return
 	}
 
-	slog.Info("Tunnel: dial succeeded", "conn_id", msg.GetConnectionId(), "dest", addr)
-
-	connID := msg.GetConnectionId()
 	t.conns.Store(connID, conn)
-
-	// Swap source/dest for the return direction.
-	go t.readFromConn(conn, connID, msg.GetDest(), msg.GetSource())
+	go t.readFromConn(conn, connID, msg.GetDest(), msg.GetSource(), hostname)
 
 	if data := msg.GetData(); len(data) > 0 {
 		if _, err := conn.Write(data); err != nil {
@@ -240,7 +268,7 @@ func (t *tunnel) handleNewConn(msg *bridgev1.TunnelNetworkMessage) {
 	}
 }
 
-func (t *tunnel) closeAll() {
+func (t *tunnelImpl) closeAll() {
 	t.conns.Range(func(key string, conn net.Conn) bool {
 		conn.Close()
 		t.conns.Delete(key)

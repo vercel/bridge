@@ -2,6 +2,9 @@ syntax = "proto3";
 
 package bridge.v1;
 
+import "bridge/v1/reactor.proto";
+import "buf/validate/validate.proto";
+
 // AdministratorService manages bridge lifecycle in a Kubernetes cluster.
 service AdministratorService {
   // CreateBridge provisions a new bridge in the source deployment's namespace,
@@ -18,7 +21,11 @@ service AdministratorService {
 // CreateBridgeRequest is sent by the bridge CLI to the Administrator to provision a new bridge.
 message CreateBridgeRequest {
   // The KSUID identifying the developer's device (from ~/.bridge/device-id.txt).
-  string device_id = 1 [json_name = "device_id"];
+  string device_id = 1 [
+    json_name = "device_id",
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).required = true
+  ];
 
   // The name of the source Deployment to clone. If empty, the Administrator creates
   // a simple Deployment with just the bridge proxy container.
@@ -39,6 +46,9 @@ message CreateBridgeRequest {
   // When set, source_deployment becomes optional (used to select which
   // Deployment in the archive to bridge when multiple exist).
   bytes source_manifests = 6 [json_name = "source_manifests"];
+
+  // Reactor specs to load on the bridge proxy server.
+  repeated Reactor reactors = 7;
 }
 
 // CreateBridgeResponse is returned by the Administrator after a bridge is provisioned.
@@ -68,7 +78,11 @@ message CreateBridgeResponse {
 // ListBridgesRequest is sent to query active bridges.
 message ListBridgesRequest {
   // The device ID to list bridges for. Required.
-  string device_id = 1 [json_name = "device_id"];
+  string device_id = 1 [
+    json_name = "device_id",
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).required = true
+  ];
 }
 
 // BridgeInfo describes an active bridge.
@@ -103,10 +117,17 @@ message ListBridgesResponse {
 // DeleteBridgeRequest identifies a bridge to tear down.
 message DeleteBridgeRequest {
   // The device ID that owns the bridge.
-  string device_id = 1 [json_name = "device_id"];
+  string device_id = 1 [
+    json_name = "device_id",
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).required = true
+  ];
 
   // The name of the bridge to delete.
-  string name = 2;
+  string name = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).required = true
+  ];
 
   // The namespace containing the bridge resources.
   string namespace = 3;

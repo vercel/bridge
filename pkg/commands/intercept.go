@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"os/user"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/vercel/bridge/pkg/k8s/k8spf"
 	"github.com/vercel/bridge/pkg/k8s/meta"
 	"github.com/vercel/bridge/pkg/plumbing"
+	"github.com/vercel/bridge/pkg/tunnel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -158,6 +160,22 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	defer conn.Close()
 	client := bridgev1.NewBridgeProxyServiceClient(conn)
 
+	// Fetch metadata from the proxy pod (env vars, CA cert/key).
+	metadata, err := client.GetMetadata(ctx, &bridgev1.GetMetadataRequest{})
+	if err != nil {
+		slog.Warn("Failed to get metadata from proxy", "error", err)
+	}
+
+	// Install the bridge CA certificate into the system trust store so that
+	// TLS connections to mocked services are trusted by the application.
+	if metadata != nil && len(metadata.CaCert) > 0 {
+		if err := installCACert(ctx, metadata.CaCert); err != nil {
+			slog.Warn("Failed to install CA certificate", "error", err)
+		} else {
+			slog.Info("Installed bridge CA certificate")
+		}
+	}
+
 	// Copy files from the proxy pod if requested.
 	if len(copyFiles) > 0 {
 		if err := copyFilesFromProxy(ctx, client, copyFiles); err != nil {
@@ -173,7 +191,7 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	}
 
 	dialer := plumbing.NewStaticPortDialer(appPort, nil)
-	tun := plumbing.NewTunnel(dialer, stream)
+	tun := tunnel.New(dialer, stream)
 	tun.Start(ctx)
 	slog.Info("Tunnel connected", "app_port", appPort)
 
@@ -284,6 +302,43 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	proxyComp.Stop()
 
 	return nil
+}
+
+// installCACert writes the PEM-encoded CA certificate to the system trust
+// store and runs the appropriate update command.
+// Supports Debian/Ubuntu (update-ca-certificates) and RHEL/Alpine (update-ca-trust).
+func installCACert(ctx context.Context, certPEM []byte) error {
+	// Try Debian/Ubuntu first (update-ca-certificates).
+	if _, err := exec.LookPath("update-ca-certificates"); err == nil {
+		if err := os.MkdirAll("/usr/local/share/ca-certificates", 0755); err != nil {
+			return fmt.Errorf("failed to create ca-certificates dir: %w", err)
+		}
+		if err := os.WriteFile("/usr/local/share/ca-certificates/bridge-ca.crt", certPEM, 0644); err != nil {
+			return fmt.Errorf("failed to write CA cert: %w", err)
+		}
+		cmd := exec.CommandContext(ctx, "update-ca-certificates")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("update-ca-certificates failed: %s: %w", out, err)
+		}
+		return nil
+	}
+
+	// Try RHEL/Fedora (update-ca-trust).
+	if _, err := exec.LookPath("update-ca-trust"); err == nil {
+		if err := os.MkdirAll("/etc/pki/ca-trust/source/anchors", 0755); err != nil {
+			return fmt.Errorf("failed to create ca-trust dir: %w", err)
+		}
+		if err := os.WriteFile("/etc/pki/ca-trust/source/anchors/bridge-ca.crt", certPEM, 0644); err != nil {
+			return fmt.Errorf("failed to write CA cert: %w", err)
+		}
+		cmd := exec.CommandContext(ctx, "update-ca-trust", "extract")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("update-ca-trust failed: %s: %w", out, err)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("no supported certificate installer found (need update-ca-certificates or update-ca-trust)")
 }
 
 // readOriginalNameserver reads the first nameserver from /etc/resolv.conf.

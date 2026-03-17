@@ -9,7 +9,7 @@ import (
 
 	"github.com/vercel/bridge/pkg/conntrack"
 	"github.com/vercel/bridge/pkg/netutil"
-	"github.com/vercel/bridge/pkg/plumbing"
+	"github.com/vercel/bridge/pkg/tunnel"
 )
 
 const (
@@ -19,7 +19,7 @@ const (
 
 // ProxyComponent manages the transparent proxy listener, tunnel client, and iptables rules.
 type ProxyComponent struct {
-	tunnel     plumbing.Tunnel
+	tunnel     tunnel.Tunnel
 	listener   net.Listener
 	port       int
 	registry   *conntrack.Registry
@@ -29,7 +29,7 @@ type ProxyComponent struct {
 
 // ProxyConfig holds configuration for starting the proxy component.
 type ProxyConfig struct {
-	Tunnel     plumbing.Tunnel
+	Tunnel     tunnel.Tunnel
 	ProxyPort  int // 0 = random
 	Registry   *conntrack.Registry
 	DNSPort    int // If >0, redirect all UDP :53 traffic to this port
@@ -177,7 +177,7 @@ func (p *ProxyComponent) handleOutbound(clientConn net.Conn) {
 	)
 
 	// Hand the connection to the tunnel; it owns the conn from here.
-	p.tunnel.AddConn(clientConn, destination)
+	p.tunnel.AddConn(clientConn, destination, hostname)
 }
 
 func (p *ProxyComponent) cleanupIptables() {

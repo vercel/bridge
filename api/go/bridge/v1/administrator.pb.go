@@ -7,6 +7,7 @@
 package bridgev1
 
 import (
+	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -41,8 +42,10 @@ type CreateBridgeRequest struct {
 	// When set, source_deployment becomes optional (used to select which
 	// Deployment in the archive to bridge when multiple exist).
 	SourceManifests []byte `protobuf:"bytes,6,opt,name=source_manifests,proto3" json:"source_manifests,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Reactor specs to load on the bridge proxy server.
+	Reactors      []*Reactor `protobuf:"bytes,7,rep,name=reactors,proto3" json:"reactors,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateBridgeRequest) Reset() {
@@ -113,6 +116,13 @@ func (x *CreateBridgeRequest) GetProxyImage() string {
 func (x *CreateBridgeRequest) GetSourceManifests() []byte {
 	if x != nil {
 		return x.SourceManifests
+	}
+	return nil
+}
+
+func (x *CreateBridgeRequest) GetReactors() []*Reactor {
+	if x != nil {
+		return x.Reactors
 	}
 	return nil
 }
@@ -513,14 +523,16 @@ var File_bridge_v1_administrator_proto protoreflect.FileDescriptor
 
 const file_bridge_v1_administrator_proto_rawDesc = "" +
 	"\n" +
-	"\x1dbridge/v1/administrator.proto\x12\tbridge.v1\"\xf1\x01\n" +
-	"\x13CreateBridgeRequest\x12\x1c\n" +
-	"\tdevice_id\x18\x01 \x01(\tR\tdevice_id\x12,\n" +
+	"\x1dbridge/v1/administrator.proto\x12\tbridge.v1\x1a\x17bridge/v1/reactor.proto\x1a\x1bbuf/validate/validate.proto\"\xad\x02\n" +
+	"\x13CreateBridgeRequest\x12(\n" +
+	"\tdevice_id\x18\x01 \x01(\tB\n" +
+	"\xbaH\a\xc8\x01\x01r\x02\x10\x01R\tdevice_id\x12,\n" +
 	"\x11source_deployment\x18\x02 \x01(\tR\x11source_deployment\x12*\n" +
 	"\x10source_namespace\x18\x03 \x01(\tR\x10source_namespace\x12\x14\n" +
 	"\x05force\x18\x04 \x01(\bR\x05force\x12 \n" +
 	"\vproxy_image\x18\x05 \x01(\tR\vproxy_image\x12*\n" +
-	"\x10source_manifests\x18\x06 \x01(\fR\x10source_manifests\"\xde\x02\n" +
+	"\x10source_manifests\x18\x06 \x01(\fR\x10source_manifests\x12.\n" +
+	"\breactors\x18\a \x03(\v2\x12.bridge.v1.ReactorR\breactors\"\xde\x02\n" +
 	"\x14CreateBridgeResponse\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x1a\n" +
 	"\bpod_name\x18\x02 \x01(\tR\bpod_name\x12\x12\n" +
@@ -531,9 +543,10 @@ const file_bridge_v1_administrator_proto_rawDesc = "" +
 	"\tapp_ports\x18\a \x03(\x05R\bappPorts\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"2\n" +
-	"\x12ListBridgesRequest\x12\x1c\n" +
-	"\tdevice_id\x18\x01 \x01(\tR\tdevice_id\"\x84\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\">\n" +
+	"\x12ListBridgesRequest\x12(\n" +
+	"\tdevice_id\x18\x01 \x01(\tB\n" +
+	"\xbaH\a\xc8\x01\x01r\x02\x10\x01R\tdevice_id\"\x84\x02\n" +
 	"\n" +
 	"BridgeInfo\x12\x1c\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\tdevice_id\x12,\n" +
@@ -546,10 +559,12 @@ const file_bridge_v1_administrator_proto_rawDesc = "" +
 	"\x06status\x18\x06 \x01(\tR\x06status\x12(\n" +
 	"\x0fdeployment_name\x18\a \x01(\tR\x0fdeployment_name\"F\n" +
 	"\x13ListBridgesResponse\x12/\n" +
-	"\abridges\x18\x01 \x03(\v2\x15.bridge.v1.BridgeInfoR\abridges\"e\n" +
-	"\x13DeleteBridgeRequest\x12\x1c\n" +
-	"\tdevice_id\x18\x01 \x01(\tR\tdevice_id\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
+	"\abridges\x18\x01 \x03(\v2\x15.bridge.v1.BridgeInfoR\abridges\"}\n" +
+	"\x13DeleteBridgeRequest\x12(\n" +
+	"\tdevice_id\x18\x01 \x01(\tB\n" +
+	"\xbaH\a\xc8\x01\x01r\x02\x10\x01R\tdevice_id\x12\x1e\n" +
+	"\x04name\x18\x02 \x01(\tB\n" +
+	"\xbaH\a\xc8\x01\x01r\x02\x10\x01R\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x03 \x01(\tR\tnamespace\"\x16\n" +
 	"\x14DeleteBridgeResponse2\x86\x02\n" +
 	"\x14AdministratorService\x12O\n" +
@@ -581,21 +596,23 @@ var file_bridge_v1_administrator_proto_goTypes = []any{
 	(*DeleteBridgeRequest)(nil),  // 5: bridge.v1.DeleteBridgeRequest
 	(*DeleteBridgeResponse)(nil), // 6: bridge.v1.DeleteBridgeResponse
 	nil,                          // 7: bridge.v1.CreateBridgeResponse.EnvVarsEntry
+	(*Reactor)(nil),              // 8: bridge.v1.Reactor
 }
 var file_bridge_v1_administrator_proto_depIdxs = []int32{
-	7, // 0: bridge.v1.CreateBridgeResponse.env_vars:type_name -> bridge.v1.CreateBridgeResponse.EnvVarsEntry
-	3, // 1: bridge.v1.ListBridgesResponse.bridges:type_name -> bridge.v1.BridgeInfo
-	0, // 2: bridge.v1.AdministratorService.CreateBridge:input_type -> bridge.v1.CreateBridgeRequest
-	2, // 3: bridge.v1.AdministratorService.ListBridges:input_type -> bridge.v1.ListBridgesRequest
-	5, // 4: bridge.v1.AdministratorService.DeleteBridge:input_type -> bridge.v1.DeleteBridgeRequest
-	1, // 5: bridge.v1.AdministratorService.CreateBridge:output_type -> bridge.v1.CreateBridgeResponse
-	4, // 6: bridge.v1.AdministratorService.ListBridges:output_type -> bridge.v1.ListBridgesResponse
-	6, // 7: bridge.v1.AdministratorService.DeleteBridge:output_type -> bridge.v1.DeleteBridgeResponse
-	5, // [5:8] is the sub-list for method output_type
-	2, // [2:5] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	8, // 0: bridge.v1.CreateBridgeRequest.reactors:type_name -> bridge.v1.Reactor
+	7, // 1: bridge.v1.CreateBridgeResponse.env_vars:type_name -> bridge.v1.CreateBridgeResponse.EnvVarsEntry
+	3, // 2: bridge.v1.ListBridgesResponse.bridges:type_name -> bridge.v1.BridgeInfo
+	0, // 3: bridge.v1.AdministratorService.CreateBridge:input_type -> bridge.v1.CreateBridgeRequest
+	2, // 4: bridge.v1.AdministratorService.ListBridges:input_type -> bridge.v1.ListBridgesRequest
+	5, // 5: bridge.v1.AdministratorService.DeleteBridge:input_type -> bridge.v1.DeleteBridgeRequest
+	1, // 6: bridge.v1.AdministratorService.CreateBridge:output_type -> bridge.v1.CreateBridgeResponse
+	4, // 7: bridge.v1.AdministratorService.ListBridges:output_type -> bridge.v1.ListBridgesResponse
+	6, // 8: bridge.v1.AdministratorService.DeleteBridge:output_type -> bridge.v1.DeleteBridgeResponse
+	6, // [6:9] is the sub-list for method output_type
+	3, // [3:6] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_bridge_v1_administrator_proto_init() }
@@ -603,6 +620,7 @@ func file_bridge_v1_administrator_proto_init() {
 	if File_bridge_v1_administrator_proto != nil {
 		return
 	}
+	file_bridge_v1_reactor_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

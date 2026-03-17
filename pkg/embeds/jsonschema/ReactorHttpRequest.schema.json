@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "ReactorHttpRequest is the request shape available in CEL expressions as `request`.",
+  "properties": {
+    "body": {
+      "default": "",
+      "type": "string"
+    },
+    "headers": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "propertyNames": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "host": {
+      "default": "",
+      "type": "string"
+    },
+    "method": {
+      "default": "",
+      "type": "string"
+    },
+    "path": {
+      "default": "",
+      "type": "string"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "propertyNames": {
+        "type": "string"
+      },
+      "type": "object"
+    }
+  },
+  "title": "Reactor Http Request",
+  "type": "object"
+}

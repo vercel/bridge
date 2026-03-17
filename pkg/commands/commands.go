@@ -76,6 +76,7 @@ func NewApp() *cli.Command {
 			Administrator(),
 			Debug(),
 			Update(),
+			Schema(),
 		},
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"buf.build/go/protovalidate"
 	"github.com/vercel/bridge/pkg/plumbing"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -86,8 +87,8 @@ func NewLocalFromClient(client kubernetes.Interface, dynClient dynamic.Interface
 }
 
 func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBridgeRequest) (*bridgev1.CreateBridgeResponse, error) {
-	if req.DeviceId == "" {
-		return nil, fmt.Errorf("device_id is required")
+	if err := protovalidate.Validate(req); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 	if len(req.SourceManifests) == 0 && req.SourceDeployment != "" && req.SourceNamespace == "" {
 		return nil, fmt.Errorf("source_namespace is required when source_deployment is set")
@@ -114,6 +115,8 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 		resources.StripOrphanedVolumes(),
 		resources.StripUnreferencedLabels(),
 		resources.InjectProxyImage(proxyImage),
+		resources.InjectReactors(req.GetReactors()),
+		resources.InjectCA(targetNS),
 		resources.ClearClusterIPs(),
 		resources.SuffixNames(suffix),
 		resources.InjectLabels(),
@@ -218,11 +221,10 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 }
 
 func (l *adminService) ListBridges(ctx context.Context, req *bridgev1.ListBridgesRequest) (*bridgev1.ListBridgesResponse, error) {
-	slog.Debug("ListBridges", "device_id", req.DeviceId)
-
-	if req.DeviceId == "" {
-		return nil, fmt.Errorf("device_id is required")
+	if err := protovalidate.Validate(req); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
 	}
+	slog.Debug("ListBridges", "device_id", req.DeviceId)
 
 	// List bridge deployments across all namespaces for this device.
 	deploys, err := l.client.AppsV1().Deployments("").List(ctx, metav1.ListOptions{
@@ -255,11 +257,8 @@ func (l *adminService) ListBridges(ctx context.Context, req *bridgev1.ListBridge
 }
 
 func (l *adminService) DeleteBridge(ctx context.Context, req *bridgev1.DeleteBridgeRequest) (*bridgev1.DeleteBridgeResponse, error) {
-	if req.DeviceId == "" {
-		return nil, fmt.Errorf("device_id is required")
-	}
-	if req.Name == "" {
-		return nil, fmt.Errorf("name is required")
+	if err := protovalidate.Validate(req); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 
 	// Resolve namespace from the bridge deployment if not provided.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vercel/bridge/pkg/conntrack"
+	"github.com/vercel/bridge/pkg/hostmatch"
 
 	"github.com/miekg/dns"
 )
@@ -184,46 +185,7 @@ func getSystemResolver() string {
 	return "8.8.8.8:53"
 }
 
-// matchWildcard checks if hostname matches a wildcard pattern.
-// Supports * as a wildcard that matches any sequence of characters within a single label,
-// and ** to match across multiple labels.
-// Examples:
-//   - "*.example.com" matches "foo.example.com" but not "bar.foo.example.com"
-//   - "**.example.com" matches "foo.example.com" and "bar.foo.example.com"
-//   - "api.*.internal" matches "api.foo.internal"
+// matchWildcard delegates to hostmatch.Match.
 func matchWildcard(pattern, hostname string) bool {
-	// Handle match-all wildcard.
-	if pattern == "*" {
-		return true
-	}
-
-	// Handle exact match
-	if pattern == hostname {
-		return true
-	}
-
-	// Handle ** (matches multiple labels)
-	if strings.HasPrefix(pattern, "**.") {
-		suffix := pattern[2:] // Include the dot: ".example.com"
-		return strings.HasSuffix(hostname, suffix) || hostname == pattern[3:]
-	}
-
-	// Handle single * wildcard
-	patternParts := strings.Split(pattern, ".")
-	hostParts := strings.Split(hostname, ".")
-
-	if len(patternParts) != len(hostParts) {
-		return false
-	}
-
-	for i, pp := range patternParts {
-		if pp == "*" {
-			continue
-		}
-		if pp != hostParts[i] {
-			return false
-		}
-	}
-
-	return true
+	return hostmatch.Match(pattern, hostname)
 }

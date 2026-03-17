@@ -12,7 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vercel/bridge/pkg/plumbing"
+	"github.com/vercel/bridge/pkg/mitm"
+	"github.com/vercel/bridge/pkg/tunnel"
 
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"google.golang.org/grpc"
@@ -58,15 +59,43 @@ type GRPCServer struct {
 	listenPorts []ListenPort
 
 	tunnelMu sync.Mutex
-	tunnel   plumbing.Tunnel
+	tunnel   tunnel.Tunnel
+
+	// CA cert and key for TLS mock interception, read once at startup.
+	caCert []byte
+	caKey  []byte
+
+	hijacker mitm.Hijacker
 }
 
 // NewGRPCServer creates a new gRPC proxy server.
-func NewGRPCServer(addr string, listenPorts []ListenPort) *GRPCServer {
+func NewGRPCServer(addr string, listenPorts []ListenPort, reactors []*bridgev1.Reactor) *GRPCServer {
 	s := &GRPCServer{
 		addr:        addr,
 		listenPorts: listenPorts,
 	}
+
+	// Read the CA cert and key once at startup.
+	if cert, err := os.ReadFile(caCertPath); err == nil {
+		s.caCert = cert
+		slog.Info("Loaded CA certificate", "path", caCertPath)
+	}
+	if key, err := os.ReadFile(caKeyPath); err == nil {
+		s.caKey = key
+		slog.Info("Loaded CA key", "path", caKeyPath)
+	}
+
+	// Create reactor hijacker if specs are provided.
+	if len(reactors) > 0 {
+		h, err := mitm.NewReactorHijacker(reactors, s.caCert, s.caKey)
+		if err != nil {
+			slog.Error("Failed to compile reactor specs", "error", err)
+		} else {
+			s.hijacker = h
+			slog.Info("Loaded reactor specs", "count", len(reactors))
+		}
+	}
+
 	s.server = grpc.NewServer()
 	bridgev1.RegisterBridgeProxyServiceServer(s.server, s)
 	healthSrv := health.NewServer()
@@ -148,6 +177,12 @@ func isSystemEnvVar(key string) bool {
 	return false
 }
 
+// Well-known paths where the administrator mounts the CA Secret into the proxy pod.
+const (
+	caCertPath = "/etc/bridge/tls/ca.crt"
+	caKeyPath  = "/etc/bridge/tls/ca.key"
+)
+
 // GetMetadata returns metadata about the bridge proxy, including environment
 // variables that were set on the pod by the administrator.
 func (s *GRPCServer) GetMetadata(_ context.Context, _ *bridgev1.GetMetadataRequest) (*bridgev1.GetMetadataResponse, error) {
@@ -158,7 +193,12 @@ func (s *GRPCServer) GetMetadata(_ context.Context, _ *bridgev1.GetMetadataReque
 			envVars[k] = v
 		}
 	}
-	return &bridgev1.GetMetadataResponse{EnvVars: envVars}, nil
+
+	return &bridgev1.GetMetadataResponse{
+		EnvVars: envVars,
+		CaCert:  s.caCert,
+		CaKey:   s.caKey,
+	}, nil
 }
 
 // CopyFiles reads the requested files and directories from the local filesystem
@@ -218,7 +258,11 @@ func readFileCopy(path string, info os.FileInfo) *bridgev1.FileCopy {
 func (s *GRPCServer) TunnelNetwork(stream grpc.BidiStreamingServer[bridgev1.TunnelNetworkMessage, bridgev1.TunnelNetworkMessage]) error {
 	slog.Info("Tunnel connected")
 
-	tun := plumbing.NewTunnel(&net.Dialer{Timeout: egressDialTimeout}, stream)
+	var opts []tunnel.Option
+	if s.hijacker != nil {
+		opts = append(opts, tunnel.WithHijacker(s.hijacker))
+	}
+	tun := tunnel.New(&net.Dialer{Timeout: egressDialTimeout}, stream, opts...)
 
 	s.tunnelMu.Lock()
 	s.tunnel = tun
@@ -275,6 +319,6 @@ func (s *GRPCServer) acceptIngressConns(lis net.Listener) {
 			continue
 		}
 
-		tun.AddConn(conn, "")
+		tun.AddConn(conn, "", "")
 	}
 }

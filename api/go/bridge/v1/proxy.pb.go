@@ -255,8 +255,14 @@ func (*GetMetadataRequest) Descriptor() ([]byte, []int) {
 }
 
 type GetMetadataResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	EnvVars       map[string]string      `protobuf:"bytes,1,rep,name=env_vars,json=envVars,proto3" json:"env_vars,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	EnvVars map[string]string      `protobuf:"bytes,1,rep,name=env_vars,json=envVars,proto3" json:"env_vars,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// PEM-encoded CA certificate for TLS interception of mocked services.
+	// Mounted into the bridge proxy pod from a Kubernetes Secret.
+	CaCert []byte `protobuf:"bytes,2,opt,name=ca_cert,proto3" json:"ca_cert,omitempty"`
+	// PEM-encoded CA private key for minting per-host TLS certificates.
+	// Mounted into the bridge proxy pod from a Kubernetes Secret.
+	CaKey         []byte `protobuf:"bytes,3,opt,name=ca_key,proto3" json:"ca_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -294,6 +300,20 @@ func (*GetMetadataResponse) Descriptor() ([]byte, []int) {
 func (x *GetMetadataResponse) GetEnvVars() map[string]string {
 	if x != nil {
 		return x.EnvVars
+	}
+	return nil
+}
+
+func (x *GetMetadataResponse) GetCaCert() []byte {
+	if x != nil {
+		return x.CaCert
+	}
+	return nil
+}
+
+func (x *GetMetadataResponse) GetCaKey() []byte {
+	if x != nil {
+		return x.CaKey
 	}
 	return nil
 }
@@ -481,7 +501,10 @@ type TunnelNetworkMessage struct {
 	// The protocol used for the connection (TCP or UDP).
 	Protocol TunnelProtocol `protobuf:"varint,5,opt,name=protocol,proto3,enum=bridge.v1.TunnelProtocol" json:"protocol,omitempty"`
 	// Error message if something went wrong.
-	Error         string `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
+	Error string `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
+	// The hostname associated with this connection, resolved by the intercept
+	// DNS interceptor. Used by the server for mock matching and TLS cert minting.
+	Hostname      string `protobuf:"bytes,7,opt,name=hostname,proto3" json:"hostname,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -558,6 +581,13 @@ func (x *TunnelNetworkMessage) GetError() string {
 	return ""
 }
 
+func (x *TunnelNetworkMessage) GetHostname() string {
+	if x != nil {
+		return x.Hostname
+	}
+	return ""
+}
+
 var File_bridge_v1_proxy_proto protoreflect.FileDescriptor
 
 const file_bridge_v1_proxy_proto_rawDesc = "" +
@@ -571,9 +601,11 @@ const file_bridge_v1_proxy_proto_rawDesc = "" +
 	"\rTunnelAddress\x12\x0e\n" +
 	"\x02ip\x18\x01 \x01(\tR\x02ip\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"\x14\n" +
-	"\x12GetMetadataRequest\"\x99\x01\n" +
+	"\x12GetMetadataRequest\"\xcb\x01\n" +
 	"\x13GetMetadataResponse\x12F\n" +
-	"\benv_vars\x18\x01 \x03(\v2+.bridge.v1.GetMetadataResponse.EnvVarsEntryR\aenvVars\x1a:\n" +
+	"\benv_vars\x18\x01 \x03(\v2+.bridge.v1.GetMetadataResponse.EnvVarsEntryR\aenvVars\x12\x18\n" +
+	"\aca_cert\x18\x02 \x01(\fR\aca_cert\x12\x16\n" +
+	"\x06ca_key\x18\x03 \x01(\fR\x06ca_key\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"(\n" +
@@ -586,14 +618,15 @@ const file_bridge_v1_proxy_proto_rawDesc = "" +
 	"\acontent\x18\x02 \x01(\fR\acontent\x12\x12\n" +
 	"\x04mode\x18\x03 \x01(\rR\x04mode\x12\x19\n" +
 	"\bmod_time\x18\x04 \x01(\x03R\amodTime\x12\x14\n" +
-	"\x05error\x18\x05 \x01(\tR\x05error\"\xfd\x01\n" +
+	"\x05error\x18\x05 \x01(\tR\x05error\"\x99\x02\n" +
 	"\x14TunnelNetworkMessage\x120\n" +
 	"\x06source\x18\x01 \x01(\v2\x18.bridge.v1.TunnelAddressR\x06source\x12,\n" +
 	"\x04dest\x18\x02 \x01(\v2\x18.bridge.v1.TunnelAddressR\x04dest\x12$\n" +
 	"\rconnection_id\x18\x03 \x01(\tR\rconnection_id\x12\x12\n" +
 	"\x04data\x18\x04 \x01(\fR\x04data\x125\n" +
 	"\bprotocol\x18\x05 \x01(\x0e2\x19.bridge.v1.TunnelProtocolR\bprotocol\x12\x14\n" +
-	"\x05error\x18\x06 \x01(\tR\x05error*c\n" +
+	"\x05error\x18\x06 \x01(\tR\x05error\x12\x1a\n" +
+	"\bhostname\x18\a \x01(\tR\bhostname*c\n" +
 	"\x0eTunnelProtocol\x12\x1f\n" +
 	"\x1bTUNNEL_PROTOCOL_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13TUNNEL_PROTOCOL_TCP\x10\x01\x12\x17\n" +

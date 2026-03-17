@@ -19,6 +19,7 @@ import (
 	"github.com/urfave/cli/v3"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"buf.build/go/protovalidate"
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"github.com/vercel/bridge/pkg/archive"
 	"github.com/vercel/bridge/pkg/container"
@@ -29,6 +30,7 @@ import (
 	"github.com/vercel/bridge/pkg/k8s/meta"
 	"github.com/vercel/bridge/pkg/netutil"
 	"github.com/vercel/bridge/pkg/session"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 const featureRefBase = "ghcr.io/vercel/bridge/bridge-feature"
@@ -126,6 +128,10 @@ func Create() *cli.Command {
 					cli.EnvVar("BRIDGE_CONTAINER_BINARY_PATH"),
 					FuncSource(linuxBinaryPath),
 				),
+			},
+			&cli.StringSliceFlag{
+				Name:  "server-mocks",
+				Usage: "Reactor spec (JSON string or file path). May be repeated. See `bridge schema reactor` for the schema.",
 			},
 			&cli.StringFlag{
 				Name:    "devcontainer-up-args",
@@ -281,6 +287,13 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 		}
 	}
 
+	// Parse and validate reactor specs.
+	reactors, err := parseReactorFlags(c.StringSlice("server-mocks"))
+	if err != nil {
+		sp.Stop()
+		return fmt.Errorf("invalid --server-mocks: %w", err)
+	}
+
 	// Step 4: Create bridge.
 	sp.SetTitle("Creating bridge server...")
 
@@ -291,6 +304,7 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 		Force:            yes,
 		ProxyImage:       proxyImage,
 		SourceManifests:  sourceManifests,
+		Reactors:         reactors,
 	})
 	sp.Stop()
 	if err != nil {
@@ -785,4 +799,34 @@ func bridgeConfigPath(baseConfigPath, bridgeName string) string {
 		dir = filepath.Dir(dir)
 	}
 	return filepath.Join(filepath.Dir(baseConfigPath), ".devcontainer", bridgeDir, "devcontainer.json")
+}
+
+// parseReactorFlags parses and validates --server-mocks flag values (JSON
+// strings or file paths) into Reactor proto messages.
+func parseReactorFlags(vals []string) ([]*bridgev1.Reactor, error) {
+	v, err := protovalidate.New()
+	if err != nil {
+		return nil, fmt.Errorf("init validator: %w", err)
+	}
+
+	var reactors []*bridgev1.Reactor
+	for _, val := range vals {
+		data := []byte(val)
+		if !strings.HasPrefix(strings.TrimSpace(val), "{") {
+			fileData, err := os.ReadFile(val)
+			if err != nil {
+				return nil, fmt.Errorf("read reactor file %q: %w", val, err)
+			}
+			data = fileData
+		}
+		var r bridgev1.Reactor
+		if err := protojson.Unmarshal(data, &r); err != nil {
+			return nil, fmt.Errorf("parse reactor spec: %w", err)
+		}
+		if err := v.Validate(&r); err != nil {
+			return nil, fmt.Errorf("invalid reactor spec: %w", err)
+		}
+		reactors = append(reactors, &r)
+	}
+	return reactors, nil
 }

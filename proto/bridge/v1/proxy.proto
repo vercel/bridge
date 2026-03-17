@@ -52,6 +52,14 @@ message GetMetadataRequest {}
 
 message GetMetadataResponse {
   map<string, string> env_vars = 1;
+
+  // PEM-encoded CA certificate for TLS interception of mocked services.
+  // Mounted into the bridge proxy pod from a Kubernetes Secret.
+  bytes ca_cert = 2 [json_name = "ca_cert"];
+
+  // PEM-encoded CA private key for minting per-host TLS certificates.
+  // Mounted into the bridge proxy pod from a Kubernetes Secret.
+  bytes ca_key = 3 [json_name = "ca_key"];
 }
 
 message CopyFilesRequest {
@@ -98,4 +106,8 @@ message TunnelNetworkMessage {
 
   // Error message if something went wrong.
   string error = 6;
+
+  // The hostname associated with this connection, resolved by the intercept
+  // DNS interceptor. Used by the server for mock matching and TLS cert minting.
+  string hostname = 7;
 }

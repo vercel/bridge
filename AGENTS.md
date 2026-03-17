@@ -7,3 +7,7 @@ using the `With` func.
 
 When told to "rebuild" you should rebuild both the native binary to the root of the repo and the linux binary in
 `dist/bridge-linux`
+
+# Protobuf
+
+Always use `make proto` to generate protobuf outputs (Go, TypeScript, JSON Schema). Never run `buf generate` directly.

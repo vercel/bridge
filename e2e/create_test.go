@@ -161,6 +161,10 @@ func (s *CreateSuite) SetupSuite() {
 	s.bridgeBin, err = testutil.BuildBridge()
 	require.NoError(s.T(), err, "failed to build bridge binary")
 
+	// Point KUBECONFIG at the test cluster for all tests in the suite.
+	s.origKubeconfig = os.Getenv("KUBECONFIG")
+	os.Setenv("KUBECONFIG", s.cluster.KubeConfigPath)
+
 	slog.Info("SetupSuite complete")
 }
 
@@ -195,9 +199,6 @@ func (s *CreateSuite) TestFullstackCreate() {
 	t := s.T()
 
 	// --- Setup ---
-
-	s.origKubeconfig = os.Getenv("KUBECONFIG")
-	os.Setenv("KUBECONFIG", s.cluster.KubeConfigPath)
 
 	_, err := identity.EnsureDeviceID()
 	require.NoError(t, err)
@@ -311,16 +312,6 @@ func (s *CreateSuite) TestCreateFailsOnInterceptCrash() {
 	}
 	require.NoError(t, cfg.Save(filepath.Join(dcDir, "devcontainer.json")))
 
-	origKubeconfig := os.Getenv("KUBECONFIG")
-	os.Setenv("KUBECONFIG", s.cluster.KubeConfigPath)
-	t.Cleanup(func() {
-		if origKubeconfig != "" {
-			os.Setenv("KUBECONFIG", origKubeconfig)
-		} else {
-			os.Unsetenv("KUBECONFIG")
-		}
-	})
-
 	origDir, err := os.Getwd()
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(dir))
@@ -410,16 +401,6 @@ spec:
 	// --- Create workspace and set up environment ---
 
 	dir := createWorkspace(t, s.bridgeBin, s.projectRoot, s.cluster)
-
-	origKubeconfig := os.Getenv("KUBECONFIG")
-	os.Setenv("KUBECONFIG", s.cluster.KubeConfigPath)
-	t.Cleanup(func() {
-		if origKubeconfig != "" {
-			os.Setenv("KUBECONFIG", origKubeconfig)
-		} else {
-			os.Unsetenv("KUBECONFIG")
-		}
-	})
 
 	origDir, err := os.Getwd()
 	require.NoError(t, err)
@@ -532,16 +513,6 @@ func (s *CreateSuite) TestExec() {
 	// --- Setup ---
 
 	dir := createWorkspace(t, s.bridgeBin, s.projectRoot, s.cluster)
-
-	origKubeconfig := os.Getenv("KUBECONFIG")
-	os.Setenv("KUBECONFIG", s.cluster.KubeConfigPath)
-	t.Cleanup(func() {
-		if origKubeconfig != "" {
-			os.Setenv("KUBECONFIG", origKubeconfig)
-		} else {
-			os.Unsetenv("KUBECONFIG")
-		}
-	})
 
 	origDir, err := os.Getwd()
 	require.NoError(t, err)
@@ -691,6 +662,109 @@ func TestCreateFailsMissingBinary(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bridge-linux", "error should mention the missing binary path")
 	require.Contains(t, err.Error(), "install", "error should include install instructions")
+}
+
+// TestReactor verifies that --server-mock injects a reactor into the bridge
+// proxy. Requests matching the reactor route get a mock response; unmatched
+// requests are forwarded to the real destination.
+func (s *CreateSuite) TestReactor() {
+	t := s.T()
+
+	reactorJSON := `{"host":"google.com","routes":[{"match":{"cel":"request.path == '/mocked'"},"action":{"http_response":{"status":200,"headers":{"content-type":"application/json"},"body":{"mocked":true,"source":"bridge-reactor"}}}}]}`
+
+	// --- Setup ---
+
+	dir := createWorkspace(t, s.bridgeBin, s.projectRoot, s.cluster)
+
+	// Write reactor spec to a file so the CLI flag doesn't split on commas.
+	reactorFile := filepath.Join(dir, "reactor.json")
+	require.NoError(t, os.WriteFile(reactorFile, []byte(reactorJSON), 0644))
+
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { os.Chdir(origDir) })
+
+	deviceID, _ := identity.GetDeviceID()
+	bridgeName := identity.BridgeResourceName(deviceID, testutil.UserserviceName)
+
+	t.Cleanup(func() {
+		container.NewDockerClient().StopAll(s.ctx, container.StopAllOpts{Labels: bridgeLabels(bridgeName)})
+		os.RemoveAll(dir)
+	})
+
+	// --- Run `bridge create --connect --server-mock <json>` ---
+
+	stdinR, stdinW, err := os.Pipe()
+	require.NoError(t, err)
+	stdoutR, stdoutW, err := os.Pipe()
+	require.NoError(t, err)
+
+	adminAddr := fmt.Sprintf("k8spf:///%s.%s:9090", s.adminPod.Name, testutil.AdministratorNamespace)
+
+	app, args := s.newBridgeCreateApp(stdinR, stdoutW, dir,
+		testutil.UserserviceName, "--admin-addr", adminAddr, "--server-mocks", reactorFile)
+
+	errCh := make(chan error, 1)
+	go func() {
+		defer stdoutW.Close()
+		errCh <- app.Run(s.ctx, args)
+	}()
+
+	go func() {
+		scanner := bufio.NewScanner(stdoutR)
+		for scanner.Scan() {
+			t.Logf("[bridge] %s", scanner.Text())
+		}
+	}()
+
+	// --- Wait for bridge pod and intercept readiness ---
+
+	bridgeNS := testutil.UserserviceNamespace
+
+	pod, err := kube.WaitForPod(s.ctx, s.cluster.Clientset, bridgeNS, meta.DeploymentSelector(bridgeName), 1*time.Minute)
+	require.NoError(t, err, "bridge pod not ready")
+	t.Logf("Bridge pod ready: %s", pod.Name)
+
+	ct := container.NewDockerClient()
+	containerID, err := container.WaitForID(s.ctx, ct, container.FindOpts{Labels: bridgeLabels(bridgeName)})
+	require.NoError(t, err, "container not found")
+	require.NoError(t, intercept.WaitForReady(s.ctx, ct, containerID), "intercept not ready")
+
+	// --- Verify reactor: /mocked returns the mock response ---
+
+	generatedConfig := filepath.Join(dir, ".devcontainer",
+		fmt.Sprintf("bridge-%s", bridgeName), "devcontainer.json")
+	dc := &devcontainer.Client{
+		WorkspaceFolder: dir,
+		ConfigPath:      generatedConfig,
+	}
+
+	// Pre-warm DNS: ensure bridge DNS is resolving google.com through the tunnel.
+	dc.ExecOutput(s.ctx, []string{"nslookup", "google.com", "127.0.0.1"})
+	time.Sleep(1 * time.Second)
+
+	// Verify DNS is resolving through bridge (should get a proxy IP, not a real IP).
+	resolveOut, _ := dc.ExecOutput(s.ctx, []string{"nslookup", "google.com"})
+	t.Logf("[nslookup] output: %s", strings.TrimSpace(resolveOut))
+
+	mockedOut, mockedErr := dc.ExecOutput(s.ctx, []string{"wget", "-O", "-", "-T", "10", "http://google.com/mocked"})
+	t.Logf("[wget /mocked] output: %s", strings.TrimSpace(mockedOut))
+	require.NoError(t, mockedErr, "wget /mocked failed")
+	require.Contains(t, mockedOut, "bridge-reactor", "expected reactor mock response")
+
+	// --- Verify passthrough: / forwards to real google.com ---
+
+	realOut, realErr := dc.ExecOutput(s.ctx, []string{"wget", "-O", "-", "-T", "10", "http://google.com/"})
+	t.Logf("[wget /] output_len: %d", len(realOut))
+	require.NoError(t, realErr, "wget / failed")
+	require.Contains(t, strings.ToLower(realOut), "<html", "expected HTML from real google.com")
+
+	// --- Clean up ---
+
+	stdinW.Close()
+
+	require.NoError(t, <-errCh, "bridge create --connect failed")
 }
 
 func TestCreateSuite(t *testing.T) {

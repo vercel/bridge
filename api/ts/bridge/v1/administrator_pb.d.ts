@@ -4,6 +4,7 @@
 
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
+import type { Reactor } from "./reactor_pb";
 
 /**
  * Describes the file bridge/v1/administrator.proto.
@@ -62,6 +63,13 @@ export declare type CreateBridgeRequest = Message<"bridge.v1.CreateBridgeRequest
    * @generated from field: bytes source_manifests = 6 [json_name = "source_manifests"];
    */
   sourceManifests: Uint8Array;
+
+  /**
+   * Reactor specs to load on the bridge proxy server.
+   *
+   * @generated from field: repeated bridge.v1.Reactor reactors = 7;
+   */
+  reactors: Reactor[];
 };
 
 /**

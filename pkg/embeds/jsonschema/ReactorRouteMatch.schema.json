@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "ReactorRouteMatch evaluates incoming HTTP requests.",
+  "properties": {
+    "cel": {
+      "description": "CEL expression evaluated against a ReactorHttpRequest.\n Must return a boolean.",
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "cel"
+  ],
+  "title": "Reactor Route Match",
+  "type": "object"
+}

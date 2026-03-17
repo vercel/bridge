@@ -88,6 +88,22 @@ export declare type GetMetadataResponse = Message<"bridge.v1.GetMetadataResponse
    * @generated from field: map<string, string> env_vars = 1;
    */
   envVars: { [key: string]: string };
+
+  /**
+   * PEM-encoded CA certificate for TLS interception of mocked services.
+   * Mounted into the bridge proxy pod from a Kubernetes Secret.
+   *
+   * @generated from field: bytes ca_cert = 2 [json_name = "ca_cert"];
+   */
+  caCert: Uint8Array;
+
+  /**
+   * PEM-encoded CA private key for minting per-host TLS certificates.
+   * Mounted into the bridge proxy pod from a Kubernetes Secret.
+   *
+   * @generated from field: bytes ca_key = 3 [json_name = "ca_key"];
+   */
+  caKey: Uint8Array;
 };
 
 /**
@@ -221,6 +237,14 @@ export declare type TunnelNetworkMessage = Message<"bridge.v1.TunnelNetworkMessa
    * @generated from field: string error = 6;
    */
   error: string;
+
+  /**
+   * The hostname associated with this connection, resolved by the intercept
+   * DNS interceptor. Used by the server for mock matching and TLS cert minting.
+   *
+   * @generated from field: string hostname = 7;
+   */
+  hostname: string;
 };
 
 /**
