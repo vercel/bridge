@@ -34,9 +34,9 @@ func Server() *cli.Command {
 				Sources: cli.EnvVars("BRIDGE_LISTEN_PORTS"),
 			},
 			&cli.StringSliceFlag{
-				Name:    "reactors",
-				Usage:   "Reactor spec (JSON string or file path). May be repeated.",
-				Sources: cli.EnvVars("BRIDGE_REACTORS"),
+				Name:    "server-facades",
+				Usage:   "Server facade spec (JSON string or file path). May be repeated.",
+				Sources: cli.EnvVars("BRIDGE_SERVER_FACADES"),
 			},
 		},
 		Action: runServer,
@@ -62,17 +62,17 @@ func runServer(ctx context.Context, c *cli.Command) error {
 		}
 	}
 
-	// Parse reactor specs.
-	var reactors []*bridgev1.Reactor
-	for _, val := range c.StringSlice("reactors") {
-		r, err := parseReactor(val)
+	// Parse server facade specs.
+	var facades []*bridgev1.ServerFacade
+	for _, val := range c.StringSlice("server-facades") {
+		f, err := parseServerFacade(val)
 		if err != nil {
-			return fmt.Errorf("invalid reactor spec: %w", err)
+			return fmt.Errorf("invalid server facade spec: %w", err)
 		}
-		reactors = append(reactors, r)
+		facades = append(facades, f)
 	}
 
-	grpcServer := proxy.NewGRPCServer(addr, listenPorts, reactors)
+	grpcServer := proxy.NewGRPCServer(addr, listenPorts, facades)
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -93,19 +93,19 @@ func runServer(ctx context.Context, c *cli.Command) error {
 	}
 }
 
-// parseReactor parses a reactor spec from a JSON string or file path.
-func parseReactor(val string) (*bridgev1.Reactor, error) {
+// parseServerFacade parses a server facade spec from a JSON string or file path.
+func parseServerFacade(val string) (*bridgev1.ServerFacade, error) {
 	data := []byte(val)
 	if !strings.HasPrefix(strings.TrimSpace(val), "{") {
 		var err error
 		data, err = os.ReadFile(val)
 		if err != nil {
-			return nil, fmt.Errorf("read reactor file %q: %w", val, err)
+			return nil, fmt.Errorf("read server facade file %q: %w", val, err)
 		}
 	}
-	var r bridgev1.Reactor
-	if err := protojson.Unmarshal(data, &r); err != nil {
-		return nil, fmt.Errorf("parse reactor JSON: %w", err)
+	var f bridgev1.ServerFacade
+	if err := protojson.Unmarshal(data, &f); err != nil {
+		return nil, fmt.Errorf("parse server facade JSON: %w", err)
 	}
-	return &r, nil
+	return &f, nil
 }

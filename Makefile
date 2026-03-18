@@ -1,6 +1,6 @@
-.PHONY: all proto clean
+.PHONY: all proto mock clean
 
-all: clean proto
+all: clean proto mock
 
 # Generate all protobuf outputs (Go, TypeScript, JSON Schema)
 proto:
@@ -11,9 +11,14 @@ proto:
 	cd api/go && go mod tidy
 	cd api/ts && npm install
 
+# Generate mocks
+mock:
+	mockery
+
 # Clean generated files
 clean:
 	rm -rf api/go/bridge
 	rm -rf api/ts/bridge
 	rm -rf api/jsonschema
 	rm -rf pkg/embeds/jsonschema
+	rm -rf pkg/mocks

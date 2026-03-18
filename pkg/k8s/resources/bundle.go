@@ -22,8 +22,9 @@ type Bundle struct {
 // TransformContext carries shared state through the transform pipeline.
 type TransformContext struct {
 	context.Context
-	NameMap         NameMap // built by SuffixNames, read by RewriteRefs
+	NameMap         NameMap // built by Rename, read by RewriteRefs
 	DeviceID        string  // device that owns this bridge
+	BridgeName      string  // user-facing bridge name (value of vercel.sh/bridge-name label)
 	SourceName      string  // original deployment name (before prefix)
 	SourceNamespace string  // namespace the source came from (target NS for manifests/simple)
 }

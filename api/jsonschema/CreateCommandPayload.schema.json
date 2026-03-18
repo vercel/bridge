@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "CreateCommandPayload represents the flags for the \"create\" command.\n Used both as the CEL evaluation context and as the flag values to apply.",
+  "properties": {
+    "connect": {
+      "default": false,
+      "description": "--connect / -c: start the devcontainer and exec into it after creation.",
+      "type": "boolean"
+    },
+    "devcontainer_config": {
+      "default": "",
+      "description": "--devcontainer-config / -f: path to a base devcontainer.json to extend.",
+      "type": "string"
+    },
+    "devcontainer_up_args": {
+      "default": "",
+      "description": "--devcontainer-up-args: additional arguments passed to devcontainer up.",
+      "type": "string"
+    },
+    "listen": {
+      "anyOf": [
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        {
+          "pattern": "^-?[0-9]+$",
+          "type": "string"
+        }
+      ],
+      "default": 0,
+      "description": "--listen / -l: port the app listens on."
+    },
+    "name": {
+      "default": "",
+      "description": "--name: bridge name (defaults to workload_name).",
+      "type": "string"
+    },
+    "namespace": {
+      "default": "",
+      "description": "--namespace / -n: target namespace of the source deployment.",
+      "type": "string"
+    },
+    "server_facades": {
+      "description": "--server-facade: server facade specs (JSON string or file path). Repeated.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "source": {
+      "default": "",
+      "description": "--source / -s: path to Kubernetes manifests (folder, glob, or YAML file).",
+      "type": "string"
+    },
+    "workload_name": {
+      "default": "",
+      "description": "Positional argument: name of the target workload (defaults to a Deployment).",
+      "type": "string"
+    }
+  },
+  "title": "Create Command Payload",
+  "type": "object"
+}

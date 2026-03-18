@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vercel/bridge/pkg/grpcutil"
 	"github.com/vercel/bridge/pkg/mitm"
 	"github.com/vercel/bridge/pkg/tunnel"
 
@@ -69,7 +70,7 @@ type GRPCServer struct {
 }
 
 // NewGRPCServer creates a new gRPC proxy server.
-func NewGRPCServer(addr string, listenPorts []ListenPort, reactors []*bridgev1.Reactor) *GRPCServer {
+func NewGRPCServer(addr string, listenPorts []ListenPort, facades []*bridgev1.ServerFacade) *GRPCServer {
 	s := &GRPCServer{
 		addr:        addr,
 		listenPorts: listenPorts,
@@ -85,18 +86,18 @@ func NewGRPCServer(addr string, listenPorts []ListenPort, reactors []*bridgev1.R
 		slog.Info("Loaded CA key", "path", caKeyPath)
 	}
 
-	// Create reactor hijacker if specs are provided.
-	if len(reactors) > 0 {
-		h, err := mitm.NewReactorHijacker(reactors, s.caCert, s.caKey)
+	// Create facade hijacker if specs are provided.
+	if len(facades) > 0 {
+		h, err := mitm.NewFacadeHijacker(facades, s.caCert, s.caKey)
 		if err != nil {
-			slog.Error("Failed to compile reactor specs", "error", err)
+			slog.Error("Failed to compile server facade specs", "error", err)
 		} else {
 			s.hijacker = h
-			slog.Info("Loaded reactor specs", "count", len(reactors))
+			slog.Info("Loaded server facade specs", "count", len(facades))
 		}
 	}
 
-	s.server = grpc.NewServer()
+	s.server = grpcutil.NewServer()
 	bridgev1.RegisterBridgeProxyServiceServer(s.server, s)
 	healthSrv := health.NewServer()
 	healthpb.RegisterHealthServer(s.server, healthSrv)

@@ -14,10 +14,18 @@ func Schema() *cli.Command {
 		Usage: "Print JSON schemas for bridge resources",
 		Commands: []*cli.Command{
 			{
-				Name:  "reactor",
-				Usage: "Print the JSON schema for a reactor spec (used with --server-mocks)",
+				Name:  "server-facade",
+				Usage: "Print the JSON schema for a server facade spec (used with --server-facade)",
 				Action: func(_ context.Context, _ *cli.Command) error {
-					fmt.Println(string(embeds.ReactorSchema))
+					fmt.Println(string(embeds.ServerFacadeSchema))
+					return nil
+				},
+			},
+			{
+				Name:  "profile",
+				Usage: "Print the JSON schema for .bridge/profile.json",
+				Action: func(_ context.Context, _ *cli.Command) error {
+					fmt.Println(string(embeds.ProfileSchema))
 					return nil
 				},
 			},

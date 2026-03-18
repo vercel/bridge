@@ -23,23 +23,23 @@ type Hijacker interface {
 	Hijack(ctx context.Context, msg *bridgev1.TunnelNetworkMessage) (net.Conn, error)
 }
 
-// ReactorHijacker implements Hijacker by matching incoming connections against
-// compiled reactors.
-type ReactorHijacker struct {
-	ca       *CA
-	reactors []*CompiledReactor
+// FacadeHijacker implements Hijacker by matching incoming connections against
+// compiled server facades.
+type FacadeHijacker struct {
+	ca      *CA
+	facades []*CompiledFacade
 }
 
-// NewReactorHijacker compiles the given Reactors and parses the CA for TLS minting.
+// NewFacadeHijacker compiles the given ServerFacades and parses the CA for TLS minting.
 // certPEM/keyPEM may be nil if TLS interception is not needed.
-func NewReactorHijacker(reactors []*bridgev1.Reactor, certPEM, keyPEM []byte) (*ReactorHijacker, error) {
-	compiled := make([]*CompiledReactor, 0, len(reactors))
-	for _, r := range reactors {
-		cr, err := CompileReactor(r)
+func NewFacadeHijacker(facades []*bridgev1.ServerFacade, certPEM, keyPEM []byte) (*FacadeHijacker, error) {
+	compiled := make([]*CompiledFacade, 0, len(facades))
+	for _, f := range facades {
+		cf, err := CompileFacade(f)
 		if err != nil {
 			return nil, err
 		}
-		compiled = append(compiled, cr)
+		compiled = append(compiled, cf)
 	}
 
 	var ca *CA
@@ -51,32 +51,32 @@ func NewReactorHijacker(reactors []*bridgev1.Reactor, certPEM, keyPEM []byte) (*
 		}
 	}
 
-	return &ReactorHijacker{ca: ca, reactors: compiled}, nil
+	return &FacadeHijacker{ca: ca, facades: compiled}, nil
 }
 
-// ShouldHijack returns true if the message's hostname matches any reactor's
+// ShouldHijack returns true if the message's hostname matches any facade's
 // host glob pattern.
-func (h *ReactorHijacker) ShouldHijack(msg *bridgev1.TunnelNetworkMessage) bool {
+func (h *FacadeHijacker) ShouldHijack(msg *bridgev1.TunnelNetworkMessage) bool {
 	hostname := msg.GetHostname()
 	if hostname == "" {
 		return false
 	}
-	for _, r := range h.reactors {
-		if hostmatch.Match(r.Host, hostname) {
+	for _, f := range h.facades {
+		if hostmatch.Match(f.Host, hostname) {
 			return true
 		}
 	}
 	return false
 }
 
-// Hijack returns a net.Conn for the tunnel to read/write. It finds all reactors
+// Hijack returns a net.Conn for the tunnel to read/write. It finds all facades
 // matching the hostname and creates a Handler to serve the connection.
-func (h *ReactorHijacker) Hijack(ctx context.Context, msg *bridgev1.TunnelNetworkMessage) (net.Conn, error) {
+func (h *FacadeHijacker) Hijack(ctx context.Context, msg *bridgev1.TunnelNetworkMessage) (net.Conn, error) {
 	hostname := msg.GetHostname()
 
-	matched := h.matchingReactors(hostname)
+	matched := h.matchingFacades(hostname)
 	if len(matched) == 0 {
-		return nil, fmt.Errorf("no matching reactors for hostname %q", hostname)
+		return nil, fmt.Errorf("no matching facades for hostname %q", hostname)
 	}
 
 	tunnelConn, handlerConn := net.Pipe()
@@ -85,15 +85,15 @@ func (h *ReactorHijacker) Hijack(ctx context.Context, msg *bridgev1.TunnelNetwor
 	destAddr := fmt.Sprintf("%s:%d", dest.GetIp(), dest.GetPort())
 
 	handler := &Handler{
-		CA:       h.ca,
-		Reactors: matched,
+		CA:      h.ca,
+		Facades: matched,
 		DestAddr: destAddr,
 	}
 
 	go func() {
 		defer handlerConn.Close()
 		if err := handler.Serve(handlerConn, hostname); err != nil {
-			slog.WarnContext(ctx, "Reactor handler error",
+			slog.WarnContext(ctx, "Facade handler error",
 				"hostname", hostname,
 				"error", err,
 			)
@@ -103,11 +103,11 @@ func (h *ReactorHijacker) Hijack(ctx context.Context, msg *bridgev1.TunnelNetwor
 	return tunnelConn, nil
 }
 
-func (h *ReactorHijacker) matchingReactors(hostname string) []*CompiledReactor {
-	var matched []*CompiledReactor
-	for _, r := range h.reactors {
-		if hostmatch.Match(r.Host, hostname) {
-			matched = append(matched, r)
+func (h *FacadeHijacker) matchingFacades(hostname string) []*CompiledFacade {
+	var matched []*CompiledFacade
+	for _, f := range h.facades {
+		if hostmatch.Match(f.Host, hostname) {
+			matched = append(matched, f)
 		}
 	}
 	return matched

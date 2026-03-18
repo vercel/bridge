@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -25,7 +24,6 @@ import (
 	"github.com/vercel/bridge/pkg/devcontainer"
 	"github.com/vercel/bridge/pkg/identity"
 	"github.com/vercel/bridge/pkg/intercept"
-	"github.com/vercel/bridge/pkg/k8s/kube"
 	"github.com/vercel/bridge/pkg/k8s/meta"
 )
 
@@ -48,17 +46,19 @@ type CreateSuite struct {
 	projectRoot string
 
 	// Temp dirs / state to restore on teardown.
-	origDir        string
 	origKubeconfig string
 	workspaceDir   string // set by test, used by TearDownSuite for devcontainer cleanup
-	bridgeName     string // deployment name, used to stop containers on teardown
+	bridgeName     string // bridge name, used to stop containers on teardown
 }
 
 // createWorkspace creates a temp workspace directory with a devcontainer.json
 // that includes all test-specific config: mounts, runArgs, containerEnv.
 // It also copies the bridge feature into the workspace so it can be referenced
 // as a relative path (the devcontainer CLI rejects absolute feature paths).
+// The working directory is changed to the workspace and restored on cleanup.
 func createWorkspace(t *testing.T, bridgeBin, projectRoot string, cluster *testutil.Cluster) string {
+	t.Helper()
+
 	dir, err := os.MkdirTemp(os.TempDir(), "bridge-create-test-*")
 	require.NoError(t, err)
 	// Resolve symlinks so the devcontainer CLI's workspace-folder label matches
@@ -90,12 +90,21 @@ func createWorkspace(t *testing.T, bridgeBin, projectRoot string, cluster *testu
 		},
 	}
 	require.NoError(t, cfg.Save(filepath.Join(dcDir, "devcontainer.json")))
+
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() {
+		os.Chdir(origDir)
+		os.RemoveAll(dir)
+	})
+
 	return dir
 }
 
 // newBridgeCreateApp returns a configured CLI app and builds the base args for
-// `bridge create --connect`. Callers append test-specific args (e.g. deployment
-// name, --source, --admin-addr) before the base args.
+// `bridge create`. Callers append test-specific args (e.g. deployment name,
+// --source, --admin-addr, --connect) before the base args.
 func (s *CreateSuite) newBridgeCreateApp(reader io.Reader, writer io.Writer, workspaceDir string, extraArgs ...string) (*cli.Command, []string) {
 	app := commands.NewApp()
 	app.Reader = reader
@@ -106,13 +115,40 @@ func (s *CreateSuite) newBridgeCreateApp(reader io.Reader, writer io.Writer, wor
 	args = append(args,
 		"-n", testutil.UserserviceNamespace,
 		"--yes",
-		"--connect",
 		"--feature-ref", "../local-features/bridge-feature",
 		"--container-binary-path", s.bridgeBin,
 		"--proxy-image", s.administratorRef,
 		"-f", filepath.Join(workspaceDir, ".devcontainer", "devcontainer.json"),
 	)
 	return app, args
+}
+
+// runBridgeCreate runs `bridge create` (without --connect) and waits for the
+// bridge pod to be ready.
+func (s *CreateSuite) runBridgeCreate(workspaceDir, bridgeName string, extraArgs ...string) {
+	s.T().Helper()
+
+	adminAddr := fmt.Sprintf("k8spf:///%s.%s:9090", s.adminPod.Name, testutil.AdministratorNamespace)
+
+	createApp := commands.NewApp()
+	createApp.Reader = strings.NewReader("")
+	createApp.Writer = io.Discard
+
+	args := []string{"bridge", "create", bridgeName}
+	args = append(args, extraArgs...)
+	args = append(args,
+		"-n", testutil.UserserviceNamespace,
+		"--yes",
+		"--feature-ref", "../local-features/bridge-feature",
+		"--container-binary-path", s.bridgeBin,
+		"--proxy-image", s.administratorRef,
+		"-f", filepath.Join(workspaceDir, ".devcontainer", "devcontainer.json"),
+		"--admin-addr", adminAddr,
+	)
+
+	err := createApp.Run(s.ctx, args)
+	s.Require().NoError(err, "bridge create failed")
+	s.T().Log("bridge create completed")
 }
 
 func (s *CreateSuite) SetupSuite() {
@@ -173,13 +209,6 @@ func (s *CreateSuite) TearDownSuite() {
 	if s.bridgeName != "" {
 		container.NewDockerClient().StopAll(s.ctx, container.StopAllOpts{Labels: bridgeLabels(s.bridgeName)})
 	}
-	if s.workspaceDir != "" {
-		os.RemoveAll(s.workspaceDir)
-	}
-	// Restore working directory.
-	if s.origDir != "" {
-		os.Chdir(s.origDir)
-	}
 	// Restore KUBECONFIG.
 	if s.origKubeconfig != "" {
 		os.Setenv("KUBECONFIG", s.origKubeconfig)
@@ -195,7 +224,7 @@ func (s *CreateSuite) TearDownSuite() {
 	}
 }
 
-func (s *CreateSuite) TestFullstackCreate() {
+func (s *CreateSuite) TestCreateConnect() {
 	t := s.T()
 
 	// --- Setup ---
@@ -204,10 +233,6 @@ func (s *CreateSuite) TestFullstackCreate() {
 	require.NoError(t, err)
 
 	s.workspaceDir = createWorkspace(t, s.bridgeBin, s.projectRoot, s.cluster)
-
-	s.origDir, err = os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(s.workspaceDir))
 
 	// --- Create pipes for stdin/stdout ---
 
@@ -221,7 +246,7 @@ func (s *CreateSuite) TestFullstackCreate() {
 	adminAddr := fmt.Sprintf("k8spf:///%s.%s:9090", s.adminPod.Name, testutil.AdministratorNamespace)
 
 	app, args := s.newBridgeCreateApp(stdinR, stdoutW, s.workspaceDir,
-		testutil.UserserviceName, "--admin-addr", adminAddr)
+		testutil.UserserviceName, "--admin-addr", adminAddr, "--connect")
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -229,51 +254,35 @@ func (s *CreateSuite) TestFullstackCreate() {
 		errCh <- app.Run(s.ctx, args)
 	}()
 
-	// Log stdout from bridge create in the background.
+	// Collect all stdout so we can log it and assert on it.
+	var outputBuf bytes.Buffer
 	go func() {
-		scanner := bufio.NewScanner(stdoutR)
-		for scanner.Scan() {
-			t.Logf("[bridge] %s", scanner.Text())
-		}
+		io.Copy(&outputBuf, stdoutR)
 	}()
 
-	// --- Wait for bridge pod and intercept readiness ---
+	// --- Wait for intercept readiness ---
 
-	deviceID, _ := identity.GetDeviceID()
-	bridgeName := identity.BridgeResourceName(deviceID, testutil.UserserviceName)
+	bridgeName := testutil.UserserviceName
 	s.bridgeName = bridgeName
-	bridgeNS := testutil.UserserviceNamespace
-
-	pod, err := kube.WaitForPod(s.ctx, s.cluster.Clientset, bridgeNS, meta.DeploymentSelector(bridgeName), 1*time.Minute)
-	require.NoError(t, err, "bridge pod not ready")
-	t.Logf("Bridge pod ready: %s", pod.Name)
 
 	ct := container.NewDockerClient()
 	containerID, err := container.WaitForID(s.ctx, ct, container.FindOpts{Labels: bridgeLabels(bridgeName)})
 	require.NoError(t, err, "container not found")
 	require.NoError(t, intercept.WaitForReady(s.ctx, ct, containerID), "intercept not ready")
 
-	// --- Verify network access ---
+	// --- Verify network access via stdin ---
 
-	generatedConfig := filepath.Join(s.workspaceDir, ".devcontainer",
-		fmt.Sprintf("bridge-%s", bridgeName), "devcontainer.json")
-	dc := &devcontainer.Client{
-		WorkspaceFolder: s.workspaceDir,
-		ConfigPath:      generatedConfig,
-	}
 	targetURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/",
 		testutil.UserserviceServiceName, testutil.UserserviceNamespace, testutil.UserservicePort)
 
-	wgetOut, wgetErr := dc.ExecOutput(s.ctx, []string{"wget", "-O", "-", "-T", "10", targetURL})
-	t.Logf("[wget] output: %s", strings.TrimSpace(wgetOut))
-	require.NoError(t, wgetErr, "wget failed")
-	require.Contains(t, wgetOut, "ok", "expected test server response")
-
-	// --- Clean up: close stdin so bash exits ---
-
+	fmt.Fprintf(stdinW, "wget -q -O - -T 10 %s\n", targetURL)
+	fmt.Fprintln(stdinW, "exit")
 	stdinW.Close()
 
 	require.NoError(t, <-errCh, "bridge create --connect failed")
+
+	t.Logf("[stdout] %s", outputBuf.String())
+	require.Contains(t, outputBuf.String(), "ok", "expected test server response")
 }
 
 // TestCreateFailsOnInterceptCrash verifies that bridge create --connect fails
@@ -320,8 +329,7 @@ func (s *CreateSuite) TestCreateFailsOnInterceptCrash() {
 	_, err = identity.EnsureDeviceID()
 	require.NoError(t, err)
 
-	deviceID, _ := identity.GetDeviceID()
-	crashBridgeName := identity.BridgeResourceName(deviceID, testutil.UserserviceName)
+	crashBridgeName := testutil.UserserviceName
 	t.Cleanup(func() {
 		container.NewDockerClient().StopAll(s.ctx, container.StopAllOpts{Labels: bridgeLabels(crashBridgeName)})
 		os.RemoveAll(dir)
@@ -334,7 +342,7 @@ func (s *CreateSuite) TestCreateFailsOnInterceptCrash() {
 	defer stdinW.Close()
 
 	app, args := s.newBridgeCreateApp(stdinR, io.Discard, dir,
-		testutil.UserserviceName, "--admin-addr", adminAddr)
+		testutil.UserserviceName, "--admin-addr", adminAddr, "--connect")
 
 	err = app.Run(s.ctx, args)
 
@@ -402,85 +410,50 @@ spec:
 
 	dir := createWorkspace(t, s.bridgeBin, s.projectRoot, s.cluster)
 
-	origDir, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(dir))
-	t.Cleanup(func() { os.Chdir(origDir) })
-
 	_, err = identity.EnsureDeviceID()
 	require.NoError(t, err)
 
-	deviceID, _ := identity.GetDeviceID()
-	bridgeName := identity.BridgeResourceName(deviceID, "myapp")
+	bridgeName := "myapp"
 
 	t.Cleanup(func() {
 		container.NewDockerClient().StopAll(s.ctx, container.StopAllOpts{Labels: bridgeLabels(bridgeName)})
-		os.RemoveAll(dir)
 	})
 
-	// --- Run `bridge create --source <manifest-dir>` ---
-	// No --admin-addr: the default (k8spf:///administrator.bridge:9090?workload=deployment)
-	// should auto-discover the administrator deployed by SetupSuite.
+	// --- Run `bridge create --source <manifest-dir>` (no --connect) ---
 
-	stdinR, stdinW, err := os.Pipe()
-	require.NoError(t, err)
-	defer stdinW.Close()
-
-	stdoutR, stdoutW, err := os.Pipe()
-	require.NoError(t, err)
-
-	app, args := s.newBridgeCreateApp(stdinR, stdoutW, dir,
-		"--source", manifestDir)
-
-	errCh := make(chan error, 1)
-	go func() {
-		defer stdoutW.Close()
-		errCh <- app.Run(s.ctx, args)
-	}()
-
-	go func() {
-		scanner := bufio.NewScanner(stdoutR)
-		for scanner.Scan() {
-			t.Logf("[bridge] %s", scanner.Text())
-		}
-	}()
-
-	// --- Wait for bridge pod readiness ---
-
-	bridgeNS := testutil.UserserviceNamespace
-
-	// Wait for the bridge pod to be ready in the cluster.
-	pod, err := kube.WaitForPod(s.ctx, s.cluster.Clientset, bridgeNS, meta.DeploymentSelector(bridgeName), 1*time.Minute)
-	require.NoError(t, err, "bridge pod not ready")
-	t.Logf("Bridge pod ready: %s", pod.Name)
-
-	ct := container.NewDockerClient()
-	containerID, err := container.WaitForID(s.ctx, ct, container.FindOpts{Labels: bridgeLabels(bridgeName)})
-	require.NoError(t, err, "container not found")
-	require.NoError(t, intercept.WaitForReady(s.ctx, ct, containerID), "intercept not ready")
+	s.runBridgeCreate(dir, bridgeName, "--source", manifestDir)
 
 	// --- Verify annotation preserved on the bridge deployment ---
 
-	dep, err := s.cluster.Clientset.AppsV1().Deployments(bridgeNS).Get(s.ctx, bridgeName, metav1.GetOptions{})
-	require.NoError(t, err, "failed to get bridge deployment")
+	bridgeNS := testutil.UserserviceNamespace
+
+	deploys, err := s.cluster.Clientset.AppsV1().Deployments(bridgeNS).List(s.ctx, metav1.ListOptions{
+		LabelSelector: meta.BridgeNameSelector(bridgeName, ""),
+	})
+	require.NoError(t, err, "failed to list bridge deployments")
+	require.Len(t, deploys.Items, 1, "expected exactly one bridge deployment")
+	dep := &deploys.Items[0]
 	require.Equal(t, "e2e-test-value", dep.Annotations["bridge.dev/test-annotation"],
 		"annotation bridge.dev/test-annotation should be preserved on the bridge deployment")
 
-	// --- Verify network access ---
+	// --- Verify network access via exec ---
 
-	generatedConfig := filepath.Join(dir, ".devcontainer",
-		fmt.Sprintf("bridge-%s", bridgeName), "devcontainer.json")
-	dc := &devcontainer.Client{
-		WorkspaceFolder: dir,
-		ConfigPath:      generatedConfig,
-	}
 	targetURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/",
 		testutil.UserserviceServiceName, testutil.UserserviceNamespace, testutil.UserservicePort)
 
-	wgetOut, wgetErr := dc.ExecOutput(s.ctx, []string{"wget", "-O", "-", "-T", "10", targetURL})
-	t.Logf("[wget] output: %s", strings.TrimSpace(wgetOut))
-	require.NoError(t, wgetErr, "wget failed")
-	require.Contains(t, wgetOut, "ok", "expected test server response")
+	var buf bytes.Buffer
+	execApp := commands.NewApp()
+	execApp.Writer = &buf
+
+	execArgs := []string{
+		"bridge", "exec",
+		bridgeName,
+		"--", "wget", "-O", "-", "-T", "10", targetURL,
+	}
+	execErr := execApp.Run(s.ctx, execArgs)
+	t.Logf("[wget] output: %s", strings.TrimSpace(buf.String()))
+	require.NoError(t, execErr, "wget failed")
+	require.Contains(t, buf.String(), "ok", "expected test server response")
 
 	// --- Verify bridge get lists the bridge ---
 
@@ -496,12 +469,6 @@ spec:
 		}
 	}
 	require.True(t, found, "expected bridge %q in output:\n%s", bridgeName, getOut)
-
-	// --- Clean up: close stdin so bash exits ---
-
-	stdinW.Close()
-
-	require.NoError(t, <-errCh, "bridge create --source failed")
 }
 
 // TestExec verifies the `bridge exec` flow: first creates k8s resources via
@@ -514,44 +481,18 @@ func (s *CreateSuite) TestExec() {
 
 	dir := createWorkspace(t, s.bridgeBin, s.projectRoot, s.cluster)
 
-	origDir, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(dir))
-	t.Cleanup(func() { os.Chdir(origDir) })
-
-	_, err = identity.EnsureDeviceID()
+	_, err := identity.EnsureDeviceID()
 	require.NoError(t, err)
 
-	deviceID, _ := identity.GetDeviceID()
-	bridgeName := identity.BridgeResourceName(deviceID, testutil.UserserviceName)
+	bridgeName := testutil.UserserviceName
 
 	t.Cleanup(func() {
 		container.NewDockerClient().StopAll(s.ctx, container.StopAllOpts{Labels: bridgeLabels(bridgeName)})
-		os.RemoveAll(dir)
 	})
 
-	// --- Step 1: Run `bridge create` WITHOUT --connect to set up k8s resources ---
+	// --- Step 1: Run `bridge create` WITHOUT --connect ---
 
-	adminAddr := fmt.Sprintf("k8spf:///%s.%s:9090", s.adminPod.Name, testutil.AdministratorNamespace)
-	baseConfig := filepath.Join(dir, ".devcontainer", "devcontainer.json")
-
-	createApp := commands.NewApp()
-	createApp.Reader = strings.NewReader("")
-	createApp.Writer = io.Discard
-
-	createArgs := []string{
-		"bridge", "create", testutil.UserserviceName,
-		"-n", testutil.UserserviceNamespace,
-		"--yes",
-		"--feature-ref", "../local-features/bridge-feature",
-		"--container-binary-path", s.bridgeBin,
-		"--proxy-image", s.administratorRef,
-		"-f", baseConfig,
-		"--admin-addr", adminAddr,
-	}
-	err = createApp.Run(s.ctx, createArgs)
-	require.NoError(t, err, "bridge create failed")
-	t.Log("bridge create (no --connect) completed")
+	s.runBridgeCreate(dir, bridgeName)
 
 	// Verify the generated devcontainer config exists.
 	generatedConfig := filepath.Join(dir, ".devcontainer",
@@ -559,42 +500,25 @@ func (s *CreateSuite) TestExec() {
 	_, err = os.Stat(generatedConfig)
 	require.NoError(t, err, "bridge create should have generated devcontainer config")
 
-	// Wait for the bridge pod to be ready before running exec.
-	pod, err := kube.WaitForPod(s.ctx, s.cluster.Clientset, testutil.UserserviceNamespace,
-		meta.DeploymentSelector(bridgeName), 1*time.Minute)
-	require.NoError(t, err, "bridge pod not ready")
-	t.Logf("Bridge pod ready: %s", pod.Name)
-
 	// --- Step 2: Run `bridge exec` to auto-start devcontainer and execute command ---
 
 	targetURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/",
 		testutil.UserserviceServiceName, testutil.UserserviceNamespace, testutil.UserservicePort)
 
+	var buf bytes.Buffer
 	execApp := commands.NewApp()
-	execApp.Writer = io.Discard
-
-	// Redirect os.Stdout to capture exec output — execInDevcontainer
-	// writes directly to os.Stdout, not to app.Writer.
-	origStdout := os.Stdout
-	stdoutR, stdoutW, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stdout = stdoutW
+	execApp.Writer = &buf
 
 	execArgs := []string{
 		"bridge", "exec",
-		testutil.UserserviceName,
+		bridgeName,
 		"--", "wget", "-O", "-", "-T", "10", targetURL,
 	}
 	execErr := execApp.Run(s.ctx, execArgs)
-
-	stdoutW.Close()
-	os.Stdout = origStdout
-
-	output, _ := io.ReadAll(stdoutR)
-	t.Logf("[exec] output: %s", strings.TrimSpace(string(output)))
+	t.Logf("[exec] output: %s", strings.TrimSpace(buf.String()))
 
 	require.NoError(t, execErr, "bridge exec failed")
-	require.Contains(t, string(output), "ok", "expected test server response from bridge exec")
+	require.Contains(t, buf.String(), "ok", "expected test server response from bridge exec")
 }
 
 // runBridgeGet executes `bridge get` with the given extra args and returns
@@ -664,107 +588,62 @@ func TestCreateFailsMissingBinary(t *testing.T) {
 	require.Contains(t, err.Error(), "install", "error should include install instructions")
 }
 
-// TestReactor verifies that --server-mock injects a reactor into the bridge
-// proxy. Requests matching the reactor route get a mock response; unmatched
+// TestServerFacade verifies that --server-facade injects a server facade into the bridge
+// proxy. Requests matching the facade route get a mock response; unmatched
 // requests are forwarded to the real destination.
-func (s *CreateSuite) TestReactor() {
+func (s *CreateSuite) TestServerFacade() {
 	t := s.T()
 
-	reactorJSON := `{"host":"google.com","routes":[{"match":{"cel":"request.path == '/mocked'"},"action":{"http_response":{"status":200,"headers":{"content-type":"application/json"},"body":{"mocked":true,"source":"bridge-reactor"}}}}]}`
+	facadeJSON := `{"host":"google.com","routes":[{"match":{"cel":"request.path == '/mocked'"},"action":{"http_response":{"status":200,"headers":{"content-type":"application/json"},"body":{"mocked":true,"source":"bridge-facade"}}}}]}`
 
 	// --- Setup ---
 
 	dir := createWorkspace(t, s.bridgeBin, s.projectRoot, s.cluster)
 
-	// Write reactor spec to a file so the CLI flag doesn't split on commas.
-	reactorFile := filepath.Join(dir, "reactor.json")
-	require.NoError(t, os.WriteFile(reactorFile, []byte(reactorJSON), 0644))
+	// Write facade spec to a file so the CLI flag doesn't split on commas.
+	facadeFile := filepath.Join(dir, "facade.json")
+	require.NoError(t, os.WriteFile(facadeFile, []byte(facadeJSON), 0644))
 
-	origDir, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(dir))
-	t.Cleanup(func() { os.Chdir(origDir) })
-
-	deviceID, _ := identity.GetDeviceID()
-	bridgeName := identity.BridgeResourceName(deviceID, testutil.UserserviceName)
+	bridgeName := testutil.UserserviceName
 
 	t.Cleanup(func() {
 		container.NewDockerClient().StopAll(s.ctx, container.StopAllOpts{Labels: bridgeLabels(bridgeName)})
-		os.RemoveAll(dir)
 	})
 
-	// --- Run `bridge create --connect --server-mock <json>` ---
+	// --- Run `bridge create` with --server-facade (no --connect) ---
 
-	stdinR, stdinW, err := os.Pipe()
-	require.NoError(t, err)
-	stdoutR, stdoutW, err := os.Pipe()
-	require.NoError(t, err)
+	s.runBridgeCreate(dir, bridgeName, "--server-facade", facadeFile)
 
-	adminAddr := fmt.Sprintf("k8spf:///%s.%s:9090", s.adminPod.Name, testutil.AdministratorNamespace)
+	// --- Verify facade via exec: /mocked returns the mock response ---
 
-	app, args := s.newBridgeCreateApp(stdinR, stdoutW, dir,
-		testutil.UserserviceName, "--admin-addr", adminAddr, "--server-mocks", reactorFile)
-
-	errCh := make(chan error, 1)
-	go func() {
-		defer stdoutW.Close()
-		errCh <- app.Run(s.ctx, args)
-	}()
-
-	go func() {
-		scanner := bufio.NewScanner(stdoutR)
-		for scanner.Scan() {
-			t.Logf("[bridge] %s", scanner.Text())
-		}
-	}()
-
-	// --- Wait for bridge pod and intercept readiness ---
-
-	bridgeNS := testutil.UserserviceNamespace
-
-	pod, err := kube.WaitForPod(s.ctx, s.cluster.Clientset, bridgeNS, meta.DeploymentSelector(bridgeName), 1*time.Minute)
-	require.NoError(t, err, "bridge pod not ready")
-	t.Logf("Bridge pod ready: %s", pod.Name)
-
-	ct := container.NewDockerClient()
-	containerID, err := container.WaitForID(s.ctx, ct, container.FindOpts{Labels: bridgeLabels(bridgeName)})
-	require.NoError(t, err, "container not found")
-	require.NoError(t, intercept.WaitForReady(s.ctx, ct, containerID), "intercept not ready")
-
-	// --- Verify reactor: /mocked returns the mock response ---
-
-	generatedConfig := filepath.Join(dir, ".devcontainer",
-		fmt.Sprintf("bridge-%s", bridgeName), "devcontainer.json")
-	dc := &devcontainer.Client{
-		WorkspaceFolder: dir,
-		ConfigPath:      generatedConfig,
-	}
+	execApp := commands.NewApp()
 
 	// Pre-warm DNS: ensure bridge DNS is resolving google.com through the tunnel.
-	dc.ExecOutput(s.ctx, []string{"nslookup", "google.com", "127.0.0.1"})
+	execApp.Writer = io.Discard
+	_ = execApp.Run(s.ctx, []string{"bridge", "exec", bridgeName, "--", "nslookup", "google.com", "127.0.0.1"})
+
 	time.Sleep(1 * time.Second)
 
-	// Verify DNS is resolving through bridge (should get a proxy IP, not a real IP).
-	resolveOut, _ := dc.ExecOutput(s.ctx, []string{"nslookup", "google.com"})
-	t.Logf("[nslookup] output: %s", strings.TrimSpace(resolveOut))
+	// Verify DNS is resolving through bridge.
+	var buf bytes.Buffer
+	execApp.Writer = &buf
+	_ = execApp.Run(s.ctx, []string{"bridge", "exec", bridgeName, "--", "nslookup", "google.com"})
+	t.Logf("[nslookup] output: %s", strings.TrimSpace(buf.String()))
 
-	mockedOut, mockedErr := dc.ExecOutput(s.ctx, []string{"wget", "-O", "-", "-T", "10", "http://google.com/mocked"})
-	t.Logf("[wget /mocked] output: %s", strings.TrimSpace(mockedOut))
+	// Verify /mocked returns the facade response.
+	buf.Reset()
+	mockedErr := execApp.Run(s.ctx, []string{"bridge", "exec", bridgeName, "--", "wget", "-O", "-", "-T", "10", "http://google.com/mocked"})
+	t.Logf("[wget /mocked] output: %s", strings.TrimSpace(buf.String()))
 	require.NoError(t, mockedErr, "wget /mocked failed")
-	require.Contains(t, mockedOut, "bridge-reactor", "expected reactor mock response")
+	require.Contains(t, buf.String(), "bridge-facade", "expected facade mock response")
 
 	// --- Verify passthrough: / forwards to real google.com ---
 
-	realOut, realErr := dc.ExecOutput(s.ctx, []string{"wget", "-O", "-", "-T", "10", "http://google.com/"})
-	t.Logf("[wget /] output_len: %d", len(realOut))
+	buf.Reset()
+	realErr := execApp.Run(s.ctx, []string{"bridge", "exec", bridgeName, "--", "wget", "-O", "-", "-T", "10", "http://google.com/"})
+	t.Logf("[wget /] output_len: %d", buf.Len())
 	require.NoError(t, realErr, "wget / failed")
-	require.Contains(t, strings.ToLower(realOut), "<html", "expected HTML from real google.com")
-
-	// --- Clean up ---
-
-	stdinW.Close()
-
-	require.NoError(t, <-errCh, "bridge create --connect failed")
+	require.Contains(t, strings.ToLower(buf.String()), "<html", "expected HTML from real google.com")
 }
 
 func TestCreateSuite(t *testing.T) {

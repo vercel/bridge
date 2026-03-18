@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,10 +24,11 @@ import (
 const testDeviceID = "abc123def456"
 const testProxyImage = "ghcr.io/vercel/bridge-cli:test"
 
+const testPrefix = "bdg-"
 const testSuffix = "-abc123"
 
 func testDeployName(sourceName string) string {
-	return sourceName + testSuffix
+	return testPrefix + sourceName + testSuffix
 }
 
 // testCreateFromManifests is a test helper that replicates the manifest-based
@@ -52,6 +54,7 @@ func testCreateFromManifests(t *testing.T, client *k8stesting.Clientset, sourceM
 	tc := &TransformContext{
 		Context:         context.Background(),
 		DeviceID:        testDeviceID,
+		BridgeName:      sourceName,
 		SourceName:      sourceName,
 		SourceNamespace: sourceNS,
 	}
@@ -60,7 +63,7 @@ func testCreateFromManifests(t *testing.T, client *k8stesting.Clientset, sourceM
 		PruneAllMetadata(),
 		StripUnreferencedLabels(),
 		InjectProxyImage(testProxyImage),
-		SuffixNames(testSuffix),
+		Rename(func(name string) string { return testPrefix + name + testSuffix }),
 		InjectLabels(),
 		TransformSelectors(),
 		AppendBridgeService(targetNS),
@@ -76,7 +79,7 @@ func testCreateFromManifests(t *testing.T, client *k8stesting.Clientset, sourceM
 		return "", nil, err
 	}
 
-	deployName := Lookup(NewResourceKey(sourceName, "apps", "Deployment"), bundle, tc.NameMap)
+	deployName := Lookup(NewResourceKey(sourceName, DefaultWorkloadGroup, DefaultWorkloadKind), bundle, tc.NameMap)
 	return deployName, bundle, nil
 }
 
@@ -240,10 +243,10 @@ data:
 	deployName, _, err := testCreateFromManifests(t, client, manifests, "test-ns")
 	require.NoError(t, err)
 
-	suffix := testSuffix
+	prefix, suffix := testPrefix, testSuffix
 
 	// ConfigMap should be created with prefixed name and bridge labels.
-	cm, err := client.CoreV1().ConfigMaps("test-ns").Get(context.Background(), "app-config"+suffix, metav1.GetOptions{})
+	cm, err := client.CoreV1().ConfigMaps("test-ns").Get(context.Background(), prefix+"app-config"+suffix, metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, meta.BridgeTypeProxy, cm.Labels[meta.LabelBridgeType])
 	assert.Equal(t, deployName, cm.Labels[meta.LabelBridgeDeployment])
@@ -253,7 +256,7 @@ data:
 	assert.True(t, err != nil, "original configmap name should not exist")
 
 	// Secret should be created with prefixed name.
-	secret, err := client.CoreV1().Secrets("test-ns").Get(context.Background(), "app-secret"+suffix, metav1.GetOptions{})
+	secret, err := client.CoreV1().Secrets("test-ns").Get(context.Background(), prefix+"app-secret"+suffix, metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, meta.BridgeTypeProxy, secret.Labels[meta.LabelBridgeType])
 }
@@ -325,7 +328,7 @@ metadata:
 	deployName, _, err := testCreateFromManifests(t, client, manifests, "default")
 	require.NoError(t, err)
 
-	suffix := testSuffix
+	prefix, suffix := testPrefix, testSuffix
 
 	// Verify the Deployment's references were rewritten.
 	deploy, err := client.AppsV1().Deployments("default").Get(context.Background(), deployName, metav1.GetOptions{})
@@ -334,20 +337,20 @@ metadata:
 	podSpec := deploy.Spec.Template.Spec
 
 	// ServiceAccountName should be rewritten.
-	assert.Equal(t, "my-sa"+suffix, podSpec.ServiceAccountName)
+	assert.Equal(t, prefix+"my-sa"+suffix, podSpec.ServiceAccountName)
 
 	// The proxy container is the first container (transformed).
 	// Remaining containers/init containers keep env refs rewritten.
 	// Check volumes — configMap name should be rewritten.
 	for _, vol := range podSpec.Volumes {
 		if vol.ConfigMap != nil {
-			assert.Equal(t, "app-config"+suffix, vol.ConfigMap.Name,
+			assert.Equal(t, prefix+"app-config"+suffix, vol.ConfigMap.Name,
 				"volume configMap ref should be rewritten")
 		}
 	}
 
 	// Verify the prefixed ServiceAccount was created.
-	_, err = client.CoreV1().ServiceAccounts("default").Get(context.Background(), "my-sa"+suffix, metav1.GetOptions{})
+	_, err = client.CoreV1().ServiceAccounts("default").Get(context.Background(), prefix+"my-sa"+suffix, metav1.GetOptions{})
 	require.NoError(t, err)
 }
 
@@ -434,8 +437,8 @@ spec:
 	assert.Equal(t, expectedName, deployName)
 
 	// ConfigMap should be created with prefixed name.
-	suffix := testSuffix
-	_, err = client.CoreV1().ConfigMaps("default").Get(context.Background(), "settings"+suffix, metav1.GetOptions{})
+	prefix, suffix := testPrefix, testSuffix
+	_, err = client.CoreV1().ConfigMaps("default").Get(context.Background(), prefix+"settings"+suffix, metav1.GetOptions{})
 	require.NoError(t, err)
 }
 
@@ -482,6 +485,7 @@ data:
 	tc := &TransformContext{
 		Context:         context.Background(),
 		DeviceID:        testDeviceID,
+		BridgeName:      sourceName,
 		SourceName:      sourceName,
 		SourceNamespace: "default",
 	}
@@ -490,7 +494,7 @@ data:
 		PruneAllMetadata(),
 		StripUnreferencedLabels(),
 		InjectProxyImage(testProxyImage),
-		SuffixNames(testSuffix),
+		Rename(func(name string) string { return testPrefix + name + testSuffix }),
 		InjectLabels(),
 		TransformSelectors(),
 		AppendBridgeService("default"),
@@ -502,21 +506,20 @@ data:
 	err = Transform(tc, bundle, transforms)
 	require.NoError(t, err)
 
-	deployName := Lookup(NewResourceKey(sourceName, "apps", "Deployment"), bundle, tc.NameMap)
-
 	err = Save(context.Background(), client, nil, bundle)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "simulated deployment creation failure")
 
 	// Caller is responsible for cleanup; verify it works.
-	_ = DeleteBridgeResources(context.Background(), client, "default", deployName, testDeviceID)
+	_ = DeleteBridgeResources(context.Background(), client, "default", sourceName, testDeviceID)
 
 	var cleanedUp bool
 	for _, action := range client.Actions() {
 		if action.GetVerb() == "delete-collection" && action.GetResource().Resource == "configmaps" {
 			dc := action.(clienttesting.DeleteCollectionAction)
-			expectedSel := meta.LabelBridgeDeployment + "=" + deployName + "," + meta.LabelDeviceID + "=" + testDeviceID
-			if dc.GetListRestrictions().Labels.String() == expectedSel {
+			actualSel := dc.GetListRestrictions().Labels.String()
+			if strings.Contains(actualSel, meta.LabelBridgeName+"="+sourceName) &&
+				strings.Contains(actualSel, meta.LabelDeviceID+"="+testDeviceID) {
 				cleanedUp = true
 				break
 			}
@@ -576,8 +579,8 @@ data:
 	assert.Equal(t, "original-value", origCM.Data["DB_HOST"])
 
 	// The bridge ConfigMap should exist with the prefixed name.
-	suffix := testSuffix
-	bridgeCM, err := client.CoreV1().ConfigMaps("default").Get(context.Background(), "app-config"+suffix, metav1.GetOptions{})
+	prefix, suffix := testPrefix, testSuffix
+	bridgeCM, err := client.CoreV1().ConfigMaps("default").Get(context.Background(), prefix+"app-config"+suffix, metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "bridge-value", bridgeCM.Data["DB_HOST"])
 }

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package bridge.v1;
 
-import "bridge/v1/reactor.proto";
+import "bridge/v1/server_facade.proto";
 import "buf/validate/validate.proto";
 
 // AdministratorService manages bridge lifecycle in a Kubernetes cluster.
@@ -16,6 +16,16 @@ service AdministratorService {
 
   // DeleteBridge tears down a specific bridge and its associated resources.
   rpc DeleteBridge(DeleteBridgeRequest) returns (DeleteBridgeResponse);
+}
+
+// DeviceInfo describes the client device making the request.
+message DeviceInfo {
+  // Operating system (e.g. "linux", "darwin", "windows").
+  string os = 1;
+  // Architecture (e.g. "amd64", "arm64").
+  string arch = 2;
+  // Bridge CLI version (e.g. "0.1.0", "edge-abc1234").
+  string bridge_version = 3 [json_name = "bridge_version"];
 }
 
 // CreateBridgeRequest is sent by the bridge CLI to the Administrator to provision a new bridge.
@@ -47,8 +57,15 @@ message CreateBridgeRequest {
   // Deployment in the archive to bridge when multiple exist).
   bytes source_manifests = 6 [json_name = "source_manifests"];
 
-  // Reactor specs to load on the bridge proxy server.
-  repeated Reactor reactors = 7;
+  // ServerFacade specs to load on the bridge proxy server.
+  repeated ServerFacade server_facades = 7 [json_name = "server_facades"];
+
+  // The bridge name. Defaults to source_deployment when empty.
+  // Used as the value for the vercel.sh/bridge-name label.
+  string name = 8;
+
+  // Optional metadata about the calling device.
+  DeviceInfo device_info = 9 [json_name = "device_info"];
 }
 
 // CreateBridgeResponse is returned by the Administrator after a bridge is provisioned.
@@ -73,6 +90,9 @@ message CreateBridgeResponse {
 
   // Container ports from the source deployment's application container.
   repeated int32 app_ports = 7;
+
+  // The bridge name (value of vercel.sh/bridge-name label).
+  string name = 8;
 }
 
 // ListBridgesRequest is sent to query active bridges.
@@ -83,6 +103,9 @@ message ListBridgesRequest {
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).required = true
   ];
+
+  // Optional metadata about the calling device.
+  DeviceInfo device_info = 2 [json_name = "device_info"];
 }
 
 // BridgeInfo describes an active bridge.
@@ -107,6 +130,9 @@ message BridgeInfo {
 
   // The name of the bridge Deployment.
   string deployment_name = 7 [json_name = "deployment_name"];
+
+  // The bridge name (value of vercel.sh/bridge-name label).
+  string name = 8;
 }
 
 // ListBridgesResponse contains all active bridges matching the filter.
@@ -131,6 +157,9 @@ message DeleteBridgeRequest {
 
   // The namespace containing the bridge resources.
   string namespace = 3;
+
+  // Optional metadata about the calling device.
+  DeviceInfo device_info = 4 [json_name = "device_info"];
 }
 
 // DeleteBridgeResponse is returned after a bridge is torn down.

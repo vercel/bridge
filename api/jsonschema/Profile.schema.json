@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Profile is loaded from .bridge/bridge.json in the repository root.\n It defines per-command rules that automatically set flags based on\n CEL expressions evaluated against the command's arguments.",
+  "properties": {
+    "create": {
+      "description": "Rules for the \"create\" command.",
+      "items": {
+        "additionalProperties": false,
+        "description": "CreateCommandProfile pairs a matcher with flag defaults for the\n \"create\" command.",
+        "properties": {
+          "command": {
+            "additionalProperties": false,
+            "description": "Flags to set or append when the matcher returns true.",
+            "properties": {
+              "connect": {
+                "default": false,
+                "description": "--connect / -c: start the devcontainer and exec into it after creation.",
+                "type": "boolean"
+              },
+              "devcontainer_config": {
+                "default": "",
+                "description": "--devcontainer-config / -f: path to a base devcontainer.json to extend.",
+                "type": "string"
+              },
+              "devcontainer_up_args": {
+                "default": "",
+                "description": "--devcontainer-up-args: additional arguments passed to devcontainer up.",
+                "type": "string"
+              },
+              "listen": {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": -2147483648,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^-?[0-9]+$",
+                    "type": "string"
+                  }
+                ],
+                "default": 0,
+                "description": "--listen / -l: port the app listens on."
+              },
+              "name": {
+                "default": "",
+                "description": "--name: bridge name (defaults to workload_name).",
+                "type": "string"
+              },
+              "namespace": {
+                "default": "",
+                "description": "--namespace / -n: target namespace of the source deployment.",
+                "type": "string"
+              },
+              "server_facades": {
+                "description": "--server-facade: server facade specs (JSON string or file path). Repeated.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "source": {
+                "default": "",
+                "description": "--source / -s: path to Kubernetes manifests (folder, glob, or YAML file).",
+                "type": "string"
+              },
+              "workload_name": {
+                "default": "",
+                "description": "Positional argument: name of the target workload (defaults to a Deployment).",
+                "type": "string"
+              }
+            },
+            "title": "Create Command Payload",
+            "type": "object"
+          },
+          "match": {
+            "description": "payload.workload_name        (string) — the workload_name positional argument\n   payload.namespace            (string) — the --namespace flag value\n   payload.server_facades       (list\u003cstring\u003e) — the --server-facade flag values\n   payload.source               (string) — the --source flag value\n   payload.listen               (int) — the --listen flag value\n   payload.connect              (bool) — the --connect flag value\n   payload.devcontainer_config  (string) — the --devcontainer-config flag value\n   payload.devcontainer_up_args (string) — the --devcontainer-up-args flag value\n\n Examples:\n   \"payload.workload_name == 'api-feature-flags'\"\n   \"payload.workload_name.startsWith('api-') \u0026\u0026 payload.namespace == 'production'\"\n   \"payload.workload_name.contains('flags')\"",
+            "minLength": 1,
+            "title": "CEL expression that must return true for the flags to apply.\n The expression is evaluated with a `payload` variable of type\n CreateCommandPayload. Access fields via `payload.\u003cfield\u003e`:",
+            "type": "string"
+          }
+        },
+        "required": [
+          "match",
+          "command"
+        ],
+        "title": "Create Command Profile",
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "title": "Profile",
+  "type": "object"
+}

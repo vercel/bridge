@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Reactor intercepts HTTP requests matching a hostname and routes them\n to actions based on CEL expressions.",
+  "description": "ServerFacade intercepts HTTP requests matching a hostname and routes them\n to actions based on CEL expressions.",
   "properties": {
     "host": {
-      "description": "Hostname glob pattern this reactor intercepts (e.g. \"flags.vercel.com\",\n \"*.google.com\", \"**.internal\"). Used for routing and TLS cert minting.",
+      "description": "Hostname glob pattern this facade intercepts (e.g. \"flags.vercel.com\",\n \"*.google.com\", \"**.internal\"). Used for routing and TLS cert minting.",
       "minLength": 1,
       "type": "string"
     },
@@ -12,7 +12,7 @@
       "description": "Ordered list of routes. First match wins.",
       "items": {
         "additionalProperties": false,
-        "description": "ReactorRoute pairs a route match with an action to take when matched.",
+        "description": "ServerFacadeRoute pairs a route match with an action to take when matched.",
         "properties": {
           "action": {
             "additionalProperties": false,
@@ -52,14 +52,14 @@
                     "description": "HTTP status code."
                   }
                 },
-                "title": "Reactor Http Response",
+                "title": "Server Facade Http Response",
                 "type": "object"
               }
             },
             "required": [
               "http_response"
             ],
-            "title": "Reactor Action",
+            "title": "Server Facade Action",
             "type": "object"
           },
           "match": {
@@ -67,7 +67,7 @@
             "description": "Determines whether this route matches an incoming request.",
             "properties": {
               "cel": {
-                "description": "CEL expression evaluated against a ReactorHttpRequest.\n Must return a boolean.",
+                "description": "CEL expression evaluated against a ServerFacadeHttpRequest.\n Must return a boolean.",
                 "minLength": 1,
                 "type": "string"
               }
@@ -75,7 +75,7 @@
             "required": [
               "cel"
             ],
-            "title": "Reactor Route Match",
+            "title": "Server Facade Route Match",
             "type": "object"
           }
         },
@@ -83,7 +83,7 @@
           "match",
           "action"
         ],
-        "title": "Reactor Route",
+        "title": "Server Facade Route",
         "type": "object"
       },
       "type": "array"
@@ -92,6 +92,6 @@
   "required": [
     "host"
   ],
-  "title": "Reactor",
+  "title": "Server Facade",
   "type": "object"
 }

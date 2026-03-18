@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "ReactorAction defines what response to produce for a matched route.",
+  "description": "ServerFacadeAction defines what response to produce for a matched route.",
   "properties": {
     "http_response": {
       "additionalProperties": false,
@@ -37,13 +37,13 @@
           "description": "HTTP status code."
         }
       },
-      "title": "Reactor Http Response",
+      "title": "Server Facade Http Response",
       "type": "object"
     }
   },
   "required": [
     "http_response"
   ],
-  "title": "Reactor Action",
+  "title": "Server Facade Action",
   "type": "object"
 }

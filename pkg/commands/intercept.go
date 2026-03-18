@@ -17,13 +17,12 @@ import (
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"github.com/vercel/bridge/pkg/conntrack"
 	bridgedns "github.com/vercel/bridge/pkg/dns"
+	"github.com/vercel/bridge/pkg/grpcutil"
 	"github.com/vercel/bridge/pkg/ippool"
 	"github.com/vercel/bridge/pkg/k8s/k8spf"
 	"github.com/vercel/bridge/pkg/k8s/meta"
 	"github.com/vercel/bridge/pkg/plumbing"
 	"github.com/vercel/bridge/pkg/tunnel"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 func Intercept() *cli.Command {
@@ -93,6 +92,7 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	proxyPort := c.Int("proxy-port")
 	appPort := c.Int("app-port")
 	dnsPort := c.Int("dns-port")
+	logger := slog.With("server_addr", serverAddr)
 
 	// Parse forward-domains, handling comma-separated values from env vars
 	var forwardDomains []string
@@ -130,30 +130,28 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		}
 	}
 	if len(unsetVars) > 0 {
-		slog.Info("Unset environment variables", "vars", unsetVars)
+		logger.Info("Unset environment variables", "vars", unsetVars)
 	}
 
 	if u, err := user.Current(); err == nil {
-		slog.Info("Intercept process starting",
+		logger.Info("Intercept process starting",
 			"version", Version,
 			"user", u.Username,
 			"home", u.HomeDir,
 		)
 	} else {
-		slog.Info("Intercept process starting", "version", Version, "user_lookup_error", err)
+		logger.Info("Intercept process starting", "version", Version, "user_lookup_error", err)
 	}
 
 	if len(forwardDomains) > 0 {
-		slog.Info("Forward domains configured", "domains", forwardDomains)
+		logger.Info("Forward domains configured", "domains", forwardDomains)
 	} else {
-		slog.Info("No forward domains configured, DNS interception disabled")
+		logger.Info("No forward domains configured, DNS interception disabled")
 	}
 
 	// Connect to the bridge proxy server via gRPC
 	builder := k8spf.NewBuilder(k8spf.BuilderConfig{})
-	conn, err := grpc.NewClient(serverAddr,
-		append(builder.DialOptions(), grpc.WithTransportCredentials(insecure.NewCredentials()))...,
-	)
+	conn, err := grpcutil.NewClient(serverAddr, builder.DialOptions()...)
 	if err != nil {
 		return fmt.Errorf("failed to connect to bridge proxy: %w", err)
 	}
@@ -275,7 +273,7 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	}()
 
 	// Start the intercept gRPC server (health check endpoint).
-	interceptSrv, err := newInterceptServer(c.String("addr"), conn)
+	interceptSrv, err := newInterceptServer(c.String("addr"))
 	if err != nil {
 		return err
 	}

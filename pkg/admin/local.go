@@ -21,6 +21,7 @@ import (
 	"github.com/vercel/bridge/pkg/k8s/portforward"
 	"github.com/vercel/bridge/pkg/k8s/resources"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
@@ -115,10 +116,10 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 		resources.StripOrphanedVolumes(),
 		resources.StripUnreferencedLabels(),
 		resources.InjectProxyImage(proxyImage),
-		resources.InjectReactors(req.GetReactors()),
+		resources.InjectServerFacades(req.GetServerFacades()),
 		resources.InjectCA(targetNS),
 		resources.ClearClusterIPs(),
-		resources.SuffixNames(suffix),
+		resources.Rename(func(name string) string { return "bdg-" + name + suffix }),
 		resources.InjectLabels(),
 		resources.TransformSelectors(),
 		resources.RewriteRefs(),
@@ -147,6 +148,12 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 		return nil, fmt.Errorf("no deployment found in bundle")
 	}
 
+	// Determine bridge name: explicit --name flag, or default to source workload name.
+	bridgeName := req.Name
+	if bridgeName == "" {
+		bridgeName = sourceName
+	}
+
 	sourceNS := resources.FindNamespace(bundle)
 	if sourceNS == "" {
 		sourceNS = targetNS
@@ -155,6 +162,7 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 	tc := &resources.TransformContext{
 		Context:         ctx,
 		DeviceID:        req.DeviceId,
+		BridgeName:      bridgeName,
 		SourceName:      sourceName,
 		SourceNamespace: sourceNS,
 	}
@@ -164,13 +172,13 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 	}
 
 	deployName := resources.FindDeploymentName(bundle)
-	logger.Info("Bridge deployment prepared", "deployment", deployName, "source", sourceName)
+	logger.Info("Bridge deployment prepared", "deployment", deployName, "bridge_name", bridgeName, "source", sourceName)
 
 	// Tear down any existing bridge for this source before creating a new one.
 	if req.Force {
-		if existing, err := resources.ListBridgeResources(ctx, l.client, targetNS, deployName, req.DeviceId); err == nil && len(existing.Resources) > 0 {
+		if existing, err := resources.ListBridgeResources(ctx, l.client, targetNS, bridgeName, req.DeviceId); err == nil && len(existing.Resources) > 0 {
 			logger.Info("Tearing down existing bridge")
-			_ = resources.DeleteBridgeResources(ctx, l.client, targetNS, deployName, req.DeviceId)
+			_ = resources.DeleteBridgeResources(ctx, l.client, targetNS, bridgeName, req.DeviceId)
 		}
 	}
 
@@ -217,6 +225,7 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 		EnvVars:          envVars,
 		VolumeMountPaths: volumeMountPaths,
 		AppPorts:         appPorts,
+		Name:             bridgeName,
 	}, nil
 }
 
@@ -248,6 +257,7 @@ func (l *adminService) ListBridges(ctx context.Context, req *bridgev1.ListBridge
 			DeploymentName:   d.Name,
 			CreatedAt:        d.CreationTimestamp.Format(time.RFC3339),
 			Status:           status,
+			Name:             d.Labels[meta.LabelBridgeName],
 		})
 	}
 
@@ -261,19 +271,14 @@ func (l *adminService) DeleteBridge(ctx context.Context, req *bridgev1.DeleteBri
 		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 
-	// Resolve namespace from the bridge deployment if not provided.
+	// Resolve namespace from the bridge if not provided.
 	ns := req.Namespace
 	if ns == "" {
-		deploys, err := l.client.AppsV1().Deployments("").List(ctx, metav1.ListOptions{
-			LabelSelector: meta.DeploymentSelector(req.Name) + "," + meta.DeviceSelector(req.DeviceId),
-		})
+		deploy, err := l.findBridge(ctx, "", req.Name, req.DeviceId)
 		if err != nil {
-			return nil, fmt.Errorf("failed to find bridge: %w", err)
+			return nil, err
 		}
-		if len(deploys.Items) == 0 {
-			return nil, fmt.Errorf("no bridge named %q found", req.Name)
-		}
-		ns = deploys.Items[0].Namespace
+		ns = deploy.Namespace
 	}
 
 	slog.Info("Deleting bridge", "device_id", req.DeviceId, "namespace", ns, "name", req.Name)
@@ -284,6 +289,21 @@ func (l *adminService) DeleteBridge(ctx context.Context, req *bridgev1.DeleteBri
 	}
 
 	return &bridgev1.DeleteBridgeResponse{}, nil
+}
+
+// findBridge locates a bridge deployment by label selector instead of direct Get.
+// If namespace is empty, searches across all namespaces.
+func (l *adminService) findBridge(ctx context.Context, namespace, bridgeName, deviceID string) (*appsv1.Deployment, error) {
+	deploys, err := l.client.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: meta.BridgeNameSelector(bridgeName, deviceID),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to find bridge: %w", err)
+	}
+	if len(deploys.Items) == 0 {
+		return nil, fmt.Errorf("no bridge named %q found", bridgeName)
+	}
+	return &deploys.Items[0], nil
 }
 
 // Close releases resources. No-op for local admin.

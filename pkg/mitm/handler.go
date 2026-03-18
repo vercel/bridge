@@ -16,13 +16,13 @@ import (
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 )
 
-// Handler serves reactor responses over a raw TCP connection for a set of
-// compiled reactors. It handles TLS termination, parses the HTTP request,
+// Handler serves facade responses over a raw TCP connection for a set of
+// compiled facades. It handles TLS termination, parses the HTTP request,
 // evaluates routes, and writes the first matching action's response. If no
 // route matches, it forwards the request to the original destination.
 type Handler struct {
 	CA       *CA
-	Reactors []*CompiledReactor
+	Facades []*CompiledFacade
 	DestAddr string // original destination ip:port for forwarding unmatched requests
 }
 
@@ -60,26 +60,26 @@ func (h *Handler) Serve(conn net.Conn, hostname string) error {
 	}
 }
 
-// handleRequest evaluates reactor routes for a single request. If a route
+// handleRequest evaluates facade routes for a single request. If a route
 // matches, it writes the action response. Otherwise it forwards to the
 // original destination.
 func (h *Handler) handleRequest(conn net.Conn, req *http.Request, hostname string, isTLS bool) error {
 	defer req.Body.Close()
-	for _, reactor := range h.Reactors {
-		for _, route := range reactor.Routes {
+	for _, facade := range h.Facades {
+		for _, route := range facade.Routes {
 			matched, err := route.Match(req)
 			if err != nil {
 				slog.Warn("CEL evaluation error", "host", hostname, "cel", route.CEL, "error", err)
 				continue
 			}
 			if matched {
-				slog.Debug("Reactor route matched", "host", hostname, "path", req.URL.Path, "cel", route.CEL)
+				slog.Debug("ServerFacade route matched", "host", hostname, "path", req.URL.Path, "cel", route.CEL)
 				return writeAction(conn, route.Action)
 			}
 		}
 	}
 
-	slog.Debug("No reactor route matched, forwarding", "host", hostname, "method", req.Method, "path", req.URL.Path, "dest", h.DestAddr)
+	slog.Debug("No facade route matched, forwarding", "host", hostname, "method", req.Method, "path", req.URL.Path, "dest", h.DestAddr)
 	return h.forward(conn, req, hostname, isTLS)
 }
 
@@ -153,8 +153,8 @@ func (h *Handler) terminateTLS(conn net.Conn, hostname string) (isTLS bool, plai
 	return false, plainConn, nil
 }
 
-// writeAction serializes a ReactorAction as an HTTP response.
-func writeAction(conn net.Conn, action *bridgev1.ReactorAction) error {
+// writeAction serializes a ServerFacadeAction as an HTTP response.
+func writeAction(conn net.Conn, action *bridgev1.ServerFacadeAction) error {
 	httpResp := action.GetHttpResponse()
 	if httpResp == nil {
 		return fmt.Errorf("action has no http_response")

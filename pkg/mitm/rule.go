@@ -11,11 +11,11 @@ import (
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 )
 
-// CompiledRoute is a ReactorRoute with a pre-compiled CEL program ready for evaluation.
+// CompiledRoute is a ServerFacadeRoute with a pre-compiled CEL program ready for evaluation.
 type CompiledRoute struct {
 	CEL     string
 	Program cel.Program
-	Action  *bridgev1.ReactorAction
+	Action  *bridgev1.ServerFacadeAction
 }
 
 // Match evaluates the CEL expression against the given HTTP request.
@@ -54,13 +54,13 @@ func (r *CompiledRoute) Match(req *http.Request) (bool, error) {
 	}
 
 	out, _, err := r.Program.Eval(map[string]any{
-		"request": map[string]any{
-			"method":  req.Method,
-			"host":    host,
-			"path":    path,
-			"headers": headers,
-			"query":   query,
-			"body":    body,
+		"request": &bridgev1.ServerFacadeHttpRequest{
+			Method:  req.Method,
+			Host:    host,
+			Path:    path,
+			Headers: headers,
+			Query:   query,
+			Body:    body,
 		},
 	})
 	if err != nil {
@@ -72,29 +72,29 @@ func (r *CompiledRoute) Match(req *http.Request) (bool, error) {
 	return out.Value().(bool), nil
 }
 
-// CompiledReactor is a Reactor with pre-compiled routes and the host glob pattern.
-type CompiledReactor struct {
+// CompiledFacade is a ServerFacade with pre-compiled routes and the host glob pattern.
+type CompiledFacade struct {
 	Host   string
 	Routes []*CompiledRoute
 }
 
-// CompileReactor compiles a Reactor's CEL expressions into a CompiledReactor.
-func CompileReactor(reactor *bridgev1.Reactor) (*CompiledReactor, error) {
-	cr := &CompiledReactor{
-		Host: reactor.GetHost(),
+// CompileFacade compiles a ServerFacade's CEL expressions into a CompiledFacade.
+func CompileFacade(facade *bridgev1.ServerFacade) (*CompiledFacade, error) {
+	cf := &CompiledFacade{
+		Host: facade.GetHost(),
 	}
 
-	for i, route := range reactor.GetRoutes() {
+	for i, route := range facade.GetRoutes() {
 		compiled, err := compileRoute(route)
 		if err != nil {
 			return nil, fmt.Errorf("route %d: %w", i, err)
 		}
-		cr.Routes = append(cr.Routes, compiled)
+		cf.Routes = append(cf.Routes, compiled)
 	}
-	return cr, nil
+	return cf, nil
 }
 
-func compileRoute(route *bridgev1.ReactorRoute) (*CompiledRoute, error) {
+func compileRoute(route *bridgev1.ServerFacadeRoute) (*CompiledRoute, error) {
 	env, err := newCELEnv()
 	if err != nil {
 		return nil, fmt.Errorf("create CEL env: %w", err)
@@ -118,9 +118,10 @@ func compileRoute(route *bridgev1.ReactorRoute) (*CompiledRoute, error) {
 	}, nil
 }
 
-// newCELEnv creates a CEL environment with a `request` variable matching ReactorHttpRequest.
+// newCELEnv creates a CEL environment with a `request` variable of type ServerFacadeHttpRequest.
 func newCELEnv() (*cel.Env, error) {
 	return cel.NewEnv(
-		cel.Variable("request", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Types(&bridgev1.ServerFacadeHttpRequest{}),
+		cel.Variable("request", cel.ObjectType("bridge.v1.ServerFacadeHttpRequest")),
 	)
 }

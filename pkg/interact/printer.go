@@ -9,17 +9,23 @@ import (
 // Printer provides styled terminal output.
 type Printer interface {
 	Success(msg string)
+	Successf(format string, a ...any)
 	Warn(msg string)
+	Warnf(format string, a ...any)
 	Info(msg string)
+	Infof(format string, a ...any)
 	Errorf(format string, a ...any)
 	Header(msg string)
+	Headerf(format string, a ...any)
 	KeyValue(key, value string)
 	Muted(msg string)
+	Mutedf(format string, a ...any)
 	Newline()
 	// Prompt prints a message without a trailing newline, for user input.
 	Prompt(msg string)
 	// Println writes an unstyled message with a trailing newline.
 	Println(msg string)
+	Printlnf(format string, a ...any)
 }
 
 // prettyPrinter provides styled terminal output with colors and icons.
@@ -37,12 +43,24 @@ func (p *prettyPrinter) Success(msg string) {
 	fmt.Fprintf(p.w, "%s %s\n", p.theme.Success.Render("✓"), p.theme.Bold.Render(msg))
 }
 
+func (p *prettyPrinter) Successf(format string, a ...any) {
+	p.Success(fmt.Sprintf(format, a...))
+}
+
 func (p *prettyPrinter) Warn(msg string) {
 	fmt.Fprintf(p.w, "%s %s\n", p.theme.Warning.Render("!"), p.theme.Warning.Render(msg))
 }
 
+func (p *prettyPrinter) Warnf(format string, a ...any) {
+	p.Warn(fmt.Sprintf(format, a...))
+}
+
 func (p *prettyPrinter) Info(msg string) {
 	fmt.Fprintf(p.w, "%s %s\n", p.theme.Info.Render("→"), msg)
+}
+
+func (p *prettyPrinter) Infof(format string, a ...any) {
+	p.Info(fmt.Sprintf(format, a...))
 }
 
 // Errorf prints a red error message with formatting. If the message contains
@@ -61,12 +79,20 @@ func (p *prettyPrinter) Header(msg string) {
 	fmt.Fprintf(p.w, "%s\n", p.theme.Header.Render(msg))
 }
 
+func (p *prettyPrinter) Headerf(format string, a ...any) {
+	p.Header(fmt.Sprintf(format, a...))
+}
+
 func (p *prettyPrinter) KeyValue(key, value string) {
 	fmt.Fprintf(p.w, "  %s %s\n", p.theme.Key.Render(key+":"), p.theme.Value.Render(value))
 }
 
 func (p *prettyPrinter) Muted(msg string) {
 	fmt.Fprintf(p.w, "%s\n", p.theme.Muted.Render(msg))
+}
+
+func (p *prettyPrinter) Mutedf(format string, a ...any) {
+	p.Muted(fmt.Sprintf(format, a...))
 }
 
 func (p *prettyPrinter) Newline() {
@@ -79,6 +105,10 @@ func (p *prettyPrinter) Prompt(msg string) {
 
 func (p *prettyPrinter) Println(msg string) {
 	fmt.Fprintln(p.w, msg)
+}
+
+func (p *prettyPrinter) Printlnf(format string, a ...any) {
+	p.Println(fmt.Sprintf(format, a...))
 }
 
 // plainPrinter provides unstyled output intended for automated agents.
@@ -95,12 +125,24 @@ func (p *plainPrinter) Success(msg string) {
 	fmt.Fprintln(p.w, msg)
 }
 
+func (p *plainPrinter) Successf(format string, a ...any) {
+	p.Success(fmt.Sprintf(format, a...))
+}
+
 func (p *plainPrinter) Warn(msg string) {
 	fmt.Fprintf(p.w, "warning: %s\n", msg)
 }
 
+func (p *plainPrinter) Warnf(format string, a ...any) {
+	p.Warn(fmt.Sprintf(format, a...))
+}
+
 func (p *plainPrinter) Info(msg string) {
 	fmt.Fprintln(p.w, msg)
+}
+
+func (p *plainPrinter) Infof(format string, a ...any) {
+	p.Info(fmt.Sprintf(format, a...))
 }
 
 func (p *plainPrinter) Errorf(format string, a ...any) {
@@ -112,12 +154,20 @@ func (p *plainPrinter) Header(msg string) {
 	fmt.Fprintln(p.w, msg)
 }
 
+func (p *plainPrinter) Headerf(format string, a ...any) {
+	p.Header(fmt.Sprintf(format, a...))
+}
+
 func (p *plainPrinter) KeyValue(key, value string) {
 	fmt.Fprintf(p.w, "%s: %s\n", key, value)
 }
 
 func (p *plainPrinter) Muted(msg string) {
 	fmt.Fprintln(p.w, msg)
+}
+
+func (p *plainPrinter) Mutedf(format string, a ...any) {
+	p.Muted(fmt.Sprintf(format, a...))
 }
 
 func (p *plainPrinter) Newline() {
@@ -130,4 +180,8 @@ func (p *plainPrinter) Prompt(msg string) {
 
 func (p *plainPrinter) Println(msg string) {
 	fmt.Fprintln(p.w, msg)
+}
+
+func (p *plainPrinter) Printlnf(format string, a ...any) {
+	p.Println(fmt.Sprintf(format, a...))
 }

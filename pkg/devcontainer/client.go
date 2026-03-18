@@ -8,15 +8,25 @@ import (
 	"os/exec"
 )
 
-// Client wraps the devcontainer CLI.
-type Client struct {
+// Client is the interface for interacting with the devcontainer CLI.
+type Client interface {
+	// Up starts `devcontainer up` in the background and returns a BuildHandle.
+	Up(ctx context.Context, opts UpOpts) (BuildHandle, error)
+	// Exec runs `devcontainer exec` with stdin/stdout/stderr attached.
+	Exec(ctx context.Context, cmdArgs []string) error
+	// ExecOutput runs `devcontainer exec` and returns combined stdout+stderr.
+	ExecOutput(ctx context.Context, cmdArgs []string) (string, error)
+}
+
+// CLIClient wraps the devcontainer CLI.
+type CLIClient struct {
 	WorkspaceFolder string
 	ConfigPath      string // optional override
 
 	// UpArgs are additional arguments passed to `devcontainer up`.
 	UpArgs []string
 
-	// Stdin, Stdout, Stderr override the default os streams for ExecAttached.
+	// Stdin, Stdout, Stderr override the default os streams for Exec.
 	// When nil, the corresponding os.Stdin/os.Stdout/os.Stderr is used.
 	Stdin  io.Reader
 	Stdout io.Writer
@@ -49,7 +59,7 @@ type BuildHandle interface {
 // Up starts `devcontainer up` in the background and returns a BuildHandle.
 // The caller should read from Output() until EOF, then call Wait() to
 // collect the exit status.
-func (c *Client) Up(ctx context.Context, opts UpOpts) (BuildHandle, error) {
+func (c *CLIClient) Up(ctx context.Context, opts UpOpts) (BuildHandle, error) {
 	args := []string{"up", "--workspace-folder", c.WorkspaceFolder, "--remove-existing-container"}
 	if c.ConfigPath != "" {
 		args = append(args, "--config", c.ConfigPath)
@@ -98,23 +108,8 @@ func (h *buildHandle) Wait() error {
 	return h.waitErr
 }
 
-// Exec runs `devcontainer exec` with the given command.
-func (c *Client) Exec(ctx context.Context, cmdArgs []string) error {
-	args := []string{"exec", "--workspace-folder", c.WorkspaceFolder}
-	if c.ConfigPath != "" {
-		args = append(args, "--config", c.ConfigPath)
-	}
-	args = append(args, cmdArgs...)
-	cmd := exec.CommandContext(ctx, "devcontainer", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("devcontainer exec: %w\n%s", err, out)
-	}
-	return nil
-}
-
-// ExecAttached runs `devcontainer exec` with stdin/stdout/stderr attached
-// for an interactive session.
-func (c *Client) ExecAttached(ctx context.Context, cmdArgs []string) error {
+// Exec runs `devcontainer exec` with stdin/stdout/stderr attached.
+func (c *CLIClient) Exec(ctx context.Context, cmdArgs []string) error {
 	args := []string{"exec", "--workspace-folder", c.WorkspaceFolder}
 	if c.ConfigPath != "" {
 		args = append(args, "--config", c.ConfigPath)
@@ -128,7 +123,7 @@ func (c *Client) ExecAttached(ctx context.Context, cmdArgs []string) error {
 }
 
 // ExecOutput runs `devcontainer exec` and returns combined stdout+stderr.
-func (c *Client) ExecOutput(ctx context.Context, cmdArgs []string) (string, error) {
+func (c *CLIClient) ExecOutput(ctx context.Context, cmdArgs []string) (string, error) {
 	args := []string{"exec", "--workspace-folder", c.WorkspaceFolder}
 	if c.ConfigPath != "" {
 		args = append(args, "--config", c.ConfigPath)
@@ -139,21 +134,21 @@ func (c *Client) ExecOutput(ctx context.Context, cmdArgs []string) (string, erro
 	return string(out), err
 }
 
-func (c *Client) stdinOrDefault() io.Reader {
+func (c *CLIClient) stdinOrDefault() io.Reader {
 	if c.Stdin != nil {
 		return c.Stdin
 	}
 	return os.Stdin
 }
 
-func (c *Client) stdoutOrDefault() io.Writer {
+func (c *CLIClient) stdoutOrDefault() io.Writer {
 	if c.Stdout != nil {
 		return c.Stdout
 	}
 	return os.Stdout
 }
 
-func (c *Client) stderrOrDefault() io.Writer {
+func (c *CLIClient) stderrOrDefault() io.Writer {
 	if c.Stderr != nil {
 		return c.Stderr
 	}

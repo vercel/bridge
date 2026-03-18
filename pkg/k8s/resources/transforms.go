@@ -189,9 +189,10 @@ func ClearClusterIPs() Transformer {
 	})
 }
 
-// SuffixNames returns a Transformer that appends suffix to the name of every
-// resource and populates tc.NameMap with the old→new mappings.
-func SuffixNames(suffix string) Transformer {
+// Rename returns a Transformer that renames every resource using the provided
+// function. It populates tc.NameMap with original-name → new-name mappings so
+// that later transformers (RewriteRefs, InjectLabels, etc.) can resolve names.
+func Rename(fn func(string) string) Transformer {
 	return TransformFunc(func(tc *TransformContext, b *Bundle) error {
 		if tc.NameMap == nil {
 			tc.NameMap = make(NameMap)
@@ -199,7 +200,7 @@ func SuffixNames(suffix string) Transformer {
 		for _, r := range b.Resources {
 			obj := r.Object.(metav1.Object)
 			oldName := obj.GetName()
-			newName := oldName + suffix
+			newName := fn(oldName)
 			obj.SetName(newName)
 			tc.NameMap[ResourceKey{GroupKind: r.GVK.GroupKind(), Name: oldName}] = newName
 		}
@@ -210,13 +211,13 @@ func SuffixNames(suffix string) Transformer {
 // InjectLabels returns a Transformer that merges bridge labels into every
 // resource, including source workload labels from tc.SourceName and
 // tc.SourceNamespace.
-// Runs after SuffixNames — resolves the deploy name via Lookup.
+// Runs after Rename — resolves the deploy name via Lookup.
 func InjectLabels() Transformer {
 	return TransformFunc(func(tc *TransformContext, b *Bundle) error {
-		deployName := Lookup(NewResourceKey(tc.SourceName, "apps", "Deployment"), b, tc.NameMap)
+		deployName := Lookup(NewResourceKey(tc.SourceName, DefaultWorkloadGroup, DefaultWorkloadKind), b, tc.NameMap)
 		for _, r := range b.Resources {
 			obj := r.Object.(metav1.Object)
-			InjectBridgeLabels(obj, tc.DeviceID, deployName)
+			InjectBridgeLabels(obj, tc.DeviceID, deployName, tc.BridgeName)
 			labels := obj.GetLabels()
 			labels[meta.LabelWorkloadSource] = tc.SourceName
 			labels[meta.LabelWorkloadSourceNamespace] = tc.SourceNamespace
@@ -228,10 +229,10 @@ func InjectLabels() Transformer {
 
 // TransformSelectors returns a Transformer that sets the deployment's pod
 // template labels and label selector to match the deployment's bridge labels.
-// Runs after SuffixNames — resolves the deploy name via Lookup.
+// Runs after Rename — resolves the deploy name via Lookup.
 func TransformSelectors() Transformer {
 	return TransformFunc(func(tc *TransformContext, b *Bundle) error {
-		deployName := Lookup(NewResourceKey(tc.SourceName, "apps", "Deployment"), b, tc.NameMap)
+		deployName := Lookup(NewResourceKey(tc.SourceName, DefaultWorkloadGroup, DefaultWorkloadKind), b, tc.NameMap)
 		deploy, err := findApplicationDeployment(b, deployName)
 		if err != nil {
 			return &DeploymentNotFoundError{Name: tc.SourceName, Namespace: tc.SourceNamespace}
@@ -253,6 +254,10 @@ func TransformSelectors() Transformer {
 		for k, v := range selectorLabels {
 			existing[k] = v
 		}
+		// Add bridge-name to pod template for querying (not part of selector).
+		if tc.BridgeName != "" {
+			existing[meta.LabelBridgeName] = tc.BridgeName
+		}
 		deploy.Spec.Template.ObjectMeta.Labels = existing
 		return nil
 	})
@@ -260,10 +265,10 @@ func TransformSelectors() Transformer {
 
 // RewriteRefs returns a Transformer that rewrites ConfigMap, Secret, and
 // ServiceAccount references in the deployment's pod spec using tc.NameMap.
-// Runs after SuffixNames — resolves the deploy name via Lookup.
+// Runs after Rename — resolves the deploy name via Lookup.
 func RewriteRefs() Transformer {
 	return TransformFunc(func(tc *TransformContext, b *Bundle) error {
-		deployName := Lookup(NewResourceKey(tc.SourceName, "apps", "Deployment"), b, tc.NameMap)
+		deployName := Lookup(NewResourceKey(tc.SourceName, DefaultWorkloadGroup, DefaultWorkloadKind), b, tc.NameMap)
 		deploy, err := findApplicationDeployment(b, deployName)
 		if err != nil {
 			return &DeploymentNotFoundError{Name: tc.SourceName, Namespace: tc.SourceNamespace}
@@ -282,17 +287,17 @@ func RewriteRefs() Transformer {
 // appends it to the bundle. It reads the target port from the deployment's
 // container ports. If tc.DeviceID is non-empty, bridge labels are injected on
 // the service.
-// Runs after SuffixNames — resolves the deploy name via Lookup.
+// Runs after Rename — resolves the deploy name via Lookup.
 func AppendBridgeService(ns string) Transformer {
 	return TransformFunc(func(tc *TransformContext, b *Bundle) error {
-		deployName := Lookup(NewResourceKey(tc.SourceName, "apps", "Deployment"), b, tc.NameMap)
+		deployName := Lookup(NewResourceKey(tc.SourceName, DefaultWorkloadGroup, DefaultWorkloadKind), b, tc.NameMap)
 		deploy, err := findApplicationDeployment(b, deployName)
 		if err != nil {
 			return &DeploymentNotFoundError{Name: tc.SourceName, Namespace: tc.SourceNamespace}
 		}
 		svc := NewBridgeService(ns, deployName, serviceTargetPort(deploy))
 		if tc.DeviceID != "" {
-			InjectBridgeLabels(svc, tc.DeviceID, deployName)
+			InjectBridgeLabels(svc, tc.DeviceID, deployName, tc.BridgeName)
 		}
 		b.Resources = append(b.Resources, Resource{
 			Object: svc,

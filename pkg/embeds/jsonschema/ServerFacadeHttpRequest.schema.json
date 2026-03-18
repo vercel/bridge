@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "ReactorHttpRequest is the request shape available in CEL expressions as `request`.",
+  "description": "ServerFacadeHttpRequest is the request shape available in CEL expressions as `request`.",
   "properties": {
     "body": {
       "default": "",
@@ -38,6 +38,6 @@
       "type": "object"
     }
   },
-  "title": "Reactor Http Request",
+  "title": "Server Facade Http Request",
   "type": "object"
 }

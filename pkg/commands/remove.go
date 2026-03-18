@@ -53,8 +53,6 @@ func runRemove(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("failed to get device identity: %w", err)
 	}
 
-	suffix := "-" + identity.ShortDeviceID(deviceID)
-
 	sp := interact.NewSpinner(w, "Connecting to bridge administrator...")
 	ctx = interact.WithSpinner(ctx, sp)
 	sp.Start(ctx)
@@ -69,15 +67,12 @@ func runRemove(ctx context.Context, c *cli.Command) error {
 	var errs []error
 	ct := container.NewDockerClient()
 	for _, name := range names {
-		if !strings.HasSuffix(name, suffix) {
-			name = identity.BridgeResourceName(deviceID, name)
-		}
-
 		sp.SetTitle(fmt.Sprintf("Removing bridge %q...", name))
 
 		_, err = adm.DeleteBridge(ctx, &bridgev1.DeleteBridgeRequest{
-			DeviceId: deviceID,
-			Name:     name,
+			DeviceId:   deviceID,
+			Name:       name,
+			DeviceInfo: deviceInfo(),
 		})
 		if err != nil {
 			errs = append(errs, fmt.Errorf("failed to remove bridge %q: %w", name, err))

@@ -15,9 +15,9 @@ import (
 )
 
 // BridgeMetricsInterceptor returns a gRPC unary server interceptor that records
-// per-call metrics tagged with bridge.device_id and bridge.workload_name
-// extracted from the request message. It also enriches the active span
-// (created by otelgrpc) with the same attributes.
+// per-call metrics tagged with bridge-specific attributes extracted from the
+// request message. It also enriches the active span (created by otelgrpc)
+// with the same attributes.
 func BridgeMetricsInterceptor() grpc.UnaryServerInterceptor {
 	meter := otel.Meter("bridge.administrator")
 	callCounter, _ := meter.Int64Counter("bridge.rpc.calls",
@@ -29,7 +29,7 @@ func BridgeMetricsInterceptor() grpc.UnaryServerInterceptor {
 	)
 
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		deviceID, workload := extractIdentifiers(req)
+		deviceID, workload, deviceInfo := extractRequestAttrs(req)
 
 		attrs := []attribute.KeyValue{
 			attribute.String("rpc.method", info.FullMethod),
@@ -39,6 +39,17 @@ func BridgeMetricsInterceptor() grpc.UnaryServerInterceptor {
 		}
 		if workload != "" {
 			attrs = append(attrs, attribute.String("bridge.workload_name", workload))
+		}
+		if deviceInfo != nil {
+			if deviceInfo.Os != "" {
+				attrs = append(attrs, attribute.String("bridge.device_os", deviceInfo.Os))
+			}
+			if deviceInfo.Arch != "" {
+				attrs = append(attrs, attribute.String("bridge.device_arch", deviceInfo.Arch))
+			}
+			if deviceInfo.BridgeVersion != "" {
+				attrs = append(attrs, attribute.String("bridge.version", deviceInfo.BridgeVersion))
+			}
 		}
 
 		// Enrich the span created by otelgrpc with bridge-specific attributes.
@@ -59,16 +70,16 @@ func BridgeMetricsInterceptor() grpc.UnaryServerInterceptor {
 	}
 }
 
-// extractIdentifiers pulls device_id and workload name from known request types.
-func extractIdentifiers(req any) (deviceID, workload string) {
+// extractRequestAttrs pulls device_id, workload name, and device info from known request types.
+func extractRequestAttrs(req any) (deviceID, workload string, info *bridgev1.DeviceInfo) {
 	switch r := req.(type) {
 	case *bridgev1.CreateBridgeRequest:
-		return r.GetDeviceId(), r.GetSourceDeployment()
+		return r.GetDeviceId(), r.GetSourceDeployment(), r.GetDeviceInfo()
 	case *bridgev1.ListBridgesRequest:
-		return r.GetDeviceId(), ""
+		return r.GetDeviceId(), "", r.GetDeviceInfo()
 	case *bridgev1.DeleteBridgeRequest:
-		return r.GetDeviceId(), r.GetName()
+		return r.GetDeviceId(), r.GetName(), r.GetDeviceInfo()
 	default:
-		return "", ""
+		return "", "", nil
 	}
 }

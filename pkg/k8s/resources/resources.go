@@ -24,6 +24,11 @@ import (
 const (
 	// defaultProxyPort is used when no source deployment exists to infer a port from.
 	defaultProxyPort int32 = 3000
+
+	// DefaultWorkloadGroup is the API group for the default workload kind.
+	DefaultWorkloadGroup = "apps"
+	// DefaultWorkloadKind is the default Kubernetes workload kind bridge operates on.
+	DefaultWorkloadKind = "Deployment"
 )
 
 // DeploymentNotFoundError is returned when the source deployment does not exist.
@@ -195,8 +200,22 @@ func injectProxyImage(deploy *appsv1.Deployment, proxyImage string) {
 		c.Ports = append(c.Ports, corev1.ContainerPort{ContainerPort: p, Protocol: corev1.ProtocolTCP})
 	}
 	c.LivenessProbe = nil
-	c.ReadinessProbe = nil
+	c.ReadinessProbe = grpcReadinessProbe(grpcPort)
 	c.StartupProbe = nil
+}
+
+// grpcReadinessProbe returns a Kubernetes readiness probe that checks the
+// bridge server's gRPC health service on the given port.
+func grpcReadinessProbe(port int32) *corev1.Probe {
+	return &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			GRPC: &corev1.GRPCAction{
+				Port: port,
+			},
+		},
+		InitialDelaySeconds: 5,
+		PeriodSeconds:       5,
+	}
 }
 
 // chooseGRPCPort picks a port for the gRPC server starting from 8080,
@@ -379,9 +398,9 @@ func createBridgedDeployment(ctx context.Context, client kubernetes.Interface, s
 		for _, p := range listenPorts {
 			c.Ports = append(c.Ports, corev1.ContainerPort{ContainerPort: p, Protocol: corev1.ProtocolTCP})
 		}
-		// Clear probes — the bridge proxy doesn't implement the app's health checks.
+		// Clear app probes and add a gRPC readiness probe for the bridge server.
 		c.LivenessProbe = nil
-		c.ReadinessProbe = nil
+		c.ReadinessProbe = grpcReadinessProbe(grpcPort)
 		c.StartupProbe = nil
 	}
 
@@ -566,9 +585,9 @@ func copyServiceAccount(ctx context.Context, client kubernetes.Interface, srcNS,
 }
 
 // ListBridgeResources returns a Bundle of all bridge resources in the given
-// namespace matching the deployment name and device ID labels.
-func ListBridgeResources(ctx context.Context, client kubernetes.Interface, namespace, deployName, deviceID string) (*Bundle, error) {
-	sel := meta.LabelBridgeDeployment + "=" + deployName + "," + meta.LabelDeviceID + "=" + deviceID
+// namespace matching the bridge name and device ID labels.
+func ListBridgeResources(ctx context.Context, client kubernetes.Interface, namespace, bridgeName, deviceID string) (*Bundle, error) {
+	sel := meta.BridgeNameSelector(bridgeName, deviceID)
 	listOpts := metav1.ListOptions{LabelSelector: sel}
 
 	var resources []Resource
@@ -617,16 +636,16 @@ func ListBridgeResources(ctx context.Context, client kubernetes.Interface, names
 	return &Bundle{Resources: resources}, nil
 }
 
-// DeleteBridgeResources deletes all resources associated with a bridge deployment
-// in the given namespace, identified by the bridge deployment and device ID labels.
-func DeleteBridgeResources(ctx context.Context, client kubernetes.Interface, namespace, deployName, deviceID string) error {
-	sel := meta.LabelBridgeDeployment + "=" + deployName + "," + meta.LabelDeviceID + "=" + deviceID
+// DeleteBridgeResources deletes all resources associated with a bridge
+// in the given namespace, identified by the bridge name and device ID labels.
+func DeleteBridgeResources(ctx context.Context, client kubernetes.Interface, namespace, bridgeName, deviceID string) error {
+	sel := meta.BridgeNameSelector(bridgeName, deviceID)
 	listOpts := metav1.ListOptions{LabelSelector: sel}
 	delOpts := metav1.DeleteOptions{}
 
 	// Delete deployment
 	if err := client.AppsV1().Deployments(namespace).DeleteCollection(ctx, delOpts, listOpts); err != nil && !errors.IsNotFound(err) {
-		slog.Warn("Failed to delete deployments", "bridge", deployName, "error", err)
+		slog.Warn("Failed to delete deployments", "bridge", bridgeName, "error", err)
 	}
 	// Delete services
 	if svcs, err := client.CoreV1().Services(namespace).List(ctx, listOpts); err == nil {
@@ -638,15 +657,15 @@ func DeleteBridgeResources(ctx context.Context, client kubernetes.Interface, nam
 	}
 	// Delete secrets
 	if err := client.CoreV1().Secrets(namespace).DeleteCollection(ctx, delOpts, listOpts); err != nil && !errors.IsNotFound(err) {
-		slog.Warn("Failed to delete secrets", "bridge", deployName, "error", err)
+		slog.Warn("Failed to delete secrets", "bridge", bridgeName, "error", err)
 	}
 	// Delete configmaps
 	if err := client.CoreV1().ConfigMaps(namespace).DeleteCollection(ctx, delOpts, listOpts); err != nil && !errors.IsNotFound(err) {
-		slog.Warn("Failed to delete configmaps", "bridge", deployName, "error", err)
+		slog.Warn("Failed to delete configmaps", "bridge", bridgeName, "error", err)
 	}
 	// Delete service accounts
 	if err := client.CoreV1().ServiceAccounts(namespace).DeleteCollection(ctx, delOpts, listOpts); err != nil && !errors.IsNotFound(err) {
-		slog.Warn("Failed to delete service accounts", "bridge", deployName, "error", err)
+		slog.Warn("Failed to delete service accounts", "bridge", bridgeName, "error", err)
 	}
 
 	return nil

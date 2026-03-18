@@ -5,10 +5,10 @@ import (
 	"fmt"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
+	"github.com/vercel/bridge/pkg/grpcutil"
 	"github.com/vercel/bridge/pkg/k8s/k8spf"
 )
 
@@ -23,9 +23,8 @@ type Client struct {
 // server at the given address (e.g. "k8spf:///administrator.bridge:9090").
 func NewClient(addr string) (*Client, error) {
 	builder := k8spf.NewBuilder(k8spf.BuilderConfig{})
-	conn, err := grpc.NewClient(addr,
+	conn, err := grpcutil.NewClient(addr,
 		append(builder.DialOptions(),
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
 			grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(16<<20)),
 		)...,
 	)

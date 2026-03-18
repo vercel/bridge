@@ -48,7 +48,7 @@ func PruneMetadata(obj metav1.Object) {
 
 // InjectBridgeLabels merges the standard bridge labels into the object's
 // existing labels, initialising the map if necessary.
-func InjectBridgeLabels(obj metav1.Object, deviceID, deploymentName string) {
+func InjectBridgeLabels(obj metav1.Object, deviceID, deploymentName, bridgeName string) {
 	labels := obj.GetLabels()
 	if labels == nil {
 		labels = make(map[string]string)
@@ -56,5 +56,8 @@ func InjectBridgeLabels(obj metav1.Object, deviceID, deploymentName string) {
 	labels[meta.LabelBridgeType] = meta.BridgeTypeProxy
 	labels[meta.LabelBridgeDeployment] = deploymentName
 	labels[meta.LabelDeviceID] = deviceID
+	if bridgeName != "" {
+		labels[meta.LabelBridgeName] = bridgeName
+	}
 	obj.SetLabels(labels)
 }

@@ -61,7 +61,7 @@ func runGet(ctx context.Context, c *cli.Command) error {
 	}
 	defer adm.Close()
 
-	listResp, err := adm.ListBridges(ctx, &bridgev1.ListBridgesRequest{DeviceId: deviceID})
+	listResp, err := adm.ListBridges(ctx, &bridgev1.ListBridgesRequest{DeviceId: deviceID, DeviceInfo: deviceInfo()})
 	if err != nil {
 		return fmt.Errorf("failed to list bridges: %w", err)
 	}
@@ -81,16 +81,17 @@ func listBridges(p interact.Printer, bridges []*bridgev1.BridgeInfo) error {
 	p.Println(fmt.Sprintf("%-30s %-10s %s", "NAME", "STATUS", "AGE"))
 	for _, b := range bridges {
 		age := humanAge(b.CreatedAt)
-		p.Println(fmt.Sprintf("%-30s %-10s %s", b.DeploymentName, b.Status, age))
+		p.Println(fmt.Sprintf("%-30s %-10s %s", b.Name, b.Status, age))
 	}
 	return nil
 }
 
 func showBridge(p interact.Printer, bridges []*bridgev1.BridgeInfo, name string) error {
 	for _, b := range bridges {
-		if b.DeploymentName == name {
+		if b.Name == name {
 			p.Newline()
-			p.KeyValue("Name", b.DeploymentName)
+			p.KeyValue("Name", b.Name)
+			p.KeyValue("Deployment", b.DeploymentName)
 			p.KeyValue("Status", b.Status)
 			p.KeyValue("Age", humanAge(b.CreatedAt))
 			p.KeyValue("Namespace", b.Namespace)

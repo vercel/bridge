@@ -16,6 +16,9 @@ const (
 	// LabelWorkloadSourceNamespace stores the namespace of the source deployment.
 	LabelWorkloadSourceNamespace = "vercel.sh/bridge-workload-source-ns"
 
+	// LabelBridgeName is the user-facing bridge name used to find bridges via label selector.
+	LabelBridgeName = "vercel.sh/bridge-name"
+
 	// LabelBridgeDeployment identifies the specific bridge deployment a pod belongs to.
 	LabelBridgeDeployment = "vercel.sh/bridge-deployment"
 
@@ -41,6 +44,16 @@ const (
 // DeploymentSelector returns a label selector that matches pods for a specific bridge deployment.
 func DeploymentSelector(deployName string) string {
 	return LabelBridgeDeployment + "=" + deployName
+}
+
+// BridgeNameSelector returns a label selector that finds bridge resources by
+// the user-facing bridge name and device ID.
+func BridgeNameSelector(bridgeName, deviceID string) string {
+	sel := LabelBridgeName + "=" + bridgeName
+	if deviceID != "" {
+		sel += "," + LabelDeviceID + "=" + deviceID
+	}
+	return sel
 }
 
 // DeviceSelector returns a label selector matching all bridge proxy resources

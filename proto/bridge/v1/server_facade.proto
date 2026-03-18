@@ -5,10 +5,10 @@ package bridge.v1;
 import "buf/validate/validate.proto";
 import "google/protobuf/struct.proto";
 
-// Reactor intercepts HTTP requests matching a hostname and routes them
+// ServerFacade intercepts HTTP requests matching a hostname and routes them
 // to actions based on CEL expressions.
-message Reactor {
-  // Hostname glob pattern this reactor intercepts (e.g. "flags.vercel.com",
+message ServerFacade {
+  // Hostname glob pattern this facade intercepts (e.g. "flags.vercel.com",
   // "*.google.com", "**.internal"). Used for routing and TLS cert minting.
   string host = 1 [
     (buf.validate.field).string.min_len = 1,
@@ -16,21 +16,21 @@ message Reactor {
   ];
 
   // Ordered list of routes. First match wins.
-  repeated ReactorRoute routes = 2 [(buf.validate.field).repeated.min_items = 1];
+  repeated ServerFacadeRoute routes = 2 [(buf.validate.field).repeated.min_items = 1];
 }
 
-// ReactorRoute pairs a route match with an action to take when matched.
-message ReactorRoute {
+// ServerFacadeRoute pairs a route match with an action to take when matched.
+message ServerFacadeRoute {
   // Determines whether this route matches an incoming request.
-  ReactorRouteMatch match = 1 [(buf.validate.field).required = true];
+  ServerFacadeRouteMatch match = 1 [(buf.validate.field).required = true];
 
   // What to do when matched.
-  ReactorAction action = 2 [(buf.validate.field).required = true];
+  ServerFacadeAction action = 2 [(buf.validate.field).required = true];
 }
 
-// ReactorRouteMatch evaluates incoming HTTP requests.
-message ReactorRouteMatch {
-  // CEL expression evaluated against a ReactorHttpRequest.
+// ServerFacadeRouteMatch evaluates incoming HTTP requests.
+message ServerFacadeRouteMatch {
+  // CEL expression evaluated against a ServerFacadeHttpRequest.
   // Must return a boolean.
   string cel = 1 [
     (buf.validate.field).string.min_len = 1,
@@ -38,17 +38,17 @@ message ReactorRouteMatch {
   ];
 }
 
-// ReactorAction defines what response to produce for a matched route.
-message ReactorAction {
+// ServerFacadeAction defines what response to produce for a matched route.
+message ServerFacadeAction {
   // Static HTTP response.
-  ReactorHttpResponse http_response = 1 [
+  ServerFacadeHttpResponse http_response = 1 [
     json_name = "http_response",
     (buf.validate.field).required = true
   ];
 }
 
-// ReactorHttpResponse is a static HTTP response returned by a reactor route.
-message ReactorHttpResponse {
+// ServerFacadeHttpResponse is a static HTTP response returned by a facade route.
+message ServerFacadeHttpResponse {
   // HTTP status code.
   int32 status = 1 [(buf.validate.field).int32 = {
     gte: 100
@@ -62,8 +62,8 @@ message ReactorHttpResponse {
   map<string, string> headers = 3;
 }
 
-// ReactorHttpRequest is the request shape available in CEL expressions as `request`.
-message ReactorHttpRequest {
+// ServerFacadeHttpRequest is the request shape available in CEL expressions as `request`.
+message ServerFacadeHttpRequest {
   string method = 1;
   string host = 2;
   string path = 3;

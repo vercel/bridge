@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	"github.com/vercel/bridge/pkg/container"
+	"github.com/vercel/bridge/pkg/grpcutil"
 	"github.com/vercel/bridge/pkg/k8s/meta"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Connect returns a gRPC client connection to the intercept server running
@@ -28,7 +28,7 @@ func Connect(ctx context.Context, ct container.Client, containerID string) (*grp
 	}
 
 	target := net.JoinHostPort("localhost", port)
-	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpcutil.NewClient(target)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to intercept server at %s: %w", target, err)
 	}

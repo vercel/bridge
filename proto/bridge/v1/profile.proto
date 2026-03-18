@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package bridge.v1;
+
+import "buf/validate/validate.proto";
+
+// Profile is loaded from .bridge/bridge.json in the repository root.
+// It defines per-command rules that automatically set flags based on
+// CEL expressions evaluated against the command's arguments.
+message Profile {
+  // Rules for the "create" command.
+  repeated CreateCommandProfile create = 1;
+}
+
+// CreateCommandProfile pairs a matcher with flag defaults for the
+// "create" command.
+message CreateCommandProfile {
+  // CEL expression that must return true for the flags to apply.
+  // The expression is evaluated with a `payload` variable of type
+  // CreateCommandPayload. Access fields via `payload.<field>`:
+  //
+  //   payload.workload_name        (string) — the workload_name positional argument
+  //   payload.namespace            (string) — the --namespace flag value
+  //   payload.server_facades       (list<string>) — the --server-facade flag values
+  //   payload.source               (string) — the --source flag value
+  //   payload.listen               (int) — the --listen flag value
+  //   payload.connect              (bool) — the --connect flag value
+  //   payload.devcontainer_config  (string) — the --devcontainer-config flag value
+  //   payload.devcontainer_up_args (string) — the --devcontainer-up-args flag value
+  //
+  // Examples:
+  //   "payload.workload_name == 'api-feature-flags'"
+  //   "payload.workload_name.startsWith('api-') && payload.namespace == 'production'"
+  //   "payload.workload_name.contains('flags')"
+  string match = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).required = true
+  ];
+
+  // Flags to set or append when the matcher returns true.
+  CreateCommandPayload command = 2 [(buf.validate.field).required = true];
+}
+
+// CreateCommandPayload represents the flags for the "create" command.
+// Used both as the CEL evaluation context and as the flag values to apply.
+message CreateCommandPayload {
+  // Positional argument: name of the target workload (defaults to a Deployment).
+  string workload_name = 1 [json_name = "workload_name"];
+
+  // --namespace / -n: target namespace of the source deployment.
+  string namespace = 2;
+
+  // --server-facade: server facade specs (JSON string or file path). Repeated.
+  repeated string server_facades = 3 [json_name = "server_facades"];
+
+  // --source / -s: path to Kubernetes manifests (folder, glob, or YAML file).
+  string source = 4;
+
+  // --listen / -l: port the app listens on.
+  int32 listen = 5;
+
+  // --connect / -c: start the devcontainer and exec into it after creation.
+  bool connect = 6;
+
+  // --devcontainer-config / -f: path to a base devcontainer.json to extend.
+  string devcontainer_config = 7 [json_name = "devcontainer_config"];
+
+  // --devcontainer-up-args: additional arguments passed to devcontainer up.
+  string devcontainer_up_args = 8 [json_name = "devcontainer_up_args"];
+
+  // --name: bridge name (defaults to workload_name).
+  string name = 9;
+}

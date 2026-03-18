@@ -71,6 +71,7 @@ func SourceSimple(namespace, proxyImage string) (*Bundle, error) {
 							Ports: []corev1.ContainerPort{
 								{Name: "grpc", ContainerPort: defaultProxyPort, Protocol: corev1.ProtocolTCP},
 							},
+							ReadinessProbe: grpcReadinessProbe(defaultProxyPort),
 						},
 					},
 				},

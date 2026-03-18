@@ -3,7 +3,12 @@ package embeds
 
 import _ "embed"
 
-// ReactorSchema is the dereferenced JSON Schema for Reactor.
+// ServerFacadeSchema is the dereferenced JSON Schema for ServerFacade.
 //
-//go:embed jsonschema/Reactor.schema.json
-var ReactorSchema []byte
+//go:embed jsonschema/ServerFacade.schema.json
+var ServerFacadeSchema []byte
+
+// ProfileSchema is the dereferenced JSON Schema for Profile.
+//
+//go:embed jsonschema/Profile.schema.json
+var ProfileSchema []byte

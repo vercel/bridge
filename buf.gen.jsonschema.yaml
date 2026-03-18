@@ -5,4 +5,5 @@ plugins:
 inputs:
   - directory: proto
     paths:
-      - proto/bridge/v1/reactor.proto
+      - proto/bridge/v1/server_facade.proto
+      - proto/bridge/v1/profile.proto

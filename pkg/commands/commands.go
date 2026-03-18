@@ -3,9 +3,11 @@ package commands
 import (
 	"context"
 	"log/slog"
+	"runtime"
 	"strings"
 
 	"github.com/urfave/cli/v3"
+	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"github.com/vercel/bridge/pkg/identity"
 	"github.com/vercel/bridge/pkg/interact"
 	"github.com/vercel/bridge/pkg/logging"
@@ -101,6 +103,16 @@ func (f *funcValueSource) GoString() string { return "&funcValueSource{}" }
 // FuncSource returns a ValueSource that calls fn to obtain a value.
 func FuncSource(fn func() string) cli.ValueSource {
 	return &funcValueSource{fn: fn}
+}
+
+// deviceInfo returns a DeviceInfo populated with the current OS, architecture,
+// and bridge CLI version.
+func deviceInfo() *bridgev1.DeviceInfo {
+	return &bridgev1.DeviceInfo{
+		Os:            runtime.GOOS,
+		Arch:          runtime.GOARCH,
+		BridgeVersion: Version,
+	}
 }
 
 func parseLogLevel(s string) slog.Level {

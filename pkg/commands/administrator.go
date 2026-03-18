@@ -20,6 +20,7 @@ import (
 
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"github.com/vercel/bridge/pkg/admin"
+	"github.com/vercel/bridge/pkg/grpcutil"
 	"github.com/vercel/bridge/pkg/k8s/kube"
 	"github.com/vercel/bridge/pkg/k8s/resources"
 	"github.com/vercel/bridge/pkg/logging"
@@ -129,7 +130,7 @@ func runAdministrator(ctx context.Context, c *cli.Command) error {
 		}
 	}()
 
-	srv := grpc.NewServer(
+	srv := grpcutil.NewServer(
 		grpc.MaxRecvMsgSize(16<<20),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(telemetry.BridgeMetricsInterceptor()),

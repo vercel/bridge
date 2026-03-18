@@ -10,4 +10,4 @@ When told to "rebuild" you should rebuild both the native binary to the root of 
 
 # Protobuf
 
-Always use `make proto` to generate protobuf outputs (Go, TypeScript, JSON Schema). Never run `buf generate` directly.
+Always use `make` to generate protobuf outputs (Go, TypeScript, JSON Schema). Never run `buf generate` directly.

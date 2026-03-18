@@ -29,6 +29,7 @@ import (
 	"github.com/vercel/bridge/pkg/intercept"
 	"github.com/vercel/bridge/pkg/k8s/meta"
 	"github.com/vercel/bridge/pkg/netutil"
+	"github.com/vercel/bridge/pkg/profile"
 	"github.com/vercel/bridge/pkg/session"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -58,13 +59,45 @@ Examples:
   devcontainer up --config .devcontainer/bridge-<name>/devcontainer.json
   devcontainer exec --config .devcontainer/bridge-<name>/devcontainer.json npm test`
 
+const createAgentUsageText = createUsageText + `
+
+Profiles:
+  Bridge automatically loads .bridge/profile.json from the current directory
+  or any parent directory. Profiles let you define rules that automatically
+  set flags (e.g. --namespace, --server-facade, --name) based on CEL
+  expressions matched against the command arguments.
+
+  Run "bridge schema profile" to print the JSON schema, or use $schema in
+  your profile.json for editor autocompletion:
+
+    {
+      "$schema": "https://raw.githubusercontent.com/vercel/bridge/main/api/jsonschema/Profile.schema.json",
+      "create": [...]
+    }
+
+  Server facade specs also support $schema:
+
+    {
+      "$schema": "https://raw.githubusercontent.com/vercel/bridge/main/api/jsonschema/ServerFacade.schema.json",
+      "host": "example.com",
+      "routes": [...]
+    }`
+
 // Create returns the CLI command for creating a bridge.
 func Create() *cli.Command {
+	usageText := createUsageText
+	if interact.IsAgent() {
+		usageText = createAgentUsageText
+	}
 	return &cli.Command{
 		Name:      "create",
 		Usage:     "Generate a devcontainer connected to a target deployment",
-		UsageText: createUsageText,
+		UsageText: usageText,
 		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:  "name",
+				Usage: "Bridge name (defaults to the workload name)",
+			},
 			&cli.BoolFlag{
 				Name:    "connect",
 				Aliases: []string{"c"},
@@ -130,8 +163,8 @@ func Create() *cli.Command {
 				),
 			},
 			&cli.StringSliceFlag{
-				Name:  "server-mocks",
-				Usage: "Reactor spec (JSON string or file path). May be repeated. See `bridge schema reactor` for the schema.",
+				Name:  "server-facade",
+				Usage: "Server facade spec (JSON string or file path). May be repeated. See `bridge schema server-facade` for the schema.",
 			},
 			&cli.StringFlag{
 				Name:    "devcontainer-up-args",
@@ -140,11 +173,11 @@ func Create() *cli.Command {
 				Sources: cli.EnvVars("BRIDGE_DEVCONTAINER_UP_ARGS"),
 			},
 		},
-		Before: preflightCreate,
+		Before: chainBefore(applyProfile, preflightCreate),
 		Arguments: []cli.Argument{
 			&cli.StringArg{
-				Name:      "deployment",
-				UsageText: "Name of the target deployment",
+				Name:      "workload_name",
+				UsageText: "Name of the source workload (defaults to a Deployment)",
 				Config: cli.StringConfig{
 					TrimSpace: true,
 				},
@@ -166,6 +199,46 @@ func linuxBinaryPath() string {
 		return filepath.Join(os.Getenv("HOME"), ".bridge", "bin", "bridge-linux")
 	}
 	return filepath.Join(home, ".bridge", "bin", "bridge-linux")
+}
+
+// chainBefore composes multiple Before hooks into a single hook.
+func chainBefore(fns ...cli.BeforeFunc) cli.BeforeFunc {
+	return func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+		for _, fn := range fns {
+			var err error
+			ctx, err = fn(ctx, cmd)
+			if err != nil {
+				return ctx, err
+			}
+		}
+		return ctx, nil
+	}
+}
+
+// applyProfile loads .bridge/profile.json and applies matching create rules.
+func applyProfile(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+	profilePath := profile.ProfilePath()
+	if profilePath == "" {
+		return ctx, nil
+	}
+
+	p, err := profile.LoadFromFlag(profilePath)
+	if err != nil {
+		slog.Warn("Failed to load profile", "error", err)
+		return ctx, nil
+	}
+	if p == nil {
+		return ctx, nil
+	}
+
+	w := cmd.Root().Writer
+	printer := interact.NewPrinter(w)
+	printer.Infof("Loaded profile from %s", profilePath)
+
+	if err := profile.ApplyCreate(p, cmd); err != nil {
+		return ctx, fmt.Errorf("apply profile: %w", err)
+	}
+	return ctx, nil
 }
 
 // preflightCreate runs pre-flight checks before the create command executes.
@@ -190,7 +263,8 @@ func checkDocker(ctx context.Context) error {
 }
 
 func runCreate(ctx context.Context, c *cli.Command) error {
-	deploymentName := c.StringArg("deployment")
+	deploymentName := c.StringArg("workload_name")
+	bridgeName := c.String("name")
 	sourceNamespace := c.String("namespace")
 	if sourceNamespace == "" {
 		sourceNamespace = currentKubeNamespace()
@@ -253,45 +327,47 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	// Step 3: Check for existing bridges.
 	// Skip duplicate detection when using --source without a deployment name,
 	// since the server will determine the name from the manifests.
-	listResp, err := adm.ListBridges(ctx, &bridgev1.ListBridgesRequest{DeviceId: deviceID})
+	listResp, err := adm.ListBridges(ctx, &bridgev1.ListBridgesRequest{DeviceId: deviceID, DeviceInfo: deviceInfo()})
 	if err != nil {
 		sp.Stop()
 		return fmt.Errorf("failed to list bridges: %w", err)
 	}
 
-	if deploymentName != "" {
-		// Compute the expected bridge deployment name so we can match by name.
-		expectedName := identity.BridgeResourceName(deviceID, deploymentName)
-		if !yes {
-			for _, bridge := range listResp.Bridges {
-				if bridge.DeploymentName == expectedName {
-					sp.Stop()
-					p.Newline()
-					p.Warn("An existing bridge already exists:")
-					p.KeyValue("Name", bridge.DeploymentName)
-					p.KeyValue("Created", bridge.CreatedAt)
-					p.KeyValue("Context", kubeContext)
-					p.Newline()
-					p.Muted("This will tear down the existing bridge and recreate it.")
-					p.Prompt("Continue? [y/N] ")
+	// The expected bridge name: explicit --name flag, or default to workload name.
+	expectedName := bridgeName
+	if expectedName == "" {
+		expectedName = deploymentName
+	}
 
-					if answer := promptYN(r); answer != "y" && answer != "yes" {
-						p.Println("Aborted.")
-						return nil
-					}
-					yes = true
-					sp.Start(ctx)
-					break
+	if expectedName != "" && !yes {
+		for _, bridge := range listResp.Bridges {
+			if bridge.Name == expectedName {
+				sp.Stop()
+				p.Newline()
+				p.Warn("An existing bridge already exists:")
+				p.KeyValue("Name", bridge.Name)
+				p.KeyValue("Created", bridge.CreatedAt)
+				p.KeyValue("Context", kubeContext)
+				p.Newline()
+				p.Muted("This will tear down the existing bridge and recreate it.")
+				p.Prompt("Continue? [y/N] ")
+
+				if answer := promptYN(r); answer != "y" && answer != "yes" {
+					p.Println("Aborted.")
+					return nil
 				}
+				yes = true
+				sp.Start(ctx)
+				break
 			}
 		}
 	}
 
-	// Parse and validate reactor specs.
-	reactors, err := parseReactorFlags(c.StringSlice("server-mocks"))
+	// Parse and validate server facade specs.
+	facades, err := parseServerFacadeFlags(c.StringSlice("server-facade"))
 	if err != nil {
 		sp.Stop()
-		return fmt.Errorf("invalid --server-mocks: %w", err)
+		return fmt.Errorf("invalid --server-facade: %w", err)
 	}
 
 	// Step 4: Create bridge.
@@ -304,7 +380,9 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 		Force:            yes,
 		ProxyImage:       proxyImage,
 		SourceManifests:  sourceManifests,
-		Reactors:         reactors,
+		ServerFacades:    facades,
+		Name:             bridgeName,
+		DeviceInfo:       deviceInfo(),
 	})
 	sp.Stop()
 	if err != nil {
@@ -348,45 +426,54 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 
 	// Save local session so that exec can look up the config path by name.
 	absDCConfigPath, _ := filepath.Abs(dcConfigPath)
-	if err := session.Save(createResp.DeploymentName, absDCConfigPath); err != nil {
+	if err := session.Save(createResp.Name, absDCConfigPath); err != nil {
 		slog.Warn("Failed to save session", "error", err)
 	}
 
 	if connectFlag {
 		ct := container.NewDockerClient()
-		labels := map[string]string{labelBridgeDeployment: createResp.DeploymentName}
+		labels := map[string]string{labelBridgeDeployment: createResp.Name}
 
 		// Stop any existing container for this bridge so ports are released.
 		ct.StopAll(ctx, container.StopAllOpts{Labels: labels})
 
 		sp.Start(ctx)
-		if err := startDevcontainer(ctx, w, ct, dcConfigPath, createResp.DeploymentName, c.String("devcontainer-up-args")); err != nil {
+		workspaceFolder, _ := filepath.Abs(filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath))))
+		upClient := &devcontainer.CLIClient{
+			WorkspaceFolder: workspaceFolder,
+			ConfigPath:      dcConfigPath,
+			Stdin:           r,
+			Stdout:          w,
+			Stderr:          c.Root().ErrWriter,
+			UpArgs:          splitArgs(c.String("devcontainer-up-args")),
+		}
+		if err := startDevcontainer(ctx, w, ct, upClient, createResp.Name); err != nil {
 			return err
 		}
 
 		printPortMappings(p, portMappings)
 
-		workspaceFolder, _ := filepath.Abs(filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath))))
-		dcErr := execInDevcontainer(ctx, workspaceFolder, dcConfigPath, r, []string{"bash"})
+		dcErr := upClient.Exec(ctx, []string{"bash"})
 
 		// Clean up the bridge when the user exits the devcontainer.
 		sp.SetTitle("Removing bridge...")
 		sp.Start(ctx)
 
 		container.NewDockerClient().StopAll(ctx, container.StopAllOpts{
-			Labels: map[string]string{labelBridgeDeployment: createResp.DeploymentName},
+			Labels: map[string]string{labelBridgeDeployment: createResp.Name},
 		})
 		_, delErr := adm.DeleteBridge(ctx, &bridgev1.DeleteBridgeRequest{
-			DeviceId:  deviceID,
-			Name:      createResp.DeploymentName,
-			Namespace: createResp.Namespace,
+			DeviceId:   deviceID,
+			Name:       createResp.Name,
+			Namespace:  createResp.Namespace,
+			DeviceInfo: deviceInfo(),
 		})
 		sp.Stop()
 
 		if delErr != nil {
 			p.Warn(fmt.Sprintf("Failed to remove bridge: %v", delErr))
 		} else {
-			p.Success(fmt.Sprintf("Bridge %q removed", createResp.DeploymentName))
+			p.Success(fmt.Sprintf("Bridge %q removed", createResp.Name))
 		}
 
 		return dcErr
@@ -407,7 +494,7 @@ func promptYN(r io.Reader) string {
 // unless the base config already sets containerEnv.KUBECONFIG.
 // Returns the path to the generated config.
 func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef string, appPort, interceptPort int, containerBinaryPath, deploymentName string, resp *bridgev1.CreateBridgeResponse) (string, []devcontainer.PortMapping, error) {
-	dcName := resp.DeploymentName
+	dcName := resp.Name
 	dcConfigPath := bridgeConfigPath(baseConfigPath, dcName)
 	dcDir := filepath.Dir(dcConfigPath)
 
@@ -457,8 +544,8 @@ func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef s
 	cfg.EnsureRunArgs("-l", labelBridgeDeployment+"="+dcName)
 	cfg.EnsureContainerEnv("WORKLOAD_NAME", deploymentName)
 	cfg.EnsureRemoteEnv("WORKLOAD_NAME", deploymentName)
-	cfg.EnsureContainerEnv("BRIDGE_NAME", resp.DeploymentName)
-	cfg.EnsureRemoteEnv("BRIDGE_NAME", resp.DeploymentName)
+	cfg.EnsureContainerEnv("BRIDGE_NAME", resp.Name)
+	cfg.EnsureRemoteEnv("BRIDGE_NAME", resp.Name)
 
 	if err := configureDevMounts(cfg, containerBinaryPath); err != nil {
 		return "", nil, err
@@ -649,20 +736,13 @@ func resolveAppPorts(cfg *devcontainer.Config) {
 // startDevcontainer builds and starts the devcontainer, then waits for the
 // intercept process to become ready. Expects a Spinner in ctx via
 // interact.WithSpinner.
-func startDevcontainer(ctx context.Context, w io.Writer, ct container.Client, dcConfigPath, deploymentName, upArgs string) error {
+func startDevcontainer(ctx context.Context, w io.Writer, ct container.Client, dcClient devcontainer.Client, bridgeName string) error {
 	sp := interact.GetSpinner(ctx)
+	logger := slog.With("bridge", bridgeName)
 
-	// <workspace>/.devcontainer/bridge-<name>/devcontainer.json → <workspace>
-	workspaceFolder, _ := filepath.Abs(filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath))))
-	dcClient := &devcontainer.Client{
-		WorkspaceFolder: workspaceFolder,
-		ConfigPath:      dcConfigPath,
-		UpArgs:          splitArgs(upArgs),
-	}
+	labels := map[string]string{labelBridgeDeployment: bridgeName}
 
-	labels := map[string]string{labelBridgeDeployment: deploymentName}
-
-	slog.Debug("Starting devcontainer", "config", dcConfigPath, "workspace", workspaceFolder)
+	slog.Debug("Starting devcontainer", "bridge", bridgeName)
 
 	// Stop the spinner while the viewport streams build output.
 	sp.Stop()
@@ -676,6 +756,7 @@ func startDevcontainer(ctx context.Context, w io.Writer, ct container.Client, dc
 	if err != nil {
 		return fmt.Errorf("failed to start devcontainer: %w", err)
 	}
+	logger.Info("Devcontainer up.")
 
 	// Tee the build output into the log so that `bridge debug` captures it.
 	buildOutput := io.TeeReader(proc.Output(), &slogLineWriter{})
@@ -691,11 +772,15 @@ func startDevcontainer(ctx context.Context, w io.Writer, ct container.Client, dc
 	// Resume spinner for the connection phase.
 	sp.SetTitle("Connecting container to proxy...")
 	sp.Start(ctx)
-	containerID, err := container.WaitForID(ctx, ct, container.FindOpts{Labels: labels})
+	waitCtx, waitCancel := context.WithTimeout(ctx, time.Minute)
+	defer waitCancel()
+	containerID, err := container.WaitForID(waitCtx, ct, container.FindOpts{Labels: labels})
 	if err != nil {
 		sp.Stop()
+		logger.ErrorContext(ctx, "Failed to start container", "err", err.Error())
 		return err
 	}
+
 	readyCtx, readyCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer readyCancel()
 	if err := intercept.WaitForReady(readyCtx, ct, containerID); err != nil {
@@ -801,32 +886,32 @@ func bridgeConfigPath(baseConfigPath, bridgeName string) string {
 	return filepath.Join(filepath.Dir(baseConfigPath), ".devcontainer", bridgeDir, "devcontainer.json")
 }
 
-// parseReactorFlags parses and validates --server-mocks flag values (JSON
-// strings or file paths) into Reactor proto messages.
-func parseReactorFlags(vals []string) ([]*bridgev1.Reactor, error) {
+// parseServerFacadeFlags parses and validates --server-facade flag values (JSON
+// strings or file paths) into ServerFacade proto messages.
+func parseServerFacadeFlags(vals []string) ([]*bridgev1.ServerFacade, error) {
 	v, err := protovalidate.New()
 	if err != nil {
 		return nil, fmt.Errorf("init validator: %w", err)
 	}
 
-	var reactors []*bridgev1.Reactor
+	var facades []*bridgev1.ServerFacade
 	for _, val := range vals {
 		data := []byte(val)
 		if !strings.HasPrefix(strings.TrimSpace(val), "{") {
 			fileData, err := os.ReadFile(val)
 			if err != nil {
-				return nil, fmt.Errorf("read reactor file %q: %w", val, err)
+				return nil, fmt.Errorf("read server facade file %q: %w", val, err)
 			}
 			data = fileData
 		}
-		var r bridgev1.Reactor
-		if err := protojson.Unmarshal(data, &r); err != nil {
-			return nil, fmt.Errorf("parse reactor spec: %w", err)
+		var f bridgev1.ServerFacade
+		if err := protojson.Unmarshal(data, &f); err != nil {
+			return nil, fmt.Errorf("parse server facade spec: %w", err)
 		}
-		if err := v.Validate(&r); err != nil {
-			return nil, fmt.Errorf("invalid reactor spec: %w", err)
+		if err := v.Validate(&f); err != nil {
+			return nil, fmt.Errorf("invalid server facade spec: %w", err)
 		}
-		reactors = append(reactors, &r)
+		facades = append(facades, &f)
 	}
-	return reactors, nil
+	return facades, nil
 }

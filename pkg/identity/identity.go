@@ -84,12 +84,6 @@ func ShortDeviceID(deviceID string) string {
 	return deviceID
 }
 
-// BridgeResourceName returns the canonical name for a bridge resource:
-// <name>-<short-device-id>.
-func BridgeResourceName(deviceID, name string) string {
-	return name + "-" + ShortDeviceID(deviceID)
-}
-
 func deviceIDPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

@@ -22,6 +22,70 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// DeviceInfo describes the client device making the request.
+type DeviceInfo struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Operating system (e.g. "linux", "darwin", "windows").
+	Os string `protobuf:"bytes,1,opt,name=os,proto3" json:"os,omitempty"`
+	// Architecture (e.g. "amd64", "arm64").
+	Arch string `protobuf:"bytes,2,opt,name=arch,proto3" json:"arch,omitempty"`
+	// Bridge CLI version (e.g. "0.1.0", "edge-abc1234").
+	BridgeVersion string `protobuf:"bytes,3,opt,name=bridge_version,proto3" json:"bridge_version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceInfo) Reset() {
+	*x = DeviceInfo{}
+	mi := &file_bridge_v1_administrator_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceInfo) ProtoMessage() {}
+
+func (x *DeviceInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_v1_administrator_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceInfo.ProtoReflect.Descriptor instead.
+func (*DeviceInfo) Descriptor() ([]byte, []int) {
+	return file_bridge_v1_administrator_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *DeviceInfo) GetOs() string {
+	if x != nil {
+		return x.Os
+	}
+	return ""
+}
+
+func (x *DeviceInfo) GetArch() string {
+	if x != nil {
+		return x.Arch
+	}
+	return ""
+}
+
+func (x *DeviceInfo) GetBridgeVersion() string {
+	if x != nil {
+		return x.BridgeVersion
+	}
+	return ""
+}
+
 // CreateBridgeRequest is sent by the bridge CLI to the Administrator to provision a new bridge.
 type CreateBridgeRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -42,15 +106,20 @@ type CreateBridgeRequest struct {
 	// When set, source_deployment becomes optional (used to select which
 	// Deployment in the archive to bridge when multiple exist).
 	SourceManifests []byte `protobuf:"bytes,6,opt,name=source_manifests,proto3" json:"source_manifests,omitempty"`
-	// Reactor specs to load on the bridge proxy server.
-	Reactors      []*Reactor `protobuf:"bytes,7,rep,name=reactors,proto3" json:"reactors,omitempty"`
+	// ServerFacade specs to load on the bridge proxy server.
+	ServerFacades []*ServerFacade `protobuf:"bytes,7,rep,name=server_facades,proto3" json:"server_facades,omitempty"`
+	// The bridge name. Defaults to source_deployment when empty.
+	// Used as the value for the vercel.sh/bridge-name label.
+	Name string `protobuf:"bytes,8,opt,name=name,proto3" json:"name,omitempty"`
+	// Optional metadata about the calling device.
+	DeviceInfo    *DeviceInfo `protobuf:"bytes,9,opt,name=device_info,proto3" json:"device_info,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateBridgeRequest) Reset() {
 	*x = CreateBridgeRequest{}
-	mi := &file_bridge_v1_administrator_proto_msgTypes[0]
+	mi := &file_bridge_v1_administrator_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -62,7 +131,7 @@ func (x *CreateBridgeRequest) String() string {
 func (*CreateBridgeRequest) ProtoMessage() {}
 
 func (x *CreateBridgeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_v1_administrator_proto_msgTypes[0]
+	mi := &file_bridge_v1_administrator_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -75,7 +144,7 @@ func (x *CreateBridgeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBridgeRequest.ProtoReflect.Descriptor instead.
 func (*CreateBridgeRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_v1_administrator_proto_rawDescGZIP(), []int{0}
+	return file_bridge_v1_administrator_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *CreateBridgeRequest) GetDeviceId() string {
@@ -120,9 +189,23 @@ func (x *CreateBridgeRequest) GetSourceManifests() []byte {
 	return nil
 }
 
-func (x *CreateBridgeRequest) GetReactors() []*Reactor {
+func (x *CreateBridgeRequest) GetServerFacades() []*ServerFacade {
 	if x != nil {
-		return x.Reactors
+		return x.ServerFacades
+	}
+	return nil
+}
+
+func (x *CreateBridgeRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CreateBridgeRequest) GetDeviceInfo() *DeviceInfo {
+	if x != nil {
+		return x.DeviceInfo
 	}
 	return nil
 }
@@ -143,14 +226,16 @@ type CreateBridgeResponse struct {
 	// Absolute mount paths from the source deployment's application container.
 	VolumeMountPaths []string `protobuf:"bytes,6,rep,name=volume_mount_paths,json=volumeMountPaths,proto3" json:"volume_mount_paths,omitempty"`
 	// Container ports from the source deployment's application container.
-	AppPorts      []int32 `protobuf:"varint,7,rep,packed,name=app_ports,json=appPorts,proto3" json:"app_ports,omitempty"`
+	AppPorts []int32 `protobuf:"varint,7,rep,packed,name=app_ports,json=appPorts,proto3" json:"app_ports,omitempty"`
+	// The bridge name (value of vercel.sh/bridge-name label).
+	Name          string `protobuf:"bytes,8,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateBridgeResponse) Reset() {
 	*x = CreateBridgeResponse{}
-	mi := &file_bridge_v1_administrator_proto_msgTypes[1]
+	mi := &file_bridge_v1_administrator_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -162,7 +247,7 @@ func (x *CreateBridgeResponse) String() string {
 func (*CreateBridgeResponse) ProtoMessage() {}
 
 func (x *CreateBridgeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_v1_administrator_proto_msgTypes[1]
+	mi := &file_bridge_v1_administrator_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -175,7 +260,7 @@ func (x *CreateBridgeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBridgeResponse.ProtoReflect.Descriptor instead.
 func (*CreateBridgeResponse) Descriptor() ([]byte, []int) {
-	return file_bridge_v1_administrator_proto_rawDescGZIP(), []int{1}
+	return file_bridge_v1_administrator_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *CreateBridgeResponse) GetNamespace() string {
@@ -227,18 +312,27 @@ func (x *CreateBridgeResponse) GetAppPorts() []int32 {
 	return nil
 }
 
+func (x *CreateBridgeResponse) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
 // ListBridgesRequest is sent to query active bridges.
 type ListBridgesRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The device ID to list bridges for. Required.
-	DeviceId      string `protobuf:"bytes,1,opt,name=device_id,proto3" json:"device_id,omitempty"`
+	DeviceId string `protobuf:"bytes,1,opt,name=device_id,proto3" json:"device_id,omitempty"`
+	// Optional metadata about the calling device.
+	DeviceInfo    *DeviceInfo `protobuf:"bytes,2,opt,name=device_info,proto3" json:"device_info,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListBridgesRequest) Reset() {
 	*x = ListBridgesRequest{}
-	mi := &file_bridge_v1_administrator_proto_msgTypes[2]
+	mi := &file_bridge_v1_administrator_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -250,7 +344,7 @@ func (x *ListBridgesRequest) String() string {
 func (*ListBridgesRequest) ProtoMessage() {}
 
 func (x *ListBridgesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_v1_administrator_proto_msgTypes[2]
+	mi := &file_bridge_v1_administrator_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -263,7 +357,7 @@ func (x *ListBridgesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBridgesRequest.ProtoReflect.Descriptor instead.
 func (*ListBridgesRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_v1_administrator_proto_rawDescGZIP(), []int{2}
+	return file_bridge_v1_administrator_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ListBridgesRequest) GetDeviceId() string {
@@ -271,6 +365,13 @@ func (x *ListBridgesRequest) GetDeviceId() string {
 		return x.DeviceId
 	}
 	return ""
+}
+
+func (x *ListBridgesRequest) GetDeviceInfo() *DeviceInfo {
+	if x != nil {
+		return x.DeviceInfo
+	}
+	return nil
 }
 
 // BridgeInfo describes an active bridge.
@@ -290,13 +391,15 @@ type BridgeInfo struct {
 	Status string `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
 	// The name of the bridge Deployment.
 	DeploymentName string `protobuf:"bytes,7,opt,name=deployment_name,proto3" json:"deployment_name,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The bridge name (value of vercel.sh/bridge-name label).
+	Name          string `protobuf:"bytes,8,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *BridgeInfo) Reset() {
 	*x = BridgeInfo{}
-	mi := &file_bridge_v1_administrator_proto_msgTypes[3]
+	mi := &file_bridge_v1_administrator_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -308,7 +411,7 @@ func (x *BridgeInfo) String() string {
 func (*BridgeInfo) ProtoMessage() {}
 
 func (x *BridgeInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_v1_administrator_proto_msgTypes[3]
+	mi := &file_bridge_v1_administrator_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -321,7 +424,7 @@ func (x *BridgeInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeInfo.ProtoReflect.Descriptor instead.
 func (*BridgeInfo) Descriptor() ([]byte, []int) {
-	return file_bridge_v1_administrator_proto_rawDescGZIP(), []int{3}
+	return file_bridge_v1_administrator_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *BridgeInfo) GetDeviceId() string {
@@ -373,6 +476,13 @@ func (x *BridgeInfo) GetDeploymentName() string {
 	return ""
 }
 
+func (x *BridgeInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
 // ListBridgesResponse contains all active bridges matching the filter.
 type ListBridgesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -383,7 +493,7 @@ type ListBridgesResponse struct {
 
 func (x *ListBridgesResponse) Reset() {
 	*x = ListBridgesResponse{}
-	mi := &file_bridge_v1_administrator_proto_msgTypes[4]
+	mi := &file_bridge_v1_administrator_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -395,7 +505,7 @@ func (x *ListBridgesResponse) String() string {
 func (*ListBridgesResponse) ProtoMessage() {}
 
 func (x *ListBridgesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_v1_administrator_proto_msgTypes[4]
+	mi := &file_bridge_v1_administrator_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -408,7 +518,7 @@ func (x *ListBridgesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBridgesResponse.ProtoReflect.Descriptor instead.
 func (*ListBridgesResponse) Descriptor() ([]byte, []int) {
-	return file_bridge_v1_administrator_proto_rawDescGZIP(), []int{4}
+	return file_bridge_v1_administrator_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ListBridgesResponse) GetBridges() []*BridgeInfo {
@@ -426,14 +536,16 @@ type DeleteBridgeRequest struct {
 	// The name of the bridge to delete.
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// The namespace containing the bridge resources.
-	Namespace     string `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Namespace string `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	// Optional metadata about the calling device.
+	DeviceInfo    *DeviceInfo `protobuf:"bytes,4,opt,name=device_info,proto3" json:"device_info,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DeleteBridgeRequest) Reset() {
 	*x = DeleteBridgeRequest{}
-	mi := &file_bridge_v1_administrator_proto_msgTypes[5]
+	mi := &file_bridge_v1_administrator_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -445,7 +557,7 @@ func (x *DeleteBridgeRequest) String() string {
 func (*DeleteBridgeRequest) ProtoMessage() {}
 
 func (x *DeleteBridgeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_v1_administrator_proto_msgTypes[5]
+	mi := &file_bridge_v1_administrator_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -458,7 +570,7 @@ func (x *DeleteBridgeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteBridgeRequest.ProtoReflect.Descriptor instead.
 func (*DeleteBridgeRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_v1_administrator_proto_rawDescGZIP(), []int{5}
+	return file_bridge_v1_administrator_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *DeleteBridgeRequest) GetDeviceId() string {
@@ -482,6 +594,13 @@ func (x *DeleteBridgeRequest) GetNamespace() string {
 	return ""
 }
 
+func (x *DeleteBridgeRequest) GetDeviceInfo() *DeviceInfo {
+	if x != nil {
+		return x.DeviceInfo
+	}
+	return nil
+}
+
 // DeleteBridgeResponse is returned after a bridge is torn down.
 type DeleteBridgeResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -491,7 +610,7 @@ type DeleteBridgeResponse struct {
 
 func (x *DeleteBridgeResponse) Reset() {
 	*x = DeleteBridgeResponse{}
-	mi := &file_bridge_v1_administrator_proto_msgTypes[6]
+	mi := &file_bridge_v1_administrator_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -503,7 +622,7 @@ func (x *DeleteBridgeResponse) String() string {
 func (*DeleteBridgeResponse) ProtoMessage() {}
 
 func (x *DeleteBridgeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_v1_administrator_proto_msgTypes[6]
+	mi := &file_bridge_v1_administrator_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -516,14 +635,19 @@ func (x *DeleteBridgeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteBridgeResponse.ProtoReflect.Descriptor instead.
 func (*DeleteBridgeResponse) Descriptor() ([]byte, []int) {
-	return file_bridge_v1_administrator_proto_rawDescGZIP(), []int{6}
+	return file_bridge_v1_administrator_proto_rawDescGZIP(), []int{7}
 }
 
 var File_bridge_v1_administrator_proto protoreflect.FileDescriptor
 
 const file_bridge_v1_administrator_proto_rawDesc = "" +
 	"\n" +
-	"\x1dbridge/v1/administrator.proto\x12\tbridge.v1\x1a\x17bridge/v1/reactor.proto\x1a\x1bbuf/validate/validate.proto\"\xad\x02\n" +
+	"\x1dbridge/v1/administrator.proto\x12\tbridge.v1\x1a\x1dbridge/v1/server_facade.proto\x1a\x1bbuf/validate/validate.proto\"X\n" +
+	"\n" +
+	"DeviceInfo\x12\x0e\n" +
+	"\x02os\x18\x01 \x01(\tR\x02os\x12\x12\n" +
+	"\x04arch\x18\x02 \x01(\tR\x04arch\x12&\n" +
+	"\x0ebridge_version\x18\x03 \x01(\tR\x0ebridge_version\"\x8b\x03\n" +
 	"\x13CreateBridgeRequest\x12(\n" +
 	"\tdevice_id\x18\x01 \x01(\tB\n" +
 	"\xbaH\a\xc8\x01\x01r\x02\x10\x01R\tdevice_id\x12,\n" +
@@ -531,8 +655,10 @@ const file_bridge_v1_administrator_proto_rawDesc = "" +
 	"\x10source_namespace\x18\x03 \x01(\tR\x10source_namespace\x12\x14\n" +
 	"\x05force\x18\x04 \x01(\bR\x05force\x12 \n" +
 	"\vproxy_image\x18\x05 \x01(\tR\vproxy_image\x12*\n" +
-	"\x10source_manifests\x18\x06 \x01(\fR\x10source_manifests\x12.\n" +
-	"\breactors\x18\a \x03(\v2\x12.bridge.v1.ReactorR\breactors\"\xde\x02\n" +
+	"\x10source_manifests\x18\x06 \x01(\fR\x10source_manifests\x12?\n" +
+	"\x0eserver_facades\x18\a \x03(\v2\x17.bridge.v1.ServerFacadeR\x0eserver_facades\x12\x12\n" +
+	"\x04name\x18\b \x01(\tR\x04name\x127\n" +
+	"\vdevice_info\x18\t \x01(\v2\x15.bridge.v1.DeviceInfoR\vdevice_info\"\xf2\x02\n" +
 	"\x14CreateBridgeResponse\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x1a\n" +
 	"\bpod_name\x18\x02 \x01(\tR\bpod_name\x12\x12\n" +
@@ -540,13 +666,15 @@ const file_bridge_v1_administrator_proto_rawDesc = "" +
 	"\x0fdeployment_name\x18\x04 \x01(\tR\x0fdeployment_name\x12G\n" +
 	"\benv_vars\x18\x05 \x03(\v2,.bridge.v1.CreateBridgeResponse.EnvVarsEntryR\aenvVars\x12,\n" +
 	"\x12volume_mount_paths\x18\x06 \x03(\tR\x10volumeMountPaths\x12\x1b\n" +
-	"\tapp_ports\x18\a \x03(\x05R\bappPorts\x1a:\n" +
+	"\tapp_ports\x18\a \x03(\x05R\bappPorts\x12\x12\n" +
+	"\x04name\x18\b \x01(\tR\x04name\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\">\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"w\n" +
 	"\x12ListBridgesRequest\x12(\n" +
 	"\tdevice_id\x18\x01 \x01(\tB\n" +
-	"\xbaH\a\xc8\x01\x01r\x02\x10\x01R\tdevice_id\"\x84\x02\n" +
+	"\xbaH\a\xc8\x01\x01r\x02\x10\x01R\tdevice_id\x127\n" +
+	"\vdevice_info\x18\x02 \x01(\v2\x15.bridge.v1.DeviceInfoR\vdevice_info\"\x98\x02\n" +
 	"\n" +
 	"BridgeInfo\x12\x1c\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\tdevice_id\x12,\n" +
@@ -557,15 +685,17 @@ const file_bridge_v1_administrator_proto_rawDesc = "" +
 	"created_at\x18\x05 \x01(\tR\n" +
 	"created_at\x12\x16\n" +
 	"\x06status\x18\x06 \x01(\tR\x06status\x12(\n" +
-	"\x0fdeployment_name\x18\a \x01(\tR\x0fdeployment_name\"F\n" +
+	"\x0fdeployment_name\x18\a \x01(\tR\x0fdeployment_name\x12\x12\n" +
+	"\x04name\x18\b \x01(\tR\x04name\"F\n" +
 	"\x13ListBridgesResponse\x12/\n" +
-	"\abridges\x18\x01 \x03(\v2\x15.bridge.v1.BridgeInfoR\abridges\"}\n" +
+	"\abridges\x18\x01 \x03(\v2\x15.bridge.v1.BridgeInfoR\abridges\"\xb6\x01\n" +
 	"\x13DeleteBridgeRequest\x12(\n" +
 	"\tdevice_id\x18\x01 \x01(\tB\n" +
 	"\xbaH\a\xc8\x01\x01r\x02\x10\x01R\tdevice_id\x12\x1e\n" +
 	"\x04name\x18\x02 \x01(\tB\n" +
 	"\xbaH\a\xc8\x01\x01r\x02\x10\x01R\x04name\x12\x1c\n" +
-	"\tnamespace\x18\x03 \x01(\tR\tnamespace\"\x16\n" +
+	"\tnamespace\x18\x03 \x01(\tR\tnamespace\x127\n" +
+	"\vdevice_info\x18\x04 \x01(\v2\x15.bridge.v1.DeviceInfoR\vdevice_info\"\x16\n" +
 	"\x14DeleteBridgeResponse2\x86\x02\n" +
 	"\x14AdministratorService\x12O\n" +
 	"\fCreateBridge\x12\x1e.bridge.v1.CreateBridgeRequest\x1a\x1f.bridge.v1.CreateBridgeResponse\x12L\n" +
@@ -586,33 +716,37 @@ func file_bridge_v1_administrator_proto_rawDescGZIP() []byte {
 	return file_bridge_v1_administrator_proto_rawDescData
 }
 
-var file_bridge_v1_administrator_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_bridge_v1_administrator_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_bridge_v1_administrator_proto_goTypes = []any{
-	(*CreateBridgeRequest)(nil),  // 0: bridge.v1.CreateBridgeRequest
-	(*CreateBridgeResponse)(nil), // 1: bridge.v1.CreateBridgeResponse
-	(*ListBridgesRequest)(nil),   // 2: bridge.v1.ListBridgesRequest
-	(*BridgeInfo)(nil),           // 3: bridge.v1.BridgeInfo
-	(*ListBridgesResponse)(nil),  // 4: bridge.v1.ListBridgesResponse
-	(*DeleteBridgeRequest)(nil),  // 5: bridge.v1.DeleteBridgeRequest
-	(*DeleteBridgeResponse)(nil), // 6: bridge.v1.DeleteBridgeResponse
-	nil,                          // 7: bridge.v1.CreateBridgeResponse.EnvVarsEntry
-	(*Reactor)(nil),              // 8: bridge.v1.Reactor
+	(*DeviceInfo)(nil),           // 0: bridge.v1.DeviceInfo
+	(*CreateBridgeRequest)(nil),  // 1: bridge.v1.CreateBridgeRequest
+	(*CreateBridgeResponse)(nil), // 2: bridge.v1.CreateBridgeResponse
+	(*ListBridgesRequest)(nil),   // 3: bridge.v1.ListBridgesRequest
+	(*BridgeInfo)(nil),           // 4: bridge.v1.BridgeInfo
+	(*ListBridgesResponse)(nil),  // 5: bridge.v1.ListBridgesResponse
+	(*DeleteBridgeRequest)(nil),  // 6: bridge.v1.DeleteBridgeRequest
+	(*DeleteBridgeResponse)(nil), // 7: bridge.v1.DeleteBridgeResponse
+	nil,                          // 8: bridge.v1.CreateBridgeResponse.EnvVarsEntry
+	(*ServerFacade)(nil),         // 9: bridge.v1.ServerFacade
 }
 var file_bridge_v1_administrator_proto_depIdxs = []int32{
-	8, // 0: bridge.v1.CreateBridgeRequest.reactors:type_name -> bridge.v1.Reactor
-	7, // 1: bridge.v1.CreateBridgeResponse.env_vars:type_name -> bridge.v1.CreateBridgeResponse.EnvVarsEntry
-	3, // 2: bridge.v1.ListBridgesResponse.bridges:type_name -> bridge.v1.BridgeInfo
-	0, // 3: bridge.v1.AdministratorService.CreateBridge:input_type -> bridge.v1.CreateBridgeRequest
-	2, // 4: bridge.v1.AdministratorService.ListBridges:input_type -> bridge.v1.ListBridgesRequest
-	5, // 5: bridge.v1.AdministratorService.DeleteBridge:input_type -> bridge.v1.DeleteBridgeRequest
-	1, // 6: bridge.v1.AdministratorService.CreateBridge:output_type -> bridge.v1.CreateBridgeResponse
-	4, // 7: bridge.v1.AdministratorService.ListBridges:output_type -> bridge.v1.ListBridgesResponse
-	6, // 8: bridge.v1.AdministratorService.DeleteBridge:output_type -> bridge.v1.DeleteBridgeResponse
-	6, // [6:9] is the sub-list for method output_type
-	3, // [3:6] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	9, // 0: bridge.v1.CreateBridgeRequest.server_facades:type_name -> bridge.v1.ServerFacade
+	0, // 1: bridge.v1.CreateBridgeRequest.device_info:type_name -> bridge.v1.DeviceInfo
+	8, // 2: bridge.v1.CreateBridgeResponse.env_vars:type_name -> bridge.v1.CreateBridgeResponse.EnvVarsEntry
+	0, // 3: bridge.v1.ListBridgesRequest.device_info:type_name -> bridge.v1.DeviceInfo
+	4, // 4: bridge.v1.ListBridgesResponse.bridges:type_name -> bridge.v1.BridgeInfo
+	0, // 5: bridge.v1.DeleteBridgeRequest.device_info:type_name -> bridge.v1.DeviceInfo
+	1, // 6: bridge.v1.AdministratorService.CreateBridge:input_type -> bridge.v1.CreateBridgeRequest
+	3, // 7: bridge.v1.AdministratorService.ListBridges:input_type -> bridge.v1.ListBridgesRequest
+	6, // 8: bridge.v1.AdministratorService.DeleteBridge:input_type -> bridge.v1.DeleteBridgeRequest
+	2, // 9: bridge.v1.AdministratorService.CreateBridge:output_type -> bridge.v1.CreateBridgeResponse
+	5, // 10: bridge.v1.AdministratorService.ListBridges:output_type -> bridge.v1.ListBridgesResponse
+	7, // 11: bridge.v1.AdministratorService.DeleteBridge:output_type -> bridge.v1.DeleteBridgeResponse
+	9, // [9:12] is the sub-list for method output_type
+	6, // [6:9] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_bridge_v1_administrator_proto_init() }
@@ -620,14 +754,14 @@ func file_bridge_v1_administrator_proto_init() {
 	if File_bridge_v1_administrator_proto != nil {
 		return
 	}
-	file_bridge_v1_reactor_proto_init()
+	file_bridge_v1_server_facade_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bridge_v1_administrator_proto_rawDesc), len(file_bridge_v1_administrator_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -4,12 +4,46 @@
 
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
-import type { Reactor } from "./reactor_pb";
+import type { ServerFacade } from "./server_facade_pb";
 
 /**
  * Describes the file bridge/v1/administrator.proto.
  */
 export declare const file_bridge_v1_administrator: GenFile;
+
+/**
+ * DeviceInfo describes the client device making the request.
+ *
+ * @generated from message bridge.v1.DeviceInfo
+ */
+export declare type DeviceInfo = Message<"bridge.v1.DeviceInfo"> & {
+  /**
+   * Operating system (e.g. "linux", "darwin", "windows").
+   *
+   * @generated from field: string os = 1;
+   */
+  os: string;
+
+  /**
+   * Architecture (e.g. "amd64", "arm64").
+   *
+   * @generated from field: string arch = 2;
+   */
+  arch: string;
+
+  /**
+   * Bridge CLI version (e.g. "0.1.0", "edge-abc1234").
+   *
+   * @generated from field: string bridge_version = 3 [json_name = "bridge_version"];
+   */
+  bridgeVersion: string;
+};
+
+/**
+ * Describes the message bridge.v1.DeviceInfo.
+ * Use `create(DeviceInfoSchema)` to create a new message.
+ */
+export declare const DeviceInfoSchema: GenMessage<DeviceInfo>;
 
 /**
  * CreateBridgeRequest is sent by the bridge CLI to the Administrator to provision a new bridge.
@@ -65,11 +99,26 @@ export declare type CreateBridgeRequest = Message<"bridge.v1.CreateBridgeRequest
   sourceManifests: Uint8Array;
 
   /**
-   * Reactor specs to load on the bridge proxy server.
+   * ServerFacade specs to load on the bridge proxy server.
    *
-   * @generated from field: repeated bridge.v1.Reactor reactors = 7;
+   * @generated from field: repeated bridge.v1.ServerFacade server_facades = 7 [json_name = "server_facades"];
    */
-  reactors: Reactor[];
+  serverFacades: ServerFacade[];
+
+  /**
+   * The bridge name. Defaults to source_deployment when empty.
+   * Used as the value for the vercel.sh/bridge-name label.
+   *
+   * @generated from field: string name = 8;
+   */
+  name: string;
+
+  /**
+   * Optional metadata about the calling device.
+   *
+   * @generated from field: bridge.v1.DeviceInfo device_info = 9 [json_name = "device_info"];
+   */
+  deviceInfo?: DeviceInfo;
 };
 
 /**
@@ -132,6 +181,13 @@ export declare type CreateBridgeResponse = Message<"bridge.v1.CreateBridgeRespon
    * @generated from field: repeated int32 app_ports = 7;
    */
   appPorts: number[];
+
+  /**
+   * The bridge name (value of vercel.sh/bridge-name label).
+   *
+   * @generated from field: string name = 8;
+   */
+  name: string;
 };
 
 /**
@@ -152,6 +208,13 @@ export declare type ListBridgesRequest = Message<"bridge.v1.ListBridgesRequest">
    * @generated from field: string device_id = 1 [json_name = "device_id"];
    */
   deviceId: string;
+
+  /**
+   * Optional metadata about the calling device.
+   *
+   * @generated from field: bridge.v1.DeviceInfo device_info = 2 [json_name = "device_info"];
+   */
+  deviceInfo?: DeviceInfo;
 };
 
 /**
@@ -214,6 +277,13 @@ export declare type BridgeInfo = Message<"bridge.v1.BridgeInfo"> & {
    * @generated from field: string deployment_name = 7 [json_name = "deployment_name"];
    */
   deploymentName: string;
+
+  /**
+   * The bridge name (value of vercel.sh/bridge-name label).
+   *
+   * @generated from field: string name = 8;
+   */
+  name: string;
 };
 
 /**
@@ -266,6 +336,13 @@ export declare type DeleteBridgeRequest = Message<"bridge.v1.DeleteBridgeRequest
    * @generated from field: string namespace = 3;
    */
   namespace: string;
+
+  /**
+   * Optional metadata about the calling device.
+   *
+   * @generated from field: bridge.v1.DeviceInfo device_info = 4 [json_name = "device_info"];
+   */
+  deviceInfo?: DeviceInfo;
 };
 
 /**

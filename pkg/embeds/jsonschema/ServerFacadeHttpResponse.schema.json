@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "ReactorHttpResponse is a static HTTP response returned by a reactor route.",
+  "description": "ServerFacadeHttpResponse is a static HTTP response returned by a facade route.",
   "properties": {
     "body": {
       "description": "Response body. Marshalled as JSON and sent as the response.",
@@ -33,6 +33,6 @@
       "description": "HTTP status code."
     }
   },
-  "title": "Reactor Http Response",
+  "title": "Server Facade Http Response",
   "type": "object"
 }
