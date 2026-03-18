@@ -176,9 +176,9 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 
 	// Tear down any existing bridge for this source before creating a new one.
 	if req.Force {
-		if existing, err := resources.ListBridgeResources(ctx, l.client, targetNS, bridgeName, req.DeviceId); err == nil && len(existing.Resources) > 0 {
-			logger.Info("Tearing down existing bridge")
-			_ = resources.DeleteBridgeResources(ctx, l.client, targetNS, bridgeName, req.DeviceId)
+		if existing, err := l.findBridge(ctx, targetNS, bridgeName, req.DeviceId); err == nil {
+			logger.Info("Tearing down existing bridge", "existing_deployment", existing.Name)
+			_ = resources.DeleteBridgeResources(ctx, l.client, targetNS, existing.Name, req.DeviceId)
 		}
 	}
 
@@ -249,6 +249,10 @@ func (l *adminService) ListBridges(ctx context.Context, req *bridgev1.ListBridge
 		if d.Status.ReadyReplicas > 0 {
 			status = "running"
 		}
+		name := d.Labels[meta.LabelBridgeName]
+		if name == "" {
+			name = d.Name
+		}
 		bridges = append(bridges, &bridgev1.BridgeInfo{
 			DeviceId:         req.DeviceId,
 			SourceDeployment: d.Labels[meta.LabelWorkloadSource],
@@ -257,7 +261,7 @@ func (l *adminService) ListBridges(ctx context.Context, req *bridgev1.ListBridge
 			DeploymentName:   d.Name,
 			CreatedAt:        d.CreationTimestamp.Format(time.RFC3339),
 			Status:           status,
-			Name:             d.Labels[meta.LabelBridgeName],
+			Name:             name,
 		})
 	}
 
@@ -271,20 +275,20 @@ func (l *adminService) DeleteBridge(ctx context.Context, req *bridgev1.DeleteBri
 		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 
+	deploy, err := l.findBridge(ctx, "", req.Name, req.DeviceId)
+	if err != nil {
+		return nil, err
+	}
 	// Resolve namespace from the bridge if not provided.
 	ns := req.Namespace
 	if ns == "" {
-		deploy, err := l.findBridge(ctx, "", req.Name, req.DeviceId)
-		if err != nil {
-			return nil, err
-		}
 		ns = deploy.Namespace
 	}
 
-	slog.Info("Deleting bridge", "device_id", req.DeviceId, "namespace", ns, "name", req.Name)
+	slog.Info("Deleting bridge", "device_id", req.DeviceId, "namespace", ns, "deployment", deploy.Name)
 
-	if err := resources.DeleteBridgeResources(ctx, l.client, ns, req.Name, req.DeviceId); err != nil {
-		slog.Error("Failed to delete bridge", "device_id", req.DeviceId, "namespace", req.Namespace, "name", req.Name, "error", err)
+	if err := resources.DeleteBridgeResources(ctx, l.client, ns, deploy.Name, req.DeviceId); err != nil {
+		slog.Error("Failed to delete bridge", "device_id", req.DeviceId, "namespace", ns, "name", req.Name, "error", err)
 		return nil, err
 	}
 
@@ -292,18 +296,38 @@ func (l *adminService) DeleteBridge(ctx context.Context, req *bridgev1.DeleteBri
 }
 
 // findBridge locates a bridge deployment by label selector instead of direct Get.
+// It tries the vercel.sh/bridge-name label first, then falls back to matching
+// the deployment name for backwards compatibility with bridges created before
+// the bridge-name label existed.
 // If namespace is empty, searches across all namespaces.
-func (l *adminService) findBridge(ctx context.Context, namespace, bridgeName, deviceID string) (*appsv1.Deployment, error) {
+func (l *adminService) findBridge(ctx context.Context, namespace, name, deviceID string) (*appsv1.Deployment, error) {
+	// Try bridge-name label first.
 	deploys, err := l.client.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: meta.BridgeNameSelector(bridgeName, deviceID),
+		LabelSelector: meta.BridgeNameSelector(name, deviceID),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to find bridge: %w", err)
 	}
-	if len(deploys.Items) == 0 {
-		return nil, fmt.Errorf("no bridge named %q found", bridgeName)
+	if len(deploys.Items) > 0 {
+		return &deploys.Items[0], nil
 	}
-	return &deploys.Items[0], nil
+
+	// Fall back to matching by deployment name for bridges without the
+	// bridge-name label. List all bridge deployments for this device and
+	// find one whose k8s name matches.
+	deploys, err = l.client.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: meta.DeviceSelector(deviceID),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to find bridge: %w", err)
+	}
+	for i := range deploys.Items {
+		if deploys.Items[i].Name == name {
+			return &deploys.Items[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("no bridge named %q found", name)
 }
 
 // Close releases resources. No-op for local admin.

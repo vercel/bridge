@@ -511,14 +511,15 @@ data:
 	assert.Contains(t, err.Error(), "simulated deployment creation failure")
 
 	// Caller is responsible for cleanup; verify it works.
-	_ = DeleteBridgeResources(context.Background(), client, "default", sourceName, testDeviceID)
+	deployName := testDeployName(sourceName)
+	_ = DeleteBridgeResources(context.Background(), client, "default", deployName, testDeviceID)
 
 	var cleanedUp bool
 	for _, action := range client.Actions() {
 		if action.GetVerb() == "delete-collection" && action.GetResource().Resource == "configmaps" {
 			dc := action.(clienttesting.DeleteCollectionAction)
 			actualSel := dc.GetListRestrictions().Labels.String()
-			if strings.Contains(actualSel, meta.LabelBridgeName+"="+sourceName) &&
+			if strings.Contains(actualSel, meta.LabelBridgeDeployment+"="+deployName) &&
 				strings.Contains(actualSel, meta.LabelDeviceID+"="+testDeviceID) {
 				cleanedUp = true
 				break
