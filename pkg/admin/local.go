@@ -154,6 +154,9 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 		bridgeName = sourceName
 	}
 
+	// Rename the deployment to the bridge name so k8s resources are based on it.
+	resources.RenameDeployment(bundle, sourceName, bridgeName)
+
 	sourceNS := resources.FindNamespace(bundle)
 	if sourceNS == "" {
 		sourceNS = targetNS

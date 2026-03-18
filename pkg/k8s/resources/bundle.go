@@ -40,6 +40,16 @@ func FindDeploymentName(b *Bundle) string {
 	return ""
 }
 
+// RenameDeployment renames a Deployment in the bundle from oldName to newName.
+func RenameDeployment(b *Bundle, oldName, newName string) {
+	for _, r := range b.Resources {
+		if deploy, ok := r.Object.(*appsv1.Deployment); ok && deploy.Name == oldName {
+			deploy.Name = newName
+			return
+		}
+	}
+}
+
 // FindNamespace returns the namespace of the first Deployment in the bundle.
 // Returns an empty string if no Deployment is found or its namespace is unset.
 func FindNamespace(b *Bundle) string {
