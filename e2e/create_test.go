@@ -151,6 +151,37 @@ func (s *CreateSuite) runBridgeCreate(workspaceDir, bridgeName string, extraArgs
 	s.T().Log("bridge create completed")
 }
 
+// runBridgeRemove runs `bridge remove` for the given bridge name.
+func (s *CreateSuite) runBridgeRemove(bridgeName string) {
+	s.T().Helper()
+
+	adminAddr := fmt.Sprintf("k8spf:///%s.%s:9090", s.adminPod.Name, testutil.AdministratorNamespace)
+
+	app := commands.NewApp()
+	app.Reader = strings.NewReader("")
+	app.Writer = io.Discard
+
+	err := app.Run(s.ctx, []string{"bridge", "remove", bridgeName, "--yes", "--admin-addr", adminAddr})
+	s.Require().NoError(err, "bridge remove failed")
+	s.T().Logf("bridge remove %s completed", bridgeName)
+}
+
+// runBridgeExec runs `bridge exec <bridgeName> -- <cmd...>` and returns stdout.
+func (s *CreateSuite) runBridgeExec(bridgeName string, cmd ...string) string {
+	s.T().Helper()
+
+	var buf bytes.Buffer
+	app := commands.NewApp()
+	app.Writer = &buf
+
+	args := []string{"bridge", "exec", bridgeName, "--"}
+	args = append(args, cmd...)
+
+	err := app.Run(s.ctx, args)
+	s.Require().NoError(err, "bridge exec failed")
+	return buf.String()
+}
+
 func (s *CreateSuite) SetupSuite() {
 	if testing.Short() {
 		s.T().Skip("skipping e2e test in short mode")
@@ -519,6 +550,69 @@ func (s *CreateSuite) TestExec() {
 
 	require.NoError(t, execErr, "bridge exec failed")
 	require.Contains(t, buf.String(), "ok", "expected test server response from bridge exec")
+}
+
+// TestNameFlag verifies that --name creates a distinct bridge from the default.
+// Two bridges targeting the same source workload should be independent: removing
+// the first should not affect the second's ability to serve requests.
+func (s *CreateSuite) TestNameFlag() {
+	t := s.T()
+
+	dir := createWorkspace(t, s.bridgeBin, s.projectRoot, s.cluster)
+
+	_, err := identity.EnsureDeviceID()
+	require.NoError(t, err)
+
+	defaultName := testutil.UserserviceName
+	customName := "custom-bridge"
+
+	t.Cleanup(func() {
+		ct := container.NewDockerClient()
+		ct.StopAll(s.ctx, container.StopAllOpts{Labels: bridgeLabels(defaultName)})
+		ct.StopAll(s.ctx, container.StopAllOpts{Labels: bridgeLabels(customName)})
+	})
+
+	targetURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/",
+		testutil.UserserviceServiceName, testutil.UserserviceNamespace, testutil.UserservicePort)
+
+	// --- Create two bridges targeting the same source workload ---
+
+	s.runBridgeCreate(dir, defaultName)
+	s.runBridgeCreate(dir, defaultName, "--name", customName)
+
+	// Both should be listed as separate bridges.
+	getOut := s.runBridgeGet()
+	t.Logf("[bridge get]\n%s", getOut)
+	require.Contains(t, getOut, defaultName, "default bridge should be listed")
+	require.Contains(t, getOut, customName, "custom bridge should be listed")
+
+	// Verify the default bridge serves requests.
+	out1 := s.runBridgeExec(defaultName, "wget", "-q", "-O", "-", "-T", "10", targetURL)
+	require.Contains(t, out1, "ok", "default bridge should serve requests")
+
+	// Stop the default bridge's devcontainer so ports are freed.
+	container.NewDockerClient().StopAll(s.ctx, container.StopAllOpts{Labels: bridgeLabels(defaultName)})
+
+	// Remove the default bridge.
+	s.runBridgeRemove(defaultName)
+
+	// Verify only the custom bridge remains.
+	getOut = s.runBridgeGet()
+	t.Logf("[bridge get after remove]\n%s", getOut)
+	// Check the NAME column: each line starts with the bridge name.
+	lines := strings.Split(strings.TrimSpace(getOut), "\n")
+	var names []string
+	for _, line := range lines[1:] { // skip header
+		if name := strings.Fields(strings.TrimSpace(line)); len(name) > 0 {
+			names = append(names, name[0])
+		}
+	}
+	require.NotContains(t, names, defaultName, "default bridge should be gone")
+	require.Contains(t, names, customName, "custom bridge should still be listed")
+
+	// The custom bridge should still serve requests.
+	out2 := s.runBridgeExec(customName, "wget", "-q", "-O", "-", "-T", "10", targetURL)
+	require.Contains(t, out2, "ok", "custom bridge should serve requests after default is removed")
 }
 
 // runBridgeGet executes `bridge get` with the given extra args and returns

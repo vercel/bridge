@@ -109,23 +109,6 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 
 	suffix := "-" + identity.ShortDeviceID(req.DeviceId)
 
-	// Transforms applied to all bridge deployments.
-	transforms := []resources.Transformer{
-		resources.SetNamespace(targetNS),
-		resources.PruneAllMetadata(),
-		resources.StripOrphanedVolumes(),
-		resources.StripUnreferencedLabels(),
-		resources.InjectProxyImage(proxyImage),
-		resources.InjectServerFacades(req.GetServerFacades()),
-		resources.InjectCA(targetNS),
-		resources.ClearClusterIPs(),
-		resources.Rename(func(name string) string { return "bdg-" + name + suffix }),
-		resources.InjectLabels(),
-		resources.TransformSelectors(),
-		resources.RewriteRefs(),
-		resources.AppendBridgeService(targetNS),
-	}
-
 	var bundle *resources.Bundle
 	var err error
 
@@ -154,12 +137,31 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 		bridgeName = sourceName
 	}
 
-	// Rename the deployment to the bridge name so k8s resources are based on it.
-	resources.RenameDeployment(bundle, sourceName, bridgeName)
-
 	sourceNS := resources.FindNamespace(bundle)
 	if sourceNS == "" {
 		sourceNS = targetNS
+	}
+
+	// Transforms applied to all bridge deployments.
+	transforms := []resources.Transformer{
+		resources.SetNamespace(targetNS),
+		resources.PruneAllMetadata(),
+		resources.StripOrphanedVolumes(),
+		resources.StripUnreferencedLabels(),
+		resources.InjectProxyImage(proxyImage),
+		resources.InjectServerFacades(req.GetServerFacades()),
+		resources.InjectCA(targetNS),
+		resources.ClearClusterIPs(),
+		resources.Rename(func(name string) string {
+			if name == sourceName {
+				return "bdg-" + bridgeName + suffix
+			}
+			return "bdg-" + name + suffix
+		}),
+		resources.InjectLabels(),
+		resources.TransformSelectors(),
+		resources.RewriteRefs(),
+		resources.AppendBridgeService(targetNS),
 	}
 
 	tc := &resources.TransformContext{
