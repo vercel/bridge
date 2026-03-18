@@ -78,10 +78,14 @@ func listBridges(p interact.Printer, bridges []*bridgev1.BridgeInfo) error {
 		return nil
 	}
 
-	p.Println(fmt.Sprintf("%-30s %-10s %s", "NAME", "STATUS", "AGE"))
+	p.Printlnf("%-30s %-30s %-10s %s", "NAME", "SOURCE", "STATUS", "AGE")
 	for _, b := range bridges {
 		age := humanAge(b.CreatedAt)
-		p.Println(fmt.Sprintf("%-30s %-10s %s", b.Name, b.Status, age))
+		source := b.SourceDeployment
+		if b.SourceNamespace != "" {
+			source += "/" + b.SourceNamespace
+		}
+		p.Printlnf("%-30s %-30s %-10s %s", b.Name, source, b.Status, age)
 	}
 	return nil
 }
