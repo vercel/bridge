@@ -264,7 +264,7 @@ func checkDocker(ctx context.Context) error {
 
 func runCreate(ctx context.Context, c *cli.Command) error {
 	deploymentName := c.StringArg("workload_name")
-	bridgeName := c.String("name")
+	name := c.String("name")
 	sourceNamespace := c.String("namespace")
 	if sourceNamespace == "" {
 		sourceNamespace = currentKubeNamespace()
@@ -334,14 +334,13 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	}
 
 	// The expected bridge name: explicit --name flag, or default to workload name.
-	expectedName := bridgeName
-	if expectedName == "" {
-		expectedName = deploymentName
+	if name == "" {
+		name = deploymentName
 	}
 
-	if expectedName != "" && !yes {
+	if name != "" && !yes {
 		for _, bridge := range listResp.Bridges {
-			if bridge.Name == expectedName {
+			if bridge.Name == name {
 				sp.Stop()
 				p.Newline()
 				p.Warn("An existing bridge already exists:")
@@ -381,7 +380,7 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 		ProxyImage:       proxyImage,
 		SourceManifests:  sourceManifests,
 		ServerFacades:    facades,
-		Name:             bridgeName,
+		Name:             name,
 		DeviceInfo:       deviceInfo(),
 	})
 	sp.Stop()

@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/vercel/bridge/pkg/k8s/meta"
-
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -44,18 +42,14 @@ func SourceSimple(namespace, proxyImage string) (*Bundle, error) {
 	name := randomBridgeName()
 	replicas := int32(1)
 	podLabels := map[string]string{
-		meta.LabelBridgeType:       meta.BridgeTypeProxy,
-		meta.LabelBridgeDeployment: name,
+		"app": name,
 	}
 
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
-			Labels: map[string]string{
-				meta.LabelBridgeType:       meta.BridgeTypeProxy,
-				meta.LabelBridgeDeployment: name,
-			},
+			Labels:    podLabels,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
