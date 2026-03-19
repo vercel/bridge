@@ -18,6 +18,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"github.com/vercel/bridge/e2e/testutil"
 	"github.com/vercel/bridge/pkg/commands"
 	"github.com/vercel/bridge/pkg/container"
@@ -25,6 +26,7 @@ import (
 	"github.com/vercel/bridge/pkg/identity"
 	"github.com/vercel/bridge/pkg/intercept"
 	"github.com/vercel/bridge/pkg/k8s/meta"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 func bridgeLabels(name string) map[string]string {
@@ -488,18 +490,9 @@ spec:
 
 	// --- Verify bridge get lists the bridge ---
 
-	getOut := s.runBridgeGet()
-	t.Logf("[bridge get] output:\n%s", getOut)
-	lines := strings.Split(strings.TrimSpace(getOut), "\n")
-	require.GreaterOrEqual(t, len(lines), 2, "expected header + at least 1 bridge entry")
-	var found bool
-	for _, line := range lines[1:] {
-		if strings.HasPrefix(strings.TrimSpace(line), bridgeName) {
-			found = true
-			break
-		}
-	}
-	require.True(t, found, "expected bridge %q in output:\n%s", bridgeName, getOut)
+	bridgeNames := s.runBridgeGet()
+	t.Logf("[bridge get] names: %v", bridgeNames)
+	require.Contains(t, bridgeNames, bridgeName, "expected bridge %q in get output", bridgeName)
 }
 
 // TestExec verifies the `bridge exec` flow: first creates k8s resources via
@@ -581,10 +574,10 @@ func (s *CreateSuite) TestNameFlag() {
 	s.runBridgeCreate(dir, defaultName, "--name", customName)
 
 	// Both should be listed as separate bridges.
-	getOut := s.runBridgeGet()
-	t.Logf("[bridge get]\n%s", getOut)
-	require.Contains(t, getOut, defaultName, "default bridge should be listed")
-	require.Contains(t, getOut, customName, "custom bridge should be listed")
+	names := s.runBridgeGet()
+	t.Logf("[bridge get] names: %v", names)
+	require.Contains(t, names, defaultName, "default bridge should be listed")
+	require.Contains(t, names, customName, "custom bridge should be listed")
 
 	// Verify the default bridge serves requests.
 	out1 := s.runBridgeExec(defaultName, "wget", "-q", "-O", "-", "-T", "10", targetURL)
@@ -597,16 +590,8 @@ func (s *CreateSuite) TestNameFlag() {
 	s.runBridgeRemove(defaultName)
 
 	// Verify only the custom bridge remains.
-	getOut = s.runBridgeGet()
-	t.Logf("[bridge get after remove]\n%s", getOut)
-	// Check the NAME column: each line starts with the bridge name.
-	lines := strings.Split(strings.TrimSpace(getOut), "\n")
-	var names []string
-	for _, line := range lines[1:] { // skip header
-		if name := strings.Fields(strings.TrimSpace(line)); len(name) > 0 {
-			names = append(names, name[0])
-		}
-	}
+	names = s.runBridgeGet()
+	t.Logf("[bridge get after remove] names: %v", names)
 	require.NotContains(t, names, defaultName, "default bridge should be gone")
 	require.Contains(t, names, customName, "custom bridge should still be listed")
 
@@ -615,21 +600,32 @@ func (s *CreateSuite) TestNameFlag() {
 	require.Contains(t, out2, "ok", "custom bridge should serve requests after default is removed")
 }
 
-// runBridgeGet executes `bridge get` with the given extra args and returns
-// the captured stdout. It uses the admin-addr derived from the administrator
-// pod deployed by SetupSuite.
-func (s *CreateSuite) runBridgeGet(extraArgs ...string) string {
+// runBridgeGet executes `bridge get --quiet` and returns the bridge names
+// from the JSON command result envelope.
+func (s *CreateSuite) runBridgeGet() []string {
 	s.T().Helper()
 
 	var buf bytes.Buffer
 	app := commands.NewApp()
 	app.Writer = &buf
 
-	args := []string{"bridge", "get"}
-	args = append(args, extraArgs...)
+	args := []string{"bridge", "--quiet", "get",
+		"--admin-addr", fmt.Sprintf("k8spf:///%s.%s:9090", s.adminPod.Name, testutil.AdministratorNamespace),
+	}
 
 	require.NoError(s.T(), app.Run(s.ctx, args), "bridge get failed")
-	return buf.String()
+
+	var result bridgev1.CommandResult
+	require.NoError(s.T(), protojson.Unmarshal(buf.Bytes(), &result), "failed to parse bridge get output")
+	require.Empty(s.T(), result.GetError(), "bridge get returned error")
+
+	// The response Value is a struct with a "bridges" field.
+	bridges := result.GetResponse().GetStructValue().GetFields()["bridges"].GetListValue().GetValues()
+	var names []string
+	for _, v := range bridges {
+		names = append(names, v.GetStructValue().GetFields()["name"].GetStringValue())
+	}
+	return names
 }
 
 // TestCreateFailsMissingBinary verifies that bridge create --connect fails
