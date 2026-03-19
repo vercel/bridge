@@ -203,6 +203,7 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 	pod, err := kube.WaitForPod(ctx, l.client, targetNS, meta.DeploymentSelector(deployName), 2*time.Minute)
 	if err != nil {
 		logger.Error("Pod failed to become ready", "deployment", deployName, "error", err)
+		_ = resources.DeleteBridgeResources(ctx, l.client, targetNS, deployName, req.DeviceId)
 		return nil, fmt.Errorf("failed waiting for pod: %w", err)
 	}
 
