@@ -110,7 +110,7 @@ func (s *CreateSuite) newBridgeCreateApp(reader io.Reader, writer io.Writer, wor
 	app.Reader = reader
 	app.Writer = writer
 
-	args := []string{"bridge", "--output=pretty", "create"}
+	args := []string{"bridge", "create"}
 	args = append(args, extraArgs...)
 	args = append(args,
 		"-n", testutil.UserserviceNamespace,
@@ -134,7 +134,7 @@ func (s *CreateSuite) runBridgeCreate(workspaceDir, bridgeName string, extraArgs
 	createApp.Reader = strings.NewReader("")
 	createApp.Writer = io.Discard
 
-	args := []string{"bridge", "--output=pretty", "create", bridgeName}
+	args := []string{"bridge", "create", bridgeName}
 	args = append(args, extraArgs...)
 	args = append(args,
 		"-n", testutil.UserserviceNamespace,
@@ -161,7 +161,7 @@ func (s *CreateSuite) runBridgeRemove(bridgeName string) {
 	app.Reader = strings.NewReader("")
 	app.Writer = io.Discard
 
-	err := app.Run(s.ctx, []string{"bridge", "--output=pretty", "remove", bridgeName, "--yes", "--admin-addr", adminAddr})
+	err := app.Run(s.ctx, []string{"bridge", "remove", bridgeName, "--yes", "--admin-addr", adminAddr})
 	s.Require().NoError(err, "bridge remove failed")
 	s.T().Logf("bridge remove %s completed", bridgeName)
 }
@@ -174,7 +174,7 @@ func (s *CreateSuite) runBridgeExec(bridgeName string, cmd ...string) string {
 	app := commands.NewApp()
 	app.Writer = &buf
 
-	args := []string{"bridge", "--output=pretty", "exec", bridgeName, "--"}
+	args := []string{"bridge", "exec", bridgeName, "--"}
 	args = append(args, cmd...)
 
 	err := app.Run(s.ctx, args)
@@ -477,7 +477,7 @@ spec:
 	execApp.Writer = &buf
 
 	execArgs := []string{
-		"bridge", "--output=pretty", "exec",
+		"bridge", "exec",
 		bridgeName,
 		"--", "wget", "-O", "-", "-T", "10", targetURL,
 	}
@@ -541,7 +541,7 @@ func (s *CreateSuite) TestExec() {
 	execApp.Writer = &buf
 
 	execArgs := []string{
-		"bridge", "--output=pretty", "exec",
+		"bridge", "exec",
 		bridgeName,
 		"--", "wget", "-O", "-", "-T", "10", targetURL,
 	}
@@ -625,7 +625,7 @@ func (s *CreateSuite) runBridgeGet(extraArgs ...string) string {
 	app := commands.NewApp()
 	app.Writer = &buf
 
-	args := []string{"bridge", "--output=pretty", "get"}
+	args := []string{"bridge", "get"}
 	args = append(args, extraArgs...)
 
 	require.NoError(s.T(), app.Run(s.ctx, args), "bridge get failed")
@@ -669,7 +669,7 @@ func TestCreateFailsMissingBinary(t *testing.T) {
 	app.Writer = io.Discard
 
 	err = app.Run(context.Background(), []string{
-		"bridge", "--output=pretty", "create", "fake-deploy",
+		"bridge", "create", "fake-deploy",
 		"-n", "default",
 		"--yes",
 		"--connect",
@@ -714,19 +714,19 @@ func (s *CreateSuite) TestServerFacade() {
 
 	// Pre-warm DNS: ensure bridge DNS is resolving google.com through the tunnel.
 	execApp.Writer = io.Discard
-	_ = execApp.Run(s.ctx, []string{"bridge", "--output=pretty", "exec", bridgeName, "--", "nslookup", "google.com", "127.0.0.1"})
+	_ = execApp.Run(s.ctx, []string{"bridge", "exec", bridgeName, "--", "nslookup", "google.com", "127.0.0.1"})
 
 	time.Sleep(1 * time.Second)
 
 	// Verify DNS is resolving through bridge.
 	var buf bytes.Buffer
 	execApp.Writer = &buf
-	_ = execApp.Run(s.ctx, []string{"bridge", "--output=pretty", "exec", bridgeName, "--", "nslookup", "google.com"})
+	_ = execApp.Run(s.ctx, []string{"bridge", "exec", bridgeName, "--", "nslookup", "google.com"})
 	t.Logf("[nslookup] output: %s", strings.TrimSpace(buf.String()))
 
 	// Verify /mocked returns the facade response.
 	buf.Reset()
-	mockedErr := execApp.Run(s.ctx, []string{"bridge", "--output=pretty", "exec", bridgeName, "--", "wget", "-O", "-", "-T", "10", "http://google.com/mocked"})
+	mockedErr := execApp.Run(s.ctx, []string{"bridge", "exec", bridgeName, "--", "wget", "-O", "-", "-T", "10", "http://google.com/mocked"})
 	t.Logf("[wget /mocked] output: %s", strings.TrimSpace(buf.String()))
 	require.NoError(t, mockedErr, "wget /mocked failed")
 	require.Contains(t, buf.String(), "bridge-facade", "expected facade mock response")
@@ -734,7 +734,7 @@ func (s *CreateSuite) TestServerFacade() {
 	// --- Verify passthrough: / forwards to real google.com ---
 
 	buf.Reset()
-	realErr := execApp.Run(s.ctx, []string{"bridge", "--output=pretty", "exec", bridgeName, "--", "wget", "-O", "-", "-T", "10", "http://google.com/"})
+	realErr := execApp.Run(s.ctx, []string{"bridge", "exec", bridgeName, "--", "wget", "-O", "-", "-T", "10", "http://google.com/"})
 	t.Logf("[wget /] output_len: %d", buf.Len())
 	require.NoError(t, realErr, "wget / failed")
 	require.Contains(t, strings.ToLower(buf.String()), "<html", "expected HTML from real google.com")
