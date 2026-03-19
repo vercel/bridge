@@ -81,12 +81,16 @@ Profiles:
       "$schema": "https://raw.githubusercontent.com/vercel/bridge/main/api/jsonschema/ServerFacade.schema.json",
       "host": "example.com",
       "routes": [...]
-    }`
+    }
+
+Output:
+  With --output=json, emits a CommandResult envelope (see "bridge --help").
+  Run "bridge schema create-response" for the response payload schema.`
 
 // Create returns the CLI command for creating a bridge.
 func Create() *cli.Command {
 	usageText := createUsageText
-	if interact.IsAgent() {
+	if interact.IsJSON() {
 		usageText = createAgentUsageText
 	}
 	return &cli.Command{
@@ -102,7 +106,7 @@ func Create() *cli.Command {
 				Name:    "connect",
 				Aliases: []string{"c"},
 				Usage:   "Start the devcontainer and exec into it after creation",
-				Hidden:  interact.IsAgent(),
+				Hidden:  interact.IsJSON(),
 			},
 			&cli.StringFlag{
 				Name:    "namespace",
@@ -120,7 +124,7 @@ func Create() *cli.Command {
 				Name:    "yes",
 				Aliases: []string{"y"},
 				Usage:   "Auto-accept all confirmation prompts",
-				Hidden:  interact.IsAgent(),
+				Hidden:  interact.IsJSON(),
 			},
 			&cli.StringFlag{
 				Name:    "devcontainer-config",
@@ -169,7 +173,7 @@ func Create() *cli.Command {
 			&cli.StringFlag{
 				Name:    "devcontainer-up-args",
 				Usage:   "Additional arguments to pass to devcontainer up (e.g. \"--rebuild\")",
-				Hidden:  interact.IsAgent(),
+				Hidden:  interact.IsJSON(),
 				Sources: cli.EnvVars("BRIDGE_DEVCONTAINER_UP_ARGS"),
 			},
 		},
@@ -271,11 +275,12 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	}
 	adminAddr := c.String("admin-addr")
 	connectFlag := c.Bool("connect")
-	yes := c.Bool("yes") || interact.IsAgent()
+	yes := c.Bool("yes") || interact.IsJSON()
 	proxyImage := c.String("proxy-image")
 	featureRef := c.String("feature-ref")
 	containerBinaryPath := c.String("container-binary-path")
 	sourcePath := c.String("source")
+	outputFlag := interact.GetOutputFormat()
 
 	r := c.Root().Reader
 	w := c.Root().Writer
@@ -427,6 +432,27 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	absDCConfigPath, _ := filepath.Abs(dcConfigPath)
 	if err := session.Save(createResp.Name, absDCConfigPath); err != nil {
 		slog.Warn("Failed to save session", "error", err)
+	}
+
+	if outputFlag == interact.OutputJSON && !connectFlag {
+		ports := map[string]int32{
+			"app":       int32(appPort),
+			"intercept": int32(interceptPort),
+		}
+		for _, ap := range createResp.AppPorts {
+			key := fmt.Sprintf("%d", ap)
+			if _, exists := ports[key]; !exists {
+				ports[key] = ap
+			}
+		}
+		resp := &bridgev1.CreateCommandResponse{
+			AppPort:                int32(appPort),
+			DevcontainerConfigPath: absDCConfigPath,
+			BridgeName:             createResp.Name,
+			SourceDeployment:       deploymentName,
+			Ports:                  ports,
+		}
+		return writeResult(w, resp, "")
 	}
 
 	if connectFlag {
@@ -748,7 +774,7 @@ func startDevcontainer(ctx context.Context, w io.Writer, ct container.Client, dc
 
 	// Start devcontainer and stream build output.
 	upOpts := devcontainer.UpOpts{}
-	if interact.IsAgent() {
+	if interact.IsJSON() {
 		upOpts.LogFormat = devcontainer.LogFormatJSON
 	}
 	proc, err := dcClient.Up(ctx, upOpts)

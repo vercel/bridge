@@ -86,7 +86,7 @@ func runAdministrator(ctx context.Context, c *cli.Command) error {
 	// Default log output to stdout so logs are visible in container environments.
 	if len(c.Root().StringSlice("log-paths")) == 0 {
 		level := parseLogLevel(c.Root().String("log-level"))
-		logging.Setup(level, []string{"stdout"})
+		logging.Setup(level, []string{"stdout"}, c.Root().Writer, c.Root().ErrWriter)
 	}
 
 	addr := c.String("addr")

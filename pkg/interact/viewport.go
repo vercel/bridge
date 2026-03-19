@@ -33,18 +33,6 @@ type ViewportOpts struct {
 	MaxLines int
 }
 
-// NewViewport returns the appropriate Viewport for the current environment.
-func NewViewport(w io.Writer, opts ViewportOpts) Viewport {
-	maxLines := opts.MaxLines
-	if maxLines <= 0 {
-		maxLines = defaultViewportLines
-	}
-	if IsAgent() {
-		return &plainViewport{w: w, title: opts.Title}
-	}
-	return &prettyViewport{w: w, title: opts.Title, maxLines: maxLines}
-}
-
 // --- pretty (interactive viewport) ---
 
 type prettyViewport struct {

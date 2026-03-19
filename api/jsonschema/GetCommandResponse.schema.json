@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "GetCommandResponse is the structured output emitted by the \"get\" command\n when running in JSON output mode.",
+  "properties": {
+    "bridges": {
+      "items": {
+        "additionalProperties": false,
+        "description": "GetCommandResponseBridge describes a single bridge in the get command output.",
+        "properties": {
+          "created_at": {
+            "default": "",
+            "description": "When the bridge was created (RFC 3339).",
+            "type": "string"
+          },
+          "deployment_name": {
+            "default": "",
+            "description": "The name of the bridge Deployment.",
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "description": "The bridge name.",
+            "type": "string"
+          },
+          "namespace": {
+            "default": "",
+            "description": "The namespace where the bridge is running.",
+            "type": "string"
+          },
+          "source_deployment": {
+            "default": "",
+            "description": "The source deployment this bridge was cloned from.",
+            "type": "string"
+          },
+          "source_namespace": {
+            "default": "",
+            "description": "The source namespace of the deployment.",
+            "type": "string"
+          },
+          "status": {
+            "default": "",
+            "description": "Current status of the bridge.",
+            "type": "string"
+          }
+        },
+        "title": "Get Command Response Bridge",
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "title": "Get Command Response",
+  "type": "object"
+}

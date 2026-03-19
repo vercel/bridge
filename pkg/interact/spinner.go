@@ -2,8 +2,7 @@ package interact
 
 import (
 	"context"
-	"fmt"
-	"io"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -54,29 +53,31 @@ var bridgeFrames = bubbles.Spinner{
 
 // prettySpinner displays an animated spinner with a title in the terminal.
 type prettySpinner struct {
-	title *atomic.Value
+	title atomic.Pointer[string]
 	prog  *tea.Program
 	done  chan struct{}
 }
 
 // NewPrettySpinner creates a new animated spinner. Call Start to display it.
 func NewPrettySpinner(title string) Spinner {
-	t := &atomic.Value{}
-	t.Store(title)
-	return &prettySpinner{title: t}
+	s := &prettySpinner{}
+	s.title.Store(&title)
+	return s
 }
 
 func (s *prettySpinner) SetTitle(title string) {
-	s.title.Store(title)
+	s.title.Store(&title)
+	slog.Debug("spinner: set title", "title", title)
 }
 
 func (s *prettySpinner) Start(ctx context.Context) {
+	slog.Debug("spinner: start", "title", *s.title.Load())
 	s.done = make(chan struct{})
 
 	theme := NewTheme()
 	model := &spinnerModel{
 		spinner:    bubbles.New(bubbles.WithSpinner(bridgeFrames), bubbles.WithStyle(theme.Spinner)),
-		title:      s.title,
+		title:      &s.title,
 		titleStyle: theme.Muted,
 	}
 
@@ -90,47 +91,11 @@ func (s *prettySpinner) Start(ctx context.Context) {
 
 func (s *prettySpinner) Stop() {
 	if s.prog != nil {
+		slog.Debug("spinner: stop", "title", *s.title.Load())
 		s.prog.Send(stopMsg{})
 		<-s.done
 		s.prog = nil
 	}
-}
-
-// plainSpinner prints the title with "..." and does not animate.
-type plainSpinner struct {
-	w     io.Writer
-	title *atomic.Value
-	done  chan struct{}
-}
-
-// NewPlainSpinner creates a non-animated spinner for agent output.
-func NewPlainSpinner(w io.Writer, title string) Spinner {
-	t := &atomic.Value{}
-	t.Store(title)
-	return &plainSpinner{w: w, title: t}
-}
-
-func (s *plainSpinner) SetTitle(title string) {
-	s.title.Store(title)
-	fmt.Fprintf(s.w, "%s...\n", title)
-}
-
-func (s *plainSpinner) Start(_ context.Context) {
-	s.done = make(chan struct{})
-	t, _ := s.title.Load().(string)
-	fmt.Fprintf(s.w, "%s...\n", t)
-}
-
-func (s *plainSpinner) Stop() {
-	if s.done == nil {
-		return
-	}
-	select {
-	case <-s.done:
-	default:
-		close(s.done)
-	}
-	s.done = nil
 }
 
 type stopMsg struct{}
@@ -141,7 +106,7 @@ type minTimeMsg struct{}
 
 type spinnerModel struct {
 	spinner        bubbles.Model
-	title          *atomic.Value
+	title          *atomic.Pointer[string]
 	titleStyle     lipgloss.Style
 	stopped        bool
 	minTimeElapsed bool
@@ -181,6 +146,5 @@ func (m *spinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *spinnerModel) View() string {
-	t, _ := m.title.Load().(string)
-	return m.spinner.View() + m.titleStyle.Render(t)
+	return m.spinner.View() + m.titleStyle.Render(*m.title.Load())
 }

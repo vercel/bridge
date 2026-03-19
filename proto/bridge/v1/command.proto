@@ -1,0 +1,119 @@
+syntax = "proto3";
+
+package bridge.v1;
+
+import "google/protobuf/struct.proto";
+
+// CommandResultOutcome wraps the outcome enum so values serialize as
+// "success" and "error" without a package prefix.
+message CommandResultOutcome {
+  // buf:lint:ignore ENUM_VALUE_PREFIX
+  // buf:lint:ignore ENUM_ZERO_VALUE_SUFFIX
+  // buf:lint:ignore ENUM_VALUE_UPPER_SNAKE_CASE
+  enum Enum {
+    unspecified = 0;
+    success = 1;
+    error = 2;
+  }
+}
+
+// CommandResult is the envelope for all JSON-mode command output.
+// On success, response contains the command-specific payload.
+// On failure, error contains the error message.
+message CommandResult {
+  // Whether the command succeeded or failed.
+  CommandResultOutcome.Enum outcome = 1;
+
+  // Error message. Absent on success.
+  optional string error = 2;
+
+  // Command-specific response payload. Absent on error.
+  optional google.protobuf.Value response = 3;
+}
+
+// CreateCommandPayload represents the flags for the "create" command.
+// Used both as the CEL evaluation context and as the flag values to apply.
+message CreateCommandPayload {
+  // Positional argument: name of the target workload (defaults to a Deployment).
+  string workload_name = 1 [json_name = "workload_name"];
+
+  // --namespace / -n: target namespace of the source deployment.
+  string namespace = 2;
+
+  // --server-facade: server facade specs (JSON string or file path). Repeated.
+  repeated string server_facades = 3 [json_name = "server_facades"];
+
+  // --source / -s: path to Kubernetes manifests (folder, glob, or YAML file).
+  string source = 4;
+
+  // --listen / -l: port the app listens on.
+  int32 listen = 5;
+
+  // --connect / -c: start the devcontainer and exec into it after creation.
+  bool connect = 6;
+
+  // --devcontainer-config / -f: path to a base devcontainer.json to extend.
+  string devcontainer_config = 7 [json_name = "devcontainer_config"];
+
+  // --devcontainer-up-args: additional arguments passed to devcontainer up.
+  string devcontainer_up_args = 8 [json_name = "devcontainer_up_args"];
+
+  // --name: bridge name (defaults to workload_name).
+  string name = 9;
+}
+
+// CreateCommandResponse is the structured output emitted by the "create"
+// command when running in agent mode without --connect.
+message CreateCommandResponse {
+  // The port the application listens on.
+  int32 app_port = 1 [json_name = "app_port"];
+
+  // Absolute path to the generated devcontainer.json.
+  string devcontainer_config_path = 2 [json_name = "devcontainer_config_path"];
+
+  // The bridge name.
+  string bridge_name = 3 [json_name = "bridge_name"];
+
+  // The source deployment name.
+  string source_deployment = 4 [json_name = "source_deployment"];
+
+  // Port mappings: key is the label (e.g. "app", "intercept"), value is the port number.
+  map<string, int32> ports = 5;
+}
+
+// GetCommandResponseBridge describes a single bridge in the get command output.
+message GetCommandResponseBridge {
+  // The bridge name.
+  string name = 1;
+
+  // The source deployment this bridge was cloned from.
+  string source_deployment = 2 [json_name = "source_deployment"];
+
+  // The source namespace of the deployment.
+  string source_namespace = 3 [json_name = "source_namespace"];
+
+  // The namespace where the bridge is running.
+  string namespace = 4;
+
+  // When the bridge was created (RFC 3339).
+  string created_at = 5 [json_name = "created_at"];
+
+  // Current status of the bridge.
+  string status = 6;
+
+  // The name of the bridge Deployment.
+  string deployment_name = 7 [json_name = "deployment_name"];
+}
+
+// GetCommandResponse is the structured output emitted by the "get" command
+// when running in JSON output mode.
+message GetCommandResponse {
+  repeated GetCommandResponseBridge bridges = 1;
+}
+
+// RemoveCommandResponse is the structured output emitted by the "remove"
+// command when running in JSON output mode.
+message RemoveCommandResponse {
+  // Names of bridges that were successfully removed.
+  repeated string removed = 1;
+}

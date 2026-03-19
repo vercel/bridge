@@ -17,6 +17,8 @@ func Get() *cli.Command {
 	return &cli.Command{
 		Name:  "get",
 		Usage: "List or inspect running bridges",
+		UsageText: `With --output=json, emits a CommandResult envelope (see "bridge --help").
+Run "bridge schema get-response" for the response payload schema.`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "admin-addr",
@@ -64,6 +66,22 @@ func runGet(ctx context.Context, c *cli.Command) error {
 	listResp, err := adm.ListBridges(ctx, &bridgev1.ListBridgesRequest{DeviceId: deviceID, DeviceInfo: deviceInfo()})
 	if err != nil {
 		return fmt.Errorf("failed to list bridges: %w", err)
+	}
+
+	if interact.IsJSON() {
+		resp := &bridgev1.GetCommandResponse{}
+		for _, b := range listResp.Bridges {
+			resp.Bridges = append(resp.Bridges, &bridgev1.GetCommandResponseBridge{
+				Name:             b.Name,
+				SourceDeployment: b.SourceDeployment,
+				SourceNamespace:  b.SourceNamespace,
+				Namespace:        b.Namespace,
+				CreatedAt:        b.CreatedAt,
+				Status:           b.Status,
+				DeploymentName:   b.DeploymentName,
+			})
+		}
+		return writeResult(w, resp, "")
 	}
 
 	if name == "" {

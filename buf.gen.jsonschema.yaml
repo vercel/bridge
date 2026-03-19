@@ -7,3 +7,4 @@ inputs:
     paths:
       - proto/bridge/v1/server_facade.proto
       - proto/bridge/v1/profile.proto
+      - proto/bridge/v1/command.proto

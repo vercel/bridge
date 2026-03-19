@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "CreateCommandResponse is the structured output emitted by the \"create\"\n command when running in agent mode without --connect.",
+  "properties": {
+    "app_port": {
+      "anyOf": [
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        {
+          "pattern": "^-?[0-9]+$",
+          "type": "string"
+        }
+      ],
+      "default": 0,
+      "description": "The port the application listens on."
+    },
+    "bridge_name": {
+      "default": "",
+      "description": "The bridge name.",
+      "type": "string"
+    },
+    "devcontainer_config_path": {
+      "default": "",
+      "description": "Absolute path to the generated devcontainer.json.",
+      "type": "string"
+    },
+    "ports": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "maximum": 2147483647,
+            "minimum": -2147483648,
+            "type": "integer"
+          },
+          {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          }
+        ]
+      },
+      "description": "Port mappings: key is the label (e.g. \"app\", \"intercept\"), value is the port number.",
+      "propertyNames": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "source_deployment": {
+      "default": "",
+      "description": "The source deployment name.",
+      "type": "string"
+    }
+  },
+  "title": "Create Command Response",
+  "type": "object"
+}

@@ -4,6 +4,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
+import type { CreateCommandPayload } from "./command_pb";
 
 /**
  * Describes the file bridge/v1/profile.proto.
@@ -75,81 +76,4 @@ export declare type CreateCommandProfile = Message<"bridge.v1.CreateCommandProfi
  * Use `create(CreateCommandProfileSchema)` to create a new message.
  */
 export declare const CreateCommandProfileSchema: GenMessage<CreateCommandProfile>;
-
-/**
- * CreateCommandPayload represents the flags for the "create" command.
- * Used both as the CEL evaluation context and as the flag values to apply.
- *
- * @generated from message bridge.v1.CreateCommandPayload
- */
-export declare type CreateCommandPayload = Message<"bridge.v1.CreateCommandPayload"> & {
-  /**
-   * Positional argument: name of the target workload (defaults to a Deployment).
-   *
-   * @generated from field: string workload_name = 1 [json_name = "workload_name"];
-   */
-  workloadName: string;
-
-  /**
-   * --namespace / -n: target namespace of the source deployment.
-   *
-   * @generated from field: string namespace = 2;
-   */
-  namespace: string;
-
-  /**
-   * --server-facade: server facade specs (JSON string or file path). Repeated.
-   *
-   * @generated from field: repeated string server_facades = 3 [json_name = "server_facades"];
-   */
-  serverFacades: string[];
-
-  /**
-   * --source / -s: path to Kubernetes manifests (folder, glob, or YAML file).
-   *
-   * @generated from field: string source = 4;
-   */
-  source: string;
-
-  /**
-   * --listen / -l: port the app listens on.
-   *
-   * @generated from field: int32 listen = 5;
-   */
-  listen: number;
-
-  /**
-   * --connect / -c: start the devcontainer and exec into it after creation.
-   *
-   * @generated from field: bool connect = 6;
-   */
-  connect: boolean;
-
-  /**
-   * --devcontainer-config / -f: path to a base devcontainer.json to extend.
-   *
-   * @generated from field: string devcontainer_config = 7 [json_name = "devcontainer_config"];
-   */
-  devcontainerConfig: string;
-
-  /**
-   * --devcontainer-up-args: additional arguments passed to devcontainer up.
-   *
-   * @generated from field: string devcontainer_up_args = 8 [json_name = "devcontainer_up_args"];
-   */
-  devcontainerUpArgs: string;
-
-  /**
-   * --name: bridge name (defaults to workload_name).
-   *
-   * @generated from field: string name = 9;
-   */
-  name: string;
-};
-
-/**
- * Describes the message bridge.v1.CreateCommandPayload.
- * Use `create(CreateCommandPayloadSchema)` to create a new message.
- */
-export declare const CreateCommandPayloadSchema: GenMessage<CreateCommandPayload>;
 

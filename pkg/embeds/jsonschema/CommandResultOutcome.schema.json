@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "CommandResultOutcome wraps the outcome enum so values serialize as\n \"success\" and \"error\" without a package prefix.",
+  "properties": {},
+  "title": "Command Result Outcome",
+  "type": "object"
+}

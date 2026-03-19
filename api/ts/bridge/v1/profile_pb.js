@@ -3,13 +3,14 @@
 /* eslint-disable */
 
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import { file_bridge_v1_command } from "./command_pb";
 import { file_buf_validate_validate } from "../../buf/validate/validate_pb";
 
 /**
  * Describes the file bridge/v1/profile.proto.
  */
 export const file_bridge_v1_profile = /*@__PURE__*/
-  fileDesc("ChdicmlkZ2UvdjEvcHJvZmlsZS5wcm90bxIJYnJpZGdlLnYxIjoKB1Byb2ZpbGUSLwoGY3JlYXRlGAEgAygLMh8uYnJpZGdlLnYxLkNyZWF0ZUNvbW1hbmRQcm9maWxlImsKFENyZWF0ZUNvbW1hbmRQcm9maWxlEhkKBW1hdGNoGAEgASgJQgq6SAfIAQFyAhABEjgKB2NvbW1hbmQYAiABKAsyHy5icmlkZ2UudjEuQ3JlYXRlQ29tbWFuZFBheWxvYWRCBrpIA8gBASKcAgoUQ3JlYXRlQ29tbWFuZFBheWxvYWQSJAoNd29ya2xvYWRfbmFtZRgBIAEoCVINd29ya2xvYWRfbmFtZRIRCgluYW1lc3BhY2UYAiABKAkSJgoOc2VydmVyX2ZhY2FkZXMYAyADKAlSDnNlcnZlcl9mYWNhZGVzEg4KBnNvdXJjZRgEIAEoCRIOCgZsaXN0ZW4YBSABKAUSDwoHY29ubmVjdBgGIAEoCBIwChNkZXZjb250YWluZXJfY29uZmlnGAcgASgJUhNkZXZjb250YWluZXJfY29uZmlnEjIKFGRldmNvbnRhaW5lcl91cF9hcmdzGAggASgJUhRkZXZjb250YWluZXJfdXBfYXJncxIMCgRuYW1lGAkgASgJQpYBCg1jb20uYnJpZGdlLnYxQgxQcm9maWxlUHJvdG9QAVoyZ2l0aHViLmNvbS92ZXJjZWwvYnJpZGdlL2FwaS9nby9icmlkZ2UvdjE7YnJpZGdldjGiAgNCWFiqAglCcmlkZ2UuVjHKAglCcmlkZ2VcVjHiAhVCcmlkZ2VcVjFcR1BCTWV0YWRhdGHqAgpCcmlkZ2U6OlYxYgZwcm90bzM", [file_buf_validate_validate]);
+  fileDesc("ChdicmlkZ2UvdjEvcHJvZmlsZS5wcm90bxIJYnJpZGdlLnYxIjoKB1Byb2ZpbGUSLwoGY3JlYXRlGAEgAygLMh8uYnJpZGdlLnYxLkNyZWF0ZUNvbW1hbmRQcm9maWxlImsKFENyZWF0ZUNvbW1hbmRQcm9maWxlEhkKBW1hdGNoGAEgASgJQgq6SAfIAQFyAhABEjgKB2NvbW1hbmQYAiABKAsyHy5icmlkZ2UudjEuQ3JlYXRlQ29tbWFuZFBheWxvYWRCBrpIA8gBAUKWAQoNY29tLmJyaWRnZS52MUIMUHJvZmlsZVByb3RvUAFaMmdpdGh1Yi5jb20vdmVyY2VsL2JyaWRnZS9hcGkvZ28vYnJpZGdlL3YxO2JyaWRnZXYxogIDQlhYqgIJQnJpZGdlLlYxygIJQnJpZGdlXFYx4gIVQnJpZGdlXFYxXEdQQk1ldGFkYXRh6gIKQnJpZGdlOjpWMWIGcHJvdG8z", [file_bridge_v1_command, file_buf_validate_validate]);
 
 /**
  * Describes the message bridge.v1.Profile.
@@ -24,11 +25,4 @@ export const ProfileSchema = /*@__PURE__*/
  */
 export const CreateCommandProfileSchema = /*@__PURE__*/
   messageDesc(file_bridge_v1_profile, 1);
-
-/**
- * Describes the message bridge.v1.CreateCommandPayload.
- * Use `create(CreateCommandPayloadSchema)` to create a new message.
- */
-export const CreateCommandPayloadSchema = /*@__PURE__*/
-  messageDesc(file_bridge_v1_profile, 2);
 

@@ -21,6 +21,8 @@ func Remove() *cli.Command {
 		Name:    "remove",
 		Aliases: []string{"rm", "delete"},
 		Usage:   "Tear down a running bridge",
+		Description: `With --output=json, emits a CommandResult envelope (see "bridge --help").
+Run "bridge schema remove-response" for the response payload schema.`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "admin-addr",
@@ -65,6 +67,7 @@ func runRemove(ctx context.Context, c *cli.Command) error {
 	defer adm.Close()
 
 	var errs []error
+	var removed []string
 	ct := container.NewDockerClient()
 	for _, name := range names {
 		sp.SetTitle(fmt.Sprintf("Removing bridge %q...", name))
@@ -87,6 +90,7 @@ func runRemove(ctx context.Context, c *cli.Command) error {
 			slog.Warn("Failed to delete session", "name", name, "error", err)
 		}
 
+		removed = append(removed, name)
 		p.Newline()
 		p.Success(fmt.Sprintf("Bridge %q removed", name))
 	}
@@ -97,7 +101,17 @@ func runRemove(ctx context.Context, c *cli.Command) error {
 		for i, e := range errs {
 			msgs[i] = e.Error()
 		}
-		return fmt.Errorf("%s", strings.Join(msgs, "\n"))
+		errMsg := strings.Join(msgs, "\n")
+		if interact.IsJSON() {
+			resp := &bridgev1.RemoveCommandResponse{Removed: removed}
+			return writeResult(w, resp, errMsg)
+		}
+		return fmt.Errorf("%s", errMsg)
+	}
+
+	if interact.IsJSON() {
+		resp := &bridgev1.RemoveCommandResponse{Removed: removed}
+		return writeResult(w, resp, "")
 	}
 	return nil
 }

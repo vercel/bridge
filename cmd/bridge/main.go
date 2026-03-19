@@ -19,8 +19,12 @@ func main() {
 	app := commands.NewApp()
 	if err := app.Run(context.Background(), os.Args); err != nil {
 		slog.Error("fatal", "error", err)
-		p := interact.NewPrinter(os.Stderr)
-		p.Errorf("%s", err)
+		if interact.IsJSON() {
+			commands.WriteErrorResult(os.Stdout, err)
+		} else {
+			p := interact.NewPrinter(os.Stderr)
+			p.Errorf("%s", err)
+		}
 		os.Exit(1)
 	}
 }

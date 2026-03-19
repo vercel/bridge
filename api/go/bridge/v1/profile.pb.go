@@ -143,146 +143,17 @@ func (x *CreateCommandProfile) GetCommand() *CreateCommandPayload {
 	return nil
 }
 
-// CreateCommandPayload represents the flags for the "create" command.
-// Used both as the CEL evaluation context and as the flag values to apply.
-type CreateCommandPayload struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Positional argument: name of the target workload (defaults to a Deployment).
-	WorkloadName string `protobuf:"bytes,1,opt,name=workload_name,proto3" json:"workload_name,omitempty"`
-	// --namespace / -n: target namespace of the source deployment.
-	Namespace string `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	// --server-facade: server facade specs (JSON string or file path). Repeated.
-	ServerFacades []string `protobuf:"bytes,3,rep,name=server_facades,proto3" json:"server_facades,omitempty"`
-	// --source / -s: path to Kubernetes manifests (folder, glob, or YAML file).
-	Source string `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"`
-	// --listen / -l: port the app listens on.
-	Listen int32 `protobuf:"varint,5,opt,name=listen,proto3" json:"listen,omitempty"`
-	// --connect / -c: start the devcontainer and exec into it after creation.
-	Connect bool `protobuf:"varint,6,opt,name=connect,proto3" json:"connect,omitempty"`
-	// --devcontainer-config / -f: path to a base devcontainer.json to extend.
-	DevcontainerConfig string `protobuf:"bytes,7,opt,name=devcontainer_config,proto3" json:"devcontainer_config,omitempty"`
-	// --devcontainer-up-args: additional arguments passed to devcontainer up.
-	DevcontainerUpArgs string `protobuf:"bytes,8,opt,name=devcontainer_up_args,proto3" json:"devcontainer_up_args,omitempty"`
-	// --name: bridge name (defaults to workload_name).
-	Name          string `protobuf:"bytes,9,opt,name=name,proto3" json:"name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateCommandPayload) Reset() {
-	*x = CreateCommandPayload{}
-	mi := &file_bridge_v1_profile_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateCommandPayload) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateCommandPayload) ProtoMessage() {}
-
-func (x *CreateCommandPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_v1_profile_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateCommandPayload.ProtoReflect.Descriptor instead.
-func (*CreateCommandPayload) Descriptor() ([]byte, []int) {
-	return file_bridge_v1_profile_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *CreateCommandPayload) GetWorkloadName() string {
-	if x != nil {
-		return x.WorkloadName
-	}
-	return ""
-}
-
-func (x *CreateCommandPayload) GetNamespace() string {
-	if x != nil {
-		return x.Namespace
-	}
-	return ""
-}
-
-func (x *CreateCommandPayload) GetServerFacades() []string {
-	if x != nil {
-		return x.ServerFacades
-	}
-	return nil
-}
-
-func (x *CreateCommandPayload) GetSource() string {
-	if x != nil {
-		return x.Source
-	}
-	return ""
-}
-
-func (x *CreateCommandPayload) GetListen() int32 {
-	if x != nil {
-		return x.Listen
-	}
-	return 0
-}
-
-func (x *CreateCommandPayload) GetConnect() bool {
-	if x != nil {
-		return x.Connect
-	}
-	return false
-}
-
-func (x *CreateCommandPayload) GetDevcontainerConfig() string {
-	if x != nil {
-		return x.DevcontainerConfig
-	}
-	return ""
-}
-
-func (x *CreateCommandPayload) GetDevcontainerUpArgs() string {
-	if x != nil {
-		return x.DevcontainerUpArgs
-	}
-	return ""
-}
-
-func (x *CreateCommandPayload) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
 var File_bridge_v1_profile_proto protoreflect.FileDescriptor
 
 const file_bridge_v1_profile_proto_rawDesc = "" +
 	"\n" +
-	"\x17bridge/v1/profile.proto\x12\tbridge.v1\x1a\x1bbuf/validate/validate.proto\"B\n" +
+	"\x17bridge/v1/profile.proto\x12\tbridge.v1\x1a\x17bridge/v1/command.proto\x1a\x1bbuf/validate/validate.proto\"B\n" +
 	"\aProfile\x127\n" +
 	"\x06create\x18\x01 \x03(\v2\x1f.bridge.v1.CreateCommandProfileR\x06create\"{\n" +
 	"\x14CreateCommandProfile\x12 \n" +
 	"\x05match\x18\x01 \x01(\tB\n" +
 	"\xbaH\a\xc8\x01\x01r\x02\x10\x01R\x05match\x12A\n" +
-	"\acommand\x18\x02 \x01(\v2\x1f.bridge.v1.CreateCommandPayloadB\x06\xbaH\x03\xc8\x01\x01R\acommand\"\xc6\x02\n" +
-	"\x14CreateCommandPayload\x12$\n" +
-	"\rworkload_name\x18\x01 \x01(\tR\rworkload_name\x12\x1c\n" +
-	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12&\n" +
-	"\x0eserver_facades\x18\x03 \x03(\tR\x0eserver_facades\x12\x16\n" +
-	"\x06source\x18\x04 \x01(\tR\x06source\x12\x16\n" +
-	"\x06listen\x18\x05 \x01(\x05R\x06listen\x12\x18\n" +
-	"\aconnect\x18\x06 \x01(\bR\aconnect\x120\n" +
-	"\x13devcontainer_config\x18\a \x01(\tR\x13devcontainer_config\x122\n" +
-	"\x14devcontainer_up_args\x18\b \x01(\tR\x14devcontainer_up_args\x12\x12\n" +
-	"\x04name\x18\t \x01(\tR\x04nameB\x96\x01\n" +
+	"\acommand\x18\x02 \x01(\v2\x1f.bridge.v1.CreateCommandPayloadB\x06\xbaH\x03\xc8\x01\x01R\acommandB\x96\x01\n" +
 	"\rcom.bridge.v1B\fProfileProtoP\x01Z2github.com/vercel/bridge/api/go/bridge/v1;bridgev1\xa2\x02\x03BXX\xaa\x02\tBridge.V1\xca\x02\tBridge\\V1\xe2\x02\x15Bridge\\V1\\GPBMetadata\xea\x02\n" +
 	"Bridge::V1b\x06proto3"
 
@@ -298,7 +169,7 @@ func file_bridge_v1_profile_proto_rawDescGZIP() []byte {
 	return file_bridge_v1_profile_proto_rawDescData
 }
 
-var file_bridge_v1_profile_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_bridge_v1_profile_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_bridge_v1_profile_proto_goTypes = []any{
 	(*Profile)(nil),              // 0: bridge.v1.Profile
 	(*CreateCommandProfile)(nil), // 1: bridge.v1.CreateCommandProfile
@@ -319,13 +190,14 @@ func file_bridge_v1_profile_proto_init() {
 	if File_bridge_v1_profile_proto != nil {
 		return
 	}
+	file_bridge_v1_command_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bridge_v1_profile_proto_rawDesc), len(file_bridge_v1_profile_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

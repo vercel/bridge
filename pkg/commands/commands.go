@@ -17,11 +17,22 @@ var Version = "dev"
 var BridgeFeatureTag = ""
 
 func rootUsageText() string {
-	if interact.IsAgent() {
+	if interact.IsJSON() {
 		return `bridge <command> [flags]
 
 Example:
-  bridge create my-api && bridge exec my-api -- npm test`
+  bridge create my-api && bridge exec my-api -- npm test
+
+JSON output (--output=json):
+  All commands emit a CommandResult envelope to stdout:
+
+    {"error": "", "response": { ... }}
+
+  On success, "error" is empty and "response" contains the command payload.
+  On failure, "error" has the message and "response" may be absent.
+
+  Run "bridge schema command-result" for the envelope schema. Each command
+  has its own response schema (e.g. "bridge schema create-response").`
 	}
 	return `bridge <command> [flags]
 
@@ -48,11 +59,38 @@ func NewApp() *cli.Command {
 				Usage:   "Additional log destinations: \"stdout\", \"stderr\", or a file path (repeatable)",
 				Sources: cli.EnvVars("BRIDGE_LOG_PATHS"),
 			},
+			&cli.StringFlag{
+				Name:    "output",
+				Usage:   "Output format: \"pretty\" or \"json\"",
+				Value:   defaultOutputFormat(),
+				Sources: cli.EnvVars("BRIDGE_OUTPUT"),
+			},
+			&cli.BoolFlag{
+				Name:    "quiet",
+				Usage:   "Suppress all log output to stdout/stderr",
+				Sources: cli.EnvVars("BRIDGE_QUIET"),
+			},
 		},
 		Before: func(ctx context.Context, command *cli.Command) (context.Context, error) {
+			// Set global output format before logging setup so log paths
+			// can be derived from it.
+			output := command.String("output")
+			interact.SetOutputFormat(output)
+
 			level := parseLogLevel(command.String("log-level"))
 			logPaths := command.StringSlice("log-paths")
-			cleanup, err := logging.Setup(level, logPaths)
+			quiet := command.Bool("quiet")
+
+			if quiet {
+				// Suppress all console log output; only the rolling file remains.
+				logPaths = nil
+			} else if len(logPaths) == 0 && output == interact.OutputJSON {
+				// json mode gets stdout + file so structured logs stream to the agent;
+				// pretty mode gets only the file so the terminal stays clean.
+				logPaths = []string{"stdout"}
+			}
+
+			cleanup, err := logging.Setup(level, logPaths, command.Root().Writer, command.Root().ErrWriter)
 			if err != nil {
 				slog.Warn("Failed to set up log file", "error", err)
 			}
@@ -113,6 +151,14 @@ func deviceInfo() *bridgev1.DeviceInfo {
 		Arch:          runtime.GOARCH,
 		BridgeVersion: Version,
 	}
+}
+
+// defaultOutputFormat returns "json" for agents and "pretty" for humans.
+func defaultOutputFormat() string {
+	if interact.IsJSON() {
+		return interact.OutputJSON
+	}
+	return interact.OutputPretty
 }
 
 func parseLogLevel(s string) slog.Level {

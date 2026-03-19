@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "CommandResult is the envelope for all JSON-mode command output.\n On success, response contains the command-specific payload.\n On failure, error contains the error message.",
+  "properties": {
+    "error": {
+      "description": "Error message. Absent on success.",
+      "type": "string"
+    },
+    "outcome": {
+      "anyOf": [
+        {
+          "pattern": "^unspecified$",
+          "type": "string"
+        },
+        {
+          "enum": [
+            "success",
+            "error"
+          ],
+          "type": "string"
+        },
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        }
+      ],
+      "default": 0,
+      "description": "Whether the command succeeded or failed.",
+      "title": "Enum"
+    },
+    "response": {
+      "description": "Command-specific response payload. Absent on error.",
+      "title": "Value"
+    }
+  },
+  "title": "Command Result",
+  "type": "object"
+}

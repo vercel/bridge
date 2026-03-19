@@ -60,10 +60,12 @@ func (m *multiHandler) WithGroup(name string) slog.Handler {
 // Setup configures logging output. By default, logs go only to the rolling
 // log file at ~/.bridge/logs/bridge.log (at Debug level). Additional
 // destinations can be specified via logPaths: each entry may be "stdout",
-// "stderr", or a file path.
+// "stderr", or a file path. The stdout and stderr writers are used for the
+// "stdout" and "stderr" log path values respectively, allowing callers to
+// direct log output to the CLI command's configured writers.
 //
 // Returns a cleanup function to close any opened files. The caller should defer it.
-func Setup(level slog.Level, logPaths []string) (cleanup func(), err error) {
+func Setup(level slog.Level, logPaths []string, stdout, stderr io.Writer) (cleanup func(), err error) {
 	var handlers []slog.Handler
 	var closers []io.Closer
 
@@ -82,9 +84,9 @@ func Setup(level slog.Level, logPaths []string) (cleanup func(), err error) {
 	for _, p := range logPaths {
 		switch p {
 		case "stdout":
-			handlers = append(handlers, newJSONHandler(os.Stdout, level))
+			handlers = append(handlers, newJSONHandler(stdout, level))
 		case "stderr":
-			handlers = append(handlers, newJSONHandler(os.Stderr, level))
+			handlers = append(handlers, newJSONHandler(stderr, level))
 		default:
 			w := newRollingWriter(p)
 			handlers = append(handlers, newJSONHandler(w, level))

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "RemoveCommandResponse is the structured output emitted by the \"remove\"\n command when running in JSON output mode.",
+  "properties": {
+    "removed": {
+      "description": "Names of bridges that were successfully removed.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "title": "Remove Command Response",
+  "type": "object"
+}
