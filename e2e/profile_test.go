@@ -142,7 +142,7 @@ func (s *ProfileSuite) TestCreateInjectsFacades() {
 	app.Writer = io.Discard
 
 	_ = app.Run(context.Background(), []string{
-		"bridge", "create", "api-feature-flags",
+		"bridge", "--quiet", "create", "api-feature-flags",
 		"--yes",
 		"--admin-addr", srv.Addr,
 	})
