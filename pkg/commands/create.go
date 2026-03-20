@@ -445,8 +445,17 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 				ports[key] = ap
 			}
 		}
+		// Find the resolved host port for the app port.
+		hostAppPort := int32(appPort)
+		for _, m := range portMappings {
+			if m.ContainerPort == appPort {
+				hostAppPort = int32(m.HostPort)
+				break
+			}
+		}
 		resp := &bridgev1.CreateCommandResponse{
 			AppPort:                int32(appPort),
+			HostAppPort:            hostAppPort,
 			DevcontainerConfigPath: absDCConfigPath,
 			BridgeName:             createResp.Name,
 			SourceDeployment:       deploymentName,

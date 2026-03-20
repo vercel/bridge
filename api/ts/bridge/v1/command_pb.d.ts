@@ -176,11 +176,19 @@ export declare const CreateCommandPayloadSchema: GenMessage<CreateCommandPayload
  */
 export declare type CreateCommandResponse = Message<"bridge.v1.CreateCommandResponse"> & {
   /**
-   * The port the application listens on.
+   * The container port the application listens on.
    *
    * @generated from field: int32 app_port = 1 [json_name = "app_port"];
    */
   appPort: number;
+
+  /**
+   * The resolved host port mapped to the app port (may differ if the
+   * requested port was already in use).
+   *
+   * @generated from field: int32 host_app_port = 6 [json_name = "host_app_port"];
+   */
+  hostAppPort: number;
 
   /**
    * Absolute path to the generated devcontainer.json.

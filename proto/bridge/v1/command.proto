@@ -65,8 +65,12 @@ message CreateCommandPayload {
 // CreateCommandResponse is the structured output emitted by the "create"
 // command when running in agent mode without --connect.
 message CreateCommandResponse {
-  // The port the application listens on.
+  // The container port the application listens on.
   int32 app_port = 1 [json_name = "app_port"];
+
+  // The resolved host port mapped to the app port (may differ if the
+  // requested port was already in use).
+  int32 host_app_port = 6 [json_name = "host_app_port"];
 
   // Absolute path to the generated devcontainer.json.
   string devcontainer_config_path = 2 [json_name = "devcontainer_config_path"];

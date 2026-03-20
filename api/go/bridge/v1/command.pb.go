@@ -301,8 +301,11 @@ func (x *CreateCommandPayload) GetName() string {
 // command when running in agent mode without --connect.
 type CreateCommandResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The port the application listens on.
+	// The container port the application listens on.
 	AppPort int32 `protobuf:"varint,1,opt,name=app_port,proto3" json:"app_port,omitempty"`
+	// The resolved host port mapped to the app port (may differ if the
+	// requested port was already in use).
+	HostAppPort int32 `protobuf:"varint,6,opt,name=host_app_port,proto3" json:"host_app_port,omitempty"`
 	// Absolute path to the generated devcontainer.json.
 	DevcontainerConfigPath string `protobuf:"bytes,2,opt,name=devcontainer_config_path,proto3" json:"devcontainer_config_path,omitempty"`
 	// The bridge name.
@@ -348,6 +351,13 @@ func (*CreateCommandResponse) Descriptor() ([]byte, []int) {
 func (x *CreateCommandResponse) GetAppPort() int32 {
 	if x != nil {
 		return x.AppPort
+	}
+	return 0
+}
+
+func (x *CreateCommandResponse) GetHostAppPort() int32 {
+	if x != nil {
+		return x.HostAppPort
 	}
 	return 0
 }
@@ -598,9 +608,10 @@ const file_bridge_v1_command_proto_rawDesc = "" +
 	"\aconnect\x18\x06 \x01(\bR\aconnect\x120\n" +
 	"\x13devcontainer_config\x18\a \x01(\tR\x13devcontainer_config\x122\n" +
 	"\x14devcontainer_up_args\x18\b \x01(\tR\x14devcontainer_up_args\x12\x12\n" +
-	"\x04name\x18\t \x01(\tR\x04name\"\xbc\x02\n" +
+	"\x04name\x18\t \x01(\tR\x04name\"\xe2\x02\n" +
 	"\x15CreateCommandResponse\x12\x1a\n" +
-	"\bapp_port\x18\x01 \x01(\x05R\bapp_port\x12:\n" +
+	"\bapp_port\x18\x01 \x01(\x05R\bapp_port\x12$\n" +
+	"\rhost_app_port\x18\x06 \x01(\x05R\rhost_app_port\x12:\n" +
 	"\x18devcontainer_config_path\x18\x02 \x01(\tR\x18devcontainer_config_path\x12 \n" +
 	"\vbridge_name\x18\x03 \x01(\tR\vbridge_name\x12,\n" +
 	"\x11source_deployment\x18\x04 \x01(\tR\x11source_deployment\x12A\n" +

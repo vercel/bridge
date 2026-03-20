@@ -16,7 +16,7 @@
         }
       ],
       "default": 0,
-      "description": "The port the application listens on."
+      "description": "The container port the application listens on."
     },
     "bridge_name": {
       "default": "",
@@ -27,6 +27,21 @@
       "default": "",
       "description": "Absolute path to the generated devcontainer.json.",
       "type": "string"
+    },
+    "host_app_port": {
+      "anyOf": [
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        {
+          "pattern": "^-?[0-9]+$",
+          "type": "string"
+        }
+      ],
+      "default": 0,
+      "description": "The resolved host port mapped to the app port (may differ if the\n requested port was already in use)."
     },
     "ports": {
       "additionalProperties": {
