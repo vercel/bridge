@@ -784,12 +784,17 @@ func startDevcontainer(ctx context.Context, w io.Writer, ct container.Client, dc
 	logger.Info("Devcontainer up.")
 
 	// Tee the build output into the log so that `bridge debug` captures it.
-	buildOutput := io.TeeReader(proc.Output(), &slogLineWriter{})
+	logWriter := &slogLineWriter{}
+	buildOutput := io.TeeReader(proc.Output(), logWriter)
 
 	vp := interact.NewViewport(w, interact.ViewportOpts{Title: "Building devcontainer..."})
 	vp.Run(ctx, buildOutput)
 
 	if err := proc.Wait(); err != nil {
+		if output := logWriter.All(); output != "" {
+			slog.Error("devcontainer up failed", "output", output)
+			return fmt.Errorf("failed to start devcontainer: %w\n%s", err, logWriter.Tail(10))
+		}
 		return fmt.Errorf("failed to start devcontainer: %w", err)
 	}
 	vp.Clear()
@@ -873,9 +878,11 @@ func resolveSourceFlag(sourcePath string) (fs.FS, string, error) {
 	return os.DirFS(dir), filepath.Base(sourcePath), nil
 }
 
-// slogLineWriter is an io.Writer that logs each complete line via slog.Debug.
+// slogLineWriter is an io.Writer that logs each complete line via slog.Debug
+// and retains all lines. Tail returns the last N lines for error messages.
 type slogLineWriter struct {
-	buf []byte
+	buf   []byte
+	lines []string
 }
 
 func (w *slogLineWriter) Write(p []byte) (int, error) {
@@ -889,9 +896,23 @@ func (w *slogLineWriter) Write(p []byte) (int, error) {
 		w.buf = w.buf[idx+1:]
 		if line != "" {
 			slog.Debug("devcontainer up", "output", line)
+			w.lines = append(w.lines, line)
 		}
 	}
 	return len(p), nil
+}
+
+// All returns every captured line joined by newlines.
+func (w *slogLineWriter) All() string {
+	return strings.Join(w.lines, "\n")
+}
+
+// Tail returns the last n captured lines joined by newlines.
+func (w *slogLineWriter) Tail(n int) string {
+	if len(w.lines) <= n {
+		return strings.Join(w.lines, "\n")
+	}
+	return strings.Join(w.lines[len(w.lines)-n:], "\n")
 }
 
 // bridgeConfigPath returns the expected devcontainer config path for a bridge,
