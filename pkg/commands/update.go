@@ -33,7 +33,16 @@ func Update() *cli.Command {
 
 			p.Info(fmt.Sprintf("Updating bridge (%s channel)...", channel))
 
+			// Run from a temp directory so the install script's intermediate
+			// files (e.g. curl -o bridge) don't conflict with the CWD.
+			tmpDir, err := os.MkdirTemp("", "bridge-update-*")
+			if err != nil {
+				return fmt.Errorf("failed to create temp dir: %w", err)
+			}
+			defer os.RemoveAll(tmpDir)
+
 			cmd := exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf("curl -fsSL %s | sh", scriptURL))
+			cmd.Dir = tmpDir
 			cmd.Stdin = os.Stdin
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
