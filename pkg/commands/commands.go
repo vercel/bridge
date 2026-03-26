@@ -108,6 +108,7 @@ func NewApp() *cli.Command {
 		},
 		Commands: []*cli.Command{
 			Server(),
+			ServerProxy(),
 			Intercept(),
 			Create(),
 			Exec(),

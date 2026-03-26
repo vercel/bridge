@@ -74,6 +74,18 @@ func Intercept() *cli.Command {
 				Value:   ":8080",
 				Sources: cli.EnvVars(meta.EnvInterceptorAddr),
 			},
+			&cli.StringFlag{
+				Name:    "intercept-mode",
+				Usage:   "Interception mode: nat (iptables) or socks (SOCKS5 proxy)",
+				Value:   "nat",
+				Sources: cli.EnvVars("BRIDGE_INTERCEPT_MODE"),
+			},
+			&cli.StringFlag{
+				Name:    "socks-addr",
+				Usage:   "Address for the SOCKS5 proxy (used when --intercept-mode=socks)",
+				Value:   ":1080",
+				Sources: cli.EnvVars("BRIDGE_SOCKS_ADDR"),
+			},
 		},
 		Action: runIntercept,
 	}
@@ -193,71 +205,97 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	tun.Start(ctx)
 	slog.Info("Tunnel connected", "app_port", appPort)
 
-	// Create connection tracking registry
-	pool, err := ippool.New(proxyCIDR)
-	if err != nil {
-		return fmt.Errorf("failed to create IP pool: %w", err)
-	}
-	registry := conntrack.New(pool)
+	interceptMode := c.String("intercept-mode")
 
-	// Start DNS (optional)
-	var dns *DNSComponent
-	var originalResolvConf []byte
-	if len(forwardDomains) > 0 {
-		// Read the original nameserver before we modify /etc/resolv.conf
-		originalNS := readOriginalNameserver()
-		exchangeClient := bridgedns.NewTunnelExchangeClient(forwardDomains, &grpcDNSResolver{client: client}, originalNS)
-		dns, err = StartDNS(DNSConfig{
-			ListenPort: dnsPort,
-			Client:     exchangeClient,
+	// Cleanup functions collected during setup, called in reverse on shutdown.
+	var cleanups []func()
+	defer func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	}()
+
+	switch interceptMode {
+	case "nat":
+		// iptables-based transparent proxy with DNS interception.
+		pool, err := ippool.New(proxyCIDR)
+		if err != nil {
+			return fmt.Errorf("failed to create IP pool: %w", err)
+		}
+		registry := conntrack.New(pool)
+		cleanups = append(cleanups, registry.Stop)
+
+		var dns *DNSComponent
+		var originalResolvConf []byte
+		if len(forwardDomains) > 0 {
+			originalNS := readOriginalNameserver()
+			exchangeClient := bridgedns.NewTunnelExchangeClient(forwardDomains, &grpcDNSResolver{client: client}, originalNS)
+			dns, err = StartDNS(DNSConfig{
+				ListenPort: dnsPort,
+				Client:     exchangeClient,
+				Registry:   registry,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to start DNS: %w", err)
+			}
+			cleanups = append(cleanups, dns.Stop)
+
+			originalResolvConf, err = updateResolvConf("127.0.0.1")
+			if err != nil {
+				slog.Warn("Failed to update /etc/resolv.conf", "error", err)
+			}
+			cleanups = append(cleanups, func() { restoreResolvConf(originalResolvConf) })
+		}
+
+		var dnsPortForIPTables int
+		if dns != nil {
+			dnsPortForIPTables = dns.Port()
+		}
+
+		proxyComp, err := StartProxy(ProxyConfig{
+			Tunnel:     tun,
+			ProxyPort:  proxyPort,
 			Registry:   registry,
+			DNSPort:    dnsPortForIPTables,
+			ExcludeGID: os.Getgid(),
 		})
 		if err != nil {
-			registry.Stop()
-			return fmt.Errorf("failed to start DNS: %w", err)
+			return fmt.Errorf("failed to start proxy listener: %w", err)
 		}
+		cleanups = append(cleanups, proxyComp.Stop)
 
-		// Point /etc/resolv.conf at our DNS server
-		originalResolvConf, err = updateResolvConf("127.0.0.1")
+		if err := proxyComp.SetupIptables(); err != nil {
+			return fmt.Errorf("failed to setup iptables: %w", err)
+		}
+		proxyComp.Start()
+
+		slog.Info("Bridge intercept starting (nat mode)",
+			"server_addr", serverAddr,
+			"proxy_port", proxyComp.Port(),
+		)
+
+	case "socks":
+		// SOCKS5 proxy — no iptables, no DNS interception.
+		socksAddr := c.String("socks-addr")
+		socksComp, err := StartSocks(SocksConfig{
+			Tunnel:    tun,
+			SocksAddr: socksAddr,
+		})
 		if err != nil {
-			slog.Warn("Failed to update /etc/resolv.conf", "error", err)
+			return fmt.Errorf("failed to start SOCKS proxy: %w", err)
 		}
+		cleanups = append(cleanups, socksComp.Stop)
+		socksComp.Start()
+
+		slog.Info("Bridge intercept starting (socks mode)",
+			"server_addr", serverAddr,
+			"socks_addr", socksAddr,
+			"socks_port", socksComp.Port(),
+		)
+
+	default:
+		return fmt.Errorf("unsupported intercept-mode %q (use nat or socks)", interceptMode)
 	}
-
-	// Start proxy (transparent proxy + tunnel)
-	var dnsPortForIPTables int
-	if dns != nil {
-		dnsPortForIPTables = dns.Port()
-	}
-
-	// Pass the current process GID so iptables can exclude bridge's own DNS
-	// traffic from the UDP redirect. This prevents a circular dependency when
-	// gRPC reconnects and needs real DNS for EKS auth. GID 0 (root) is not
-	// excluded since that would bypass the redirect for most container processes.
-	proxyComp, err := StartProxy(ProxyConfig{
-		Tunnel:     tun,
-		ProxyPort:  proxyPort,
-		Registry:   registry,
-		DNSPort:    dnsPortForIPTables,
-		ExcludeGID: os.Getgid(),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to start proxy listener: %w", err)
-	}
-
-	slog.Info("Bridge intercept starting",
-		"server_addr", serverAddr,
-		"proxy_port", proxyComp.Port(),
-	)
-
-	// Set up iptables (TCP redirect for proxy CIDR, UDP redirect for DNS)
-	if err := proxyComp.SetupIptables(); err != nil {
-		return fmt.Errorf("failed to setup iptables: %w", err)
-	}
-
-	// Start the accept loop before signalling readiness so that incoming
-	// connections are handled immediately.
-	proxyComp.Start()
 
 	// Create cancellable context for signal handling
 	ctx, cancel := context.WithCancel(ctx)
@@ -288,17 +326,10 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	interceptSrv.SetReady()
 	slog.Info("Intercept ready")
 
-	// Block until context is cancelled
-	proxyComp.Wait(ctx)
+	// Block until context is cancelled.
+	<-ctx.Done()
 
-	// Cleanup in order: DNS → resolv.conf → registry → proxy
-	if dns != nil {
-		dns.Stop()
-	}
-	restoreResolvConf(originalResolvConf)
-	registry.Stop()
-	proxyComp.Stop()
-
+	// Cleanups run via the deferred slice at the top of doIntercept.
 	return nil
 }
 

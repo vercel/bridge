@@ -18,9 +18,15 @@ import (
 func Server() *cli.Command {
 	return &cli.Command{
 		Name:   "server",
-		Usage:  "Start the bridge gRPC proxy server",
+		Usage:  "Start the bridge proxy server",
 		Hidden: true,
 		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "protocol",
+				Usage:   "Server protocol: grpc or http",
+				Value:   "grpc",
+				Sources: cli.EnvVars("BRIDGE_PROTOCOL"),
+			},
 			&cli.StringFlag{
 				Name:    "addr",
 				Usage:   "Address to bind the server to",
@@ -72,14 +78,23 @@ func runServer(ctx context.Context, c *cli.Command) error {
 		facades = append(facades, f)
 	}
 
-	grpcServer := proxy.NewGRPCServer(addr, listenPorts, facades)
+	protocol := c.String("protocol")
+	var srv proxy.Server
+	switch protocol {
+	case "grpc":
+		srv = proxy.NewGRPCServer(addr, listenPorts, facades)
+	case "http":
+		srv = proxy.NewHTTPServer(addr, listenPorts, facades)
+	default:
+		return fmt.Errorf("unsupported protocol %q (use grpc or http)", protocol)
+	}
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- grpcServer.Start()
+		errCh <- srv.Start()
 	}()
 
 	select {
@@ -88,7 +103,7 @@ func runServer(ctx context.Context, c *cli.Command) error {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		grpcServer.Shutdown(shutdownCtx)
+		srv.Shutdown(shutdownCtx)
 		return nil
 	}
 }

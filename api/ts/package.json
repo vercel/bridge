@@ -9,6 +9,18 @@
     ".": {
       "import": "./bridge/v1/bridge_pb.js",
       "types": "./bridge/v1/bridge_pb.d.ts"
+    },
+    "./bridge/v1/proxy_pb": {
+      "import": "./bridge/v1/proxy_pb.js",
+      "types": "./bridge/v1/proxy_pb.d.ts"
+    },
+    "./bridge/v1/administrator_pb": {
+      "import": "./bridge/v1/administrator_pb.js",
+      "types": "./bridge/v1/administrator_pb.d.ts"
+    },
+    "./bridge/v1/server_facade_pb": {
+      "import": "./bridge/v1/server_facade_pb.js",
+      "types": "./bridge/v1/server_facade_pb.d.ts"
     }
   },
   "dependencies": {
