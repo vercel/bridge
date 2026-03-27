@@ -84,6 +84,10 @@ func (s *DispatcherSuite) SetupSuite() {
 		Ports:     []int{8081},
 		Runtime:   "node24",
 		Timeout:   5 * time.Minute,
+		Env: map[string]string{
+			"ALL_PROXY": "socks5h://127.0.0.1:1080",
+			"NO_PROXY":  "127.0.0.1,localhost",
+		},
 	})
 	require.NoError(t, err, "failed to create sandbox")
 
