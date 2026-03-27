@@ -260,8 +260,10 @@ func (s *DispatcherSuite) startSimpleAppServer() {
 		Command: "node",
 		Args: []string{"-e", `
 const http = require("http");
+const url = require("url");
 const server = http.createServer((req, res) => {
-  if (req.url === "/api/health") {
+  const pathname = url.parse(req.url).pathname;
+  if (pathname === "/api/health") {
     res.writeHead(200, {"Content-Type": "application/json"});
     res.end(JSON.stringify({status: "ok"}));
     return;
