@@ -371,8 +371,6 @@ func readVercelProjectLink(t *testing.T, path string) vercelProjectLink {
 func currentGitSource(t *testing.T) *vercel.GitSource {
 	t.Helper()
 
-	branch := strings.TrimSpace(runGit(t, "rev-parse", "--abbrev-ref", "HEAD"))
-	sha := strings.TrimSpace(runGit(t, "rev-parse", "HEAD"))
 	origin := strings.TrimSpace(runGit(t, "remote", "get-url", "origin"))
 
 	if !strings.Contains(origin, "github.com:vercel/bridge") && !strings.Contains(origin, "github.com/vercel/bridge") {
@@ -383,8 +381,7 @@ func currentGitSource(t *testing.T) *vercel.GitSource {
 		Type: "github",
 		Org:  "vercel",
 		Repo: "bridge",
-		Ref:  branch,
-		SHA:  sha,
+		Ref:  "main",
 	}
 }
 
