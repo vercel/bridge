@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestExecServer(t *testing.T) (*httptest.Server, *websocket.Conn) {
+func newTestExecServer(t *testing.T, query string) *websocket.Conn {
 	t.Helper()
 	s := &interceptServer{
 		tunnelConnCh: make(chan *websocket.Conn, 1),
@@ -26,152 +25,76 @@ func newTestExecServer(t *testing.T) (*httptest.Server, *websocket.Conn) {
 	t.Cleanup(srv.Close)
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/__exec"
+	if query != "" {
+		wsURL += "?" + query
+	}
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { conn.Close() })
-	return srv, conn
+	return conn
 }
 
-func sendStart(t *testing.T, conn *websocket.Conn, command []string) {
-	t.Helper()
-	msg := execStartRequest{Type: "start", Command: command}
-	data, err := json.Marshal(msg)
-	require.NoError(t, err)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
-}
+func TestExecEcho(t *testing.T) {
+	conn := newTestExecServer(t, "cols=80&rows=24")
 
-func readMessages(t *testing.T, conn *websocket.Conn, timeout time.Duration) (outputs []execOutputMessage, exit execExitMessage) {
-	t.Helper()
-	conn.SetReadDeadline(time.Now().Add(timeout))
-	for {
-		_, raw, err := conn.ReadMessage()
-		require.NoError(t, err)
-		var mt execMessageType
-		require.NoError(t, json.Unmarshal(raw, &mt))
-		switch mt.Type {
-		case "output":
-			var out execOutputMessage
-			require.NoError(t, json.Unmarshal(raw, &out))
-			outputs = append(outputs, out)
-		case "exit":
-			require.NoError(t, json.Unmarshal(raw, &exit))
-			return
-		}
-	}
-}
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("echo hello\n")))
 
-func decodeOutputs(t *testing.T, outputs []execOutputMessage, stream string) string {
-	t.Helper()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	var sb strings.Builder
-	for _, o := range outputs {
-		if o.Stream == stream {
-			data, err := base64.StdEncoding.DecodeString(o.Data)
-			require.NoError(t, err)
-			sb.Write(data)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		sb.Write(raw)
+		if strings.Contains(sb.String(), "hello") {
+			break
 		}
 	}
-	return sb.String()
+	assert.Contains(t, sb.String(), "hello")
 }
 
-func TestExecBasicStdout(t *testing.T) {
-	_, conn := newTestExecServer(t)
-	sendStart(t, conn, []string{"echo", "hello"})
-	outputs, exit := readMessages(t, conn, 5*time.Second)
+func TestExecResize(t *testing.T) {
+	conn := newTestExecServer(t, "cols=80&rows=24")
 
-	assert.Equal(t, 0, exit.Code)
-	assert.Empty(t, exit.Error)
-	assert.Contains(t, decodeOutputs(t, outputs, "stdout"), "hello")
-}
-
-func TestExecStderr(t *testing.T) {
-	_, conn := newTestExecServer(t)
-	sendStart(t, conn, []string{"sh", "-c", "echo err >&2"})
-	outputs, exit := readMessages(t, conn, 5*time.Second)
-
-	assert.Equal(t, 0, exit.Code)
-	assert.Contains(t, decodeOutputs(t, outputs, "stderr"), "err")
-}
-
-func TestExecNonZeroExit(t *testing.T) {
-	_, conn := newTestExecServer(t)
-	sendStart(t, conn, []string{"sh", "-c", "exit 42"})
-	_, exit := readMessages(t, conn, 5*time.Second)
-
-	assert.Equal(t, 42, exit.Code)
-	assert.Empty(t, exit.Error)
-}
-
-func TestExecInvalidCommand(t *testing.T) {
-	_, conn := newTestExecServer(t)
-	sendStart(t, conn, []string{"nonexistent-binary-xyz"})
-
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	_, raw, err := conn.ReadMessage()
+	resize := resizeMessage{Type: "resize", Cols: 120, Rows: 40}
+	data, err := json.Marshal(resize)
 	require.NoError(t, err)
-	var exit execExitMessage
-	require.NoError(t, json.Unmarshal(raw, &exit))
-	assert.Equal(t, "exit", exit.Type)
-	assert.NotEmpty(t, exit.Error)
-}
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-func TestExecSignal(t *testing.T) {
-	_, conn := newTestExecServer(t)
-	sendStart(t, conn, []string{"sleep", "60"})
-
-	// Give the process a moment to start, then send SIGTERM.
 	time.Sleep(100 * time.Millisecond)
-	sig := execSignalMessage{Type: "signal", Signal: "SIGTERM"}
-	data, _ := json.Marshal(sig)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-	_, exit := readMessages(t, conn, 5*time.Second)
-	assert.NotEqual(t, 0, exit.Code)
-}
-
-func TestExecStdin(t *testing.T) {
-	_, conn := newTestExecServer(t)
-	// head -n1 reads one line from stdin and prints it.
-	sendStart(t, conn, []string{"head", "-n1"})
-
-	payload := base64.StdEncoding.EncodeToString([]byte("hello from stdin\n"))
-	stdinMsg := execStdinMessage{Type: "stdin", Data: payload}
-	data, _ := json.Marshal(stdinMsg)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
-
-	outputs, exit := readMessages(t, conn, 5*time.Second)
-	assert.Equal(t, 0, exit.Code)
-	assert.Contains(t, decodeOutputs(t, outputs, "stdout"), "hello from stdin")
-}
-
-func TestExecInvalidStartMessage(t *testing.T) {
-	_, conn := newTestExecServer(t)
-
-	// Send a message with wrong type.
-	msg := map[string]any{"type": "wrong", "command": []string{"echo"}}
-	data, _ := json.Marshal(msg)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("echo ok\n")))
 
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	_, raw, err := conn.ReadMessage()
-	require.NoError(t, err)
-	var exit execExitMessage
-	require.NoError(t, json.Unmarshal(raw, &exit))
-	assert.Equal(t, "exit", exit.Type)
-	assert.Contains(t, exit.Error, "start")
+	var sb strings.Builder
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		sb.Write(raw)
+		if strings.Contains(sb.String(), "ok") {
+			break
+		}
+	}
+	assert.Contains(t, sb.String(), "ok")
 }
 
-func TestExecEmptyCommand(t *testing.T) {
-	_, conn := newTestExecServer(t)
+func TestExecExit(t *testing.T) {
+	conn := newTestExecServer(t, "")
 
-	msg := execStartRequest{Type: "start", Command: []string{}}
-	data, _ := json.Marshal(msg)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("exit\n")))
 
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	_, raw, err := conn.ReadMessage()
-	require.NoError(t, err)
-	var exit execExitMessage
-	require.NoError(t, json.Unmarshal(raw, &exit))
-	assert.Equal(t, "exit", exit.Type)
-	assert.Contains(t, exit.Error, "start")
+	for {
+		_, _, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+	}
 }

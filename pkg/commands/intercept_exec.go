@@ -1,51 +1,29 @@
 package commands
 
 import (
-	"context"
-	"encoding/base64"
 	"encoding/json"
-	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
-	"sync"
+	"strconv"
+	"strings"
 
+	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
 )
 
-type execMessageType struct {
+type resizeMessage struct {
 	Type string `json:"type"`
+	Cols int    `json:"cols"`
+	Rows int    `json:"rows"`
 }
 
-type execStartRequest struct {
-	Type    string            `json:"type"`
-	Command []string          `json:"command"`
-	Dir     string            `json:"dir,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-}
-
-type execStdinMessage struct {
-	Type string `json:"type"`
-	Data string `json:"data"`
-}
-
-type execSignalMessage struct {
-	Type   string `json:"type"`
-	Signal string `json:"signal"`
-}
-
-type execOutputMessage struct {
-	Type   string `json:"type"`
-	Stream string `json:"stream"`
-	Data   string `json:"data"`
-}
-
-type execExitMessage struct {
-	Type  string `json:"type"`
-	Code  int    `json:"code"`
-	Error string `json:"error,omitempty"`
+func getShell() string {
+	if shell := os.Getenv("SHELL"); shell != "" {
+		return shell
+	}
+	return "/bin/bash"
 }
 
 func (s *interceptServer) handleExecWS(w http.ResponseWriter, r *http.Request) {
@@ -56,153 +34,75 @@ func (s *interceptServer) handleExecWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	_, msg, err := conn.ReadMessage()
+	cols, _ := strconv.Atoi(r.URL.Query().Get("cols"))
+	rows, _ := strconv.Atoi(r.URL.Query().Get("rows"))
+	if cols <= 0 {
+		cols = 80
+	}
+	if rows <= 0 {
+		rows = 24
+	}
+
+	shell := getShell()
+	cmd := exec.Command(shell)
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor")
+
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{
+		Cols: uint16(cols),
+		Rows: uint16(rows),
+	})
 	if err != nil {
-		slog.Error("Failed to read exec start message", "error", err)
+		slog.Error("Failed to start PTY", "error", err)
 		return
 	}
+	defer ptmx.Close()
 
-	var start execStartRequest
-	if err := json.Unmarshal(msg, &start); err != nil {
-		writeExecExit(conn, nil, -1, "invalid start message: "+err.Error())
-		return
-	}
-	if start.Type != "start" || len(start.Command) == 0 {
-		writeExecExit(conn, nil, -1, "first message must be type \"start\" with a non-empty command")
-		return
-	}
+	logger := slog.With("shell", shell, "pid", cmd.Process.Pid)
+	logger.Info("PTY session started")
 
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
+	done := make(chan struct{})
 
-	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
-	setSysProcAttr(cmd)
-
-	if start.Dir != "" {
-		cmd.Dir = start.Dir
-	}
-	if len(start.Env) > 0 {
-		cmd.Env = os.Environ()
-		for k, v := range start.Env {
-			cmd.Env = append(cmd.Env, k+"="+v)
+	go func() {
+		defer close(done)
+		buf := make([]byte, 4096)
+		for {
+			n, readErr := ptmx.Read(buf)
+			if n > 0 {
+				if writeErr := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); writeErr != nil {
+					return
+				}
+			}
+			if readErr != nil {
+				return
+			}
 		}
-	}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		writeExecExit(conn, nil, -1, "stdout pipe: "+err.Error())
-		return
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		writeExecExit(conn, nil, -1, "stderr pipe: "+err.Error())
-		return
-	}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		writeExecExit(conn, nil, -1, "stdin pipe: "+err.Error())
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		writeExecExit(conn, nil, -1, "failed to start command: "+err.Error())
-		return
-	}
-
-	var writeMu sync.Mutex
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		streamOutput(conn, &writeMu, stdout, "stdout")
 	}()
 
 	go func() {
-		defer wg.Done()
-		streamOutput(conn, &writeMu, stderr, "stderr")
-	}()
-
-	go func() {
-		defer stdin.Close()
 		for {
 			_, raw, readErr := conn.ReadMessage()
 			if readErr != nil {
-				cancel()
+				cmd.Process.Kill()
 				return
 			}
-			var mt execMessageType
-			if json.Unmarshal(raw, &mt) != nil {
-				continue
+
+			msg := string(raw)
+			if strings.HasPrefix(msg, "{") {
+				var resize resizeMessage
+				if json.Unmarshal(raw, &resize) == nil && resize.Type == "resize" {
+					pty.Setsize(ptmx, &pty.Winsize{
+						Cols: uint16(resize.Cols),
+						Rows: uint16(resize.Rows),
+					})
+					continue
+				}
 			}
-			switch mt.Type {
-			case "stdin":
-				var sm execStdinMessage
-				if json.Unmarshal(raw, &sm) != nil {
-					continue
-				}
-				data, decErr := base64.StdEncoding.DecodeString(sm.Data)
-				if decErr != nil {
-					continue
-				}
-				_, _ = stdin.Write(data)
-			case "signal":
-				var sm execSignalMessage
-				if json.Unmarshal(raw, &sm) != nil {
-					continue
-				}
-				sendSignalToProcess(cmd, sm.Signal)
-			}
+
+			ptmx.Write(raw)
 		}
 	}()
 
-	wg.Wait()
-	exitCode := 0
-	waitErr := cmd.Wait()
-	if waitErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(waitErr, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		} else {
-			writeExecExit(conn, &writeMu, -1, waitErr.Error())
-			return
-		}
-	}
-
-	writeExecExit(conn, &writeMu, exitCode, "")
-}
-
-func streamOutput(conn *websocket.Conn, mu *sync.Mutex, r io.Reader, stream string) {
-	buf := make([]byte, 4096)
-	for {
-		n, err := r.Read(buf)
-		if n > 0 {
-			msg := execOutputMessage{
-				Type:   "output",
-				Stream: stream,
-				Data:   base64.StdEncoding.EncodeToString(buf[:n]),
-			}
-			data, _ := json.Marshal(msg)
-			mu.Lock()
-			_ = conn.WriteMessage(websocket.TextMessage, data)
-			mu.Unlock()
-		}
-		if err != nil {
-			return
-		}
-	}
-}
-
-func writeExecExit(conn *websocket.Conn, mu *sync.Mutex, code int, errMsg string) {
-	msg := execExitMessage{
-		Type:  "exit",
-		Code:  code,
-		Error: errMsg,
-	}
-	data, _ := json.Marshal(msg)
-	if mu != nil {
-		mu.Lock()
-		defer mu.Unlock()
-	}
-	_ = conn.WriteMessage(websocket.TextMessage, data)
+	<-done
+	cmd.Wait()
+	logger.Info("PTY session ended")
 }
