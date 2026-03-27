@@ -43,11 +43,20 @@ func NewReconnectableWSStream(conn *websocket.Conn, refresher func(context.Conte
 func NewWakeableWSStream(connCh <-chan *websocket.Conn, wake func(context.Context) error) *WSStream {
 	return &WSStream{
 		refresher: func(ctx context.Context) (*websocket.Conn, error) {
-			if wake == nil {
-				return nil, fmt.Errorf("ws stream: wake not configured")
-			}
 			if connCh == nil {
 				return nil, fmt.Errorf("ws stream: tunnel connection channel not configured")
+			}
+
+			select {
+			case conn := <-connCh:
+				if conn != nil {
+					return conn, nil
+				}
+			default:
+			}
+
+			if wake == nil {
+				return nil, fmt.Errorf("ws stream: wake not configured")
 			}
 			if err := wake(ctx); err != nil {
 				return nil, err

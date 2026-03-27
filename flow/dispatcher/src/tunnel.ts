@@ -228,6 +228,23 @@ export class TunnelClient {
       if (message.data.length > 0) {
         pending.chunks.push(message.data);
       }
+
+      if (this.isCompleteHttpResponse(pending.chunks)) {
+        const fullData = this.concatenateChunks(pending.chunks);
+        const finalMessage = create(TunnelNetworkMessageSchema, {
+          connectionId,
+          data: fullData,
+        });
+        pending.resolve(finalMessage);
+        this.pendingRequests.delete(connectionId);
+
+        const closeMsg = create(TunnelNetworkMessageSchema, {
+          connectionId,
+          error: "dispatcher: response complete",
+          data: new Uint8Array(),
+        });
+        this.sendMessageDirect(closeMsg);
+      }
       return;
     }
 
@@ -399,6 +416,30 @@ export class TunnelClient {
         }
       }, 30000);
     });
+  }
+
+  private isCompleteHttpResponse(chunks: Uint8Array[]): boolean {
+    const data = this.concatenateChunks(chunks);
+    const text = new TextDecoder().decode(data);
+
+    const headerEnd = text.indexOf("\r\n\r\n");
+    if (headerEnd === -1) return false;
+
+    const headerSection = text.slice(0, headerEnd).toLowerCase();
+    const bodyStartIdx = headerEnd + 4;
+
+    const clMatch = headerSection.match(/content-length:\s*(\d+)/);
+    if (clMatch) {
+      const expectedLen = parseInt(clMatch[1], 10);
+      const bodyBytes = data.slice(new TextEncoder().encode(text.slice(0, bodyStartIdx)).length);
+      return bodyBytes.length >= expectedLen;
+    }
+
+    if (headerSection.includes("transfer-encoding: chunked")) {
+      return text.endsWith("0\r\n\r\n") || text.includes("\r\n0\r\n\r\n");
+    }
+
+    return false;
   }
 
   private concatenateChunks(chunks: Uint8Array[]): Uint8Array {

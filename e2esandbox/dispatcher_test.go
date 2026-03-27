@@ -46,7 +46,7 @@ func TestDispatcherSuite(t *testing.T) {
 }
 
 func (s *DispatcherSuite) SetupSuite() {
-	s.ctx, s.cancel = context.WithTimeout(context.Background(), 1*time.Minute)
+	s.ctx, s.cancel = context.WithTimeout(context.Background(), 3*time.Minute)
 	t := s.T()
 
 	token := resolveVercelToken(t)
@@ -83,7 +83,7 @@ func (s *DispatcherSuite) SetupSuite() {
 		ProjectID: projectID,
 		Ports:     []int{8081},
 		Runtime:   "node24",
-		Timeout:   1 * time.Minute,
+		Timeout:   5 * time.Minute,
 	})
 	require.NoError(t, err, "failed to create sandbox")
 
@@ -186,7 +186,9 @@ func (s *DispatcherSuite) TestDispatcherPreviewFlow() {
 		}
 
 		return payload.Status == "ok"
-	}, 30*time.Second, 2*time.Second, "dispatcher preview did not forward /api/health to the sandbox userservice")
+	}, 60*time.Second, 3*time.Second, "dispatcher preview did not forward /api/health to the sandbox userservice")
+
+	s.dumpSandboxDiagnostics()
 
 	out, err := s.execInSandbox("curl", "-sf", "--max-time", "20", "--proxy", "socks5h://127.0.0.1:1080", "http://example.com")
 	require.NoError(t, err, "curl through dispatcher-backed SOCKS proxy failed")
