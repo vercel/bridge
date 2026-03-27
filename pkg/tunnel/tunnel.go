@@ -3,11 +3,11 @@ package tunnel
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/puzpuzpuz/xsync/v3"
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
@@ -21,6 +21,7 @@ import (
 type Stream interface {
 	Send(*bridgev1.TunnelNetworkMessage) error
 	Recv() (*bridgev1.TunnelNetworkMessage, error)
+	Refresh(context.Context) error
 }
 
 // Tunnel is a wrapper around a Tunnel gRPC stream that is responsible for managing the connections it is currently multiplexing. It is intended to be used by both client and server-side
@@ -72,6 +73,8 @@ type tunnelImpl struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	closeOnce sync.Once
+	refreshMu sync.Mutex
+	version   atomic.Uint64
 }
 
 func (t *tunnelImpl) Done() <-chan struct{} { return t.done }
@@ -150,9 +153,17 @@ func (t *tunnelImpl) Start(ctx context.Context) {
 				if !ok {
 					return
 				}
-				if err := t.stream.Send(msg); err != nil {
-					slog.Info("Tunnel: stream send error", "conn_id", msg.GetConnectionId(), "error", err)
-					return
+				for {
+					version := t.version.Load()
+					if err := t.stream.Send(msg); err != nil {
+						if refreshErr := t.refreshStream(version); refreshErr != nil {
+							slog.Info("Tunnel: stream send error", "conn_id", msg.GetConnectionId(), "error", err, "refresh_error", refreshErr)
+							return
+						}
+						slog.Info("Tunnel: stream send error, refreshed stream", "conn_id", msg.GetConnectionId(), "error", err)
+						continue
+					}
+					break
 				}
 				slog.Debug("Tunnel: sent", "conn_id", msg.GetConnectionId(), "bytes", len(msg.GetData()))
 			case <-t.ctx.Done():
@@ -165,57 +176,58 @@ func (t *tunnelImpl) Start(ctx context.Context) {
 	go func() {
 		defer t.Close()
 
-		recvCh := make(chan *bridgev1.TunnelNetworkMessage)
-		recvErr := make(chan error, 1)
-		go func() {
-			for {
-				msg, err := t.stream.Recv()
-				if err != nil {
-					recvErr <- err
+		for {
+			version := t.version.Load()
+			msg, err := t.stream.Recv()
+			if err != nil {
+				if refreshErr := t.refreshStream(version); refreshErr != nil {
+					slog.Info("Tunnel: stream recv error", "error", err, "refresh_error", refreshErr)
 					return
 				}
-				recvCh <- msg
+				slog.Info("Tunnel: stream recv error, refreshed stream", "error", err)
+				continue
 			}
-		}()
 
-		for {
-			select {
-			case msg := <-recvCh:
-				connID := msg.GetConnectionId()
+			connID := msg.GetConnectionId()
 
-				// Route to existing connection.
-				if conn, ok := t.conns.Load(connID); ok {
-					if msg.GetError() != "" {
-						conn.Close()
-						t.conns.Delete(connID)
-						continue
-					}
-					if data := msg.GetData(); len(data) > 0 {
-						if _, err := conn.Write(data); err != nil {
-							slog.Debug("Write to conn failed", "connection_id", connID, "error", err)
-							conn.Close()
-							t.conns.Delete(connID)
-						}
-					}
+			// Route to existing connection.
+			if conn, ok := t.conns.Load(connID); ok {
+				if msg.GetError() != "" {
+					conn.Close()
+					t.conns.Delete(connID)
 					continue
 				}
-
-				// Unknown connection ID → dial via the configured dialer.
-				go t.handleNewConn(msg)
-
-			case err := <-recvErr:
-				if err != io.EOF {
-					slog.Info("Tunnel: stream recv error", "error", err)
-				} else {
-					slog.Info("Tunnel: stream closed (EOF)")
+				if data := msg.GetData(); len(data) > 0 {
+					if _, err := conn.Write(data); err != nil {
+						slog.Debug("Write to conn failed", "connection_id", connID, "error", err)
+						conn.Close()
+						t.conns.Delete(connID)
+					}
 				}
-				return
-
-			case <-t.ctx.Done():
-				return
+				continue
 			}
+
+			// Unknown connection ID → dial via the configured dialer.
+			go t.handleNewConn(msg)
 		}
 	}()
+}
+
+func (t *tunnelImpl) refreshStream(version uint64) error {
+	t.refreshMu.Lock()
+	defer t.refreshMu.Unlock()
+
+	if t.ctx.Err() != nil {
+		return t.ctx.Err()
+	}
+	if t.version.Load() != version {
+		return nil
+	}
+	if err := t.stream.Refresh(t.ctx); err != nil {
+		return err
+	}
+	t.version.Add(1)
+	return nil
 }
 
 func (t *tunnelImpl) handleNewConn(msg *bridgev1.TunnelNetworkMessage) {

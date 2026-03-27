@@ -42,7 +42,7 @@ func (f *Forwarder) connect() error {
 	case "grpc":
 		client, err = NewGRPCProxyClient(f.upstreamAddr)
 	case "http":
-		client = NewHTTPProxyClient(f.upstreamAddr)
+		client = NewHTTPProxyClient(f.upstreamAddr, nil)
 	default:
 		return fmt.Errorf("unsupported upstream protocol %q", f.upstreamProtocol)
 	}

@@ -13,15 +13,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/urfave/cli/v3"
-	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"github.com/vercel/bridge/pkg/conntrack"
 	bridgedns "github.com/vercel/bridge/pkg/dns"
-	"github.com/vercel/bridge/pkg/grpcutil"
 	"github.com/vercel/bridge/pkg/ippool"
 	"github.com/vercel/bridge/pkg/k8s/k8spf"
 	"github.com/vercel/bridge/pkg/k8s/meta"
 	"github.com/vercel/bridge/pkg/plumbing"
+	"github.com/vercel/bridge/pkg/proxy"
 	"github.com/vercel/bridge/pkg/tunnel"
 )
 
@@ -161,17 +161,21 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		logger.Info("No forward domains configured, DNS interception disabled")
 	}
 
-	// Connect to the bridge proxy server via gRPC
-	builder := k8spf.NewBuilder(k8spf.BuilderConfig{})
-	conn, err := grpcutil.NewClient(serverAddr, builder.DialOptions()...)
+	interceptSrv, err := newInterceptServer(c.String("addr"))
+	if err != nil {
+		return err
+	}
+	defer interceptSrv.Stop()
+
+	// Connect to the bridge proxy server via gRPC or HTTP, depending on the address.
+	proxyClient, err := newProxyClient(serverAddr, interceptSrv.TunnelConnCh())
 	if err != nil {
 		return fmt.Errorf("failed to connect to bridge proxy: %w", err)
 	}
-	defer conn.Close()
-	client := bridgev1.NewBridgeProxyServiceClient(conn)
+	defer proxyClient.Close()
 
 	// Fetch metadata from the proxy pod (env vars, CA cert/key).
-	metadata, err := client.GetMetadata(ctx, &bridgev1.GetMetadataRequest{})
+	metadata, err := proxyClient.GetMetadata(ctx)
 	if err != nil {
 		slog.Warn("Failed to get metadata from proxy", "error", err)
 	}
@@ -188,14 +192,14 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 
 	// Copy files from the proxy pod if requested.
 	if len(copyFiles) > 0 {
-		if err := copyFilesFromProxy(ctx, client, copyFiles); err != nil {
+		if err := copyFilesFromProxy(ctx, proxyClient, copyFiles); err != nil {
 			slog.Warn("Failed to copy files from proxy", "error", err)
 		}
 	}
 
 	// Open the shared tunnel stream. If app-port is set, ingress traffic from
 	// the server's --listen-ports will be forwarded to that local port.
-	stream, err := client.TunnelNetwork(ctx)
+	stream, err := proxyClient.OpenTunnel(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to open tunnel stream: %w", err)
 	}
@@ -229,7 +233,7 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		var originalResolvConf []byte
 		if len(forwardDomains) > 0 {
 			originalNS := readOriginalNameserver()
-			exchangeClient := bridgedns.NewTunnelExchangeClient(forwardDomains, &grpcDNSResolver{client: client}, originalNS)
+			exchangeClient := bridgedns.NewTunnelExchangeClient(forwardDomains, proxyClient, originalNS)
 			dns, err = StartDNS(DNSConfig{
 				ListenPort: dnsPort,
 				Client:     exchangeClient,
@@ -309,13 +313,6 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		slog.Info("Shutting down...")
 		cancel()
 	}()
-
-	// Start the intercept gRPC server (health check endpoint).
-	interceptSrv, err := newInterceptServer(c.String("addr"))
-	if err != nil {
-		return err
-	}
-	defer interceptSrv.Stop()
 
 	// Test hook: simulate a crash after full initialization.
 	if os.Getenv("__TEST_FAIL_INTERCEPT") == "true" {
@@ -412,33 +409,23 @@ func restoreResolvConf(original []byte) {
 	}
 }
 
-// grpcDNSResolver wraps a BridgeProxyServiceClient to satisfy the DNS resolver
-// interface used by TunnelExchangeClient.
-type grpcDNSResolver struct {
-	client bridgev1.BridgeProxyServiceClient
-}
-
-func (r *grpcDNSResolver) ResolveDNS(ctx context.Context, hostname string) (*bridgedns.DNSResolveResult, error) {
-	resp, err := r.client.ResolveDNSQuery(ctx, &bridgev1.ProxyResolveDNSRequest{
-		Hostname: hostname,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("ResolveDNSQuery RPC: %w", err)
+func newProxyClient(serverAddr string, tunnelConnCh <-chan *websocket.Conn) (proxy.ProxyClient, error) {
+	if strings.HasPrefix(serverAddr, "http://") || strings.HasPrefix(serverAddr, "https://") {
+		return proxy.NewHTTPProxyClient(serverAddr, tunnelConnCh), nil
 	}
-	return &bridgedns.DNSResolveResult{
-		Addresses: resp.GetAddresses(),
-		Error:     resp.GetError(),
-	}, nil
+
+	builder := k8spf.NewBuilder(k8spf.BuilderConfig{})
+	return proxy.NewGRPCProxyClient(serverAddr, builder.DialOptions()...)
 }
 
 // copyFilesFromProxy calls the CopyFiles RPC and writes each file to the local
 // filesystem at the same absolute path with relaxed permissions (0666/0777).
-func copyFilesFromProxy(ctx context.Context, client bridgev1.BridgeProxyServiceClient, paths []string) error {
+func copyFilesFromProxy(ctx context.Context, client proxy.ProxyClient, paths []string) error {
 	slog.Info("Copying files from proxy pod", "paths", paths)
 
-	resp, err := client.CopyFiles(ctx, &bridgev1.CopyFilesRequest{Paths: paths})
+	resp, err := client.CopyFiles(ctx, paths)
 	if err != nil {
-		return fmt.Errorf("CopyFiles RPC: %w", err)
+		return fmt.Errorf("CopyFiles: %w", err)
 	}
 
 	for _, f := range resp.GetFiles() {

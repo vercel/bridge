@@ -5,56 +5,74 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 
-	"github.com/vercel/bridge/pkg/grpcutil"
-	"google.golang.org/grpc"
-	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"github.com/gorilla/websocket"
 )
 
-// interceptServer exposes a gRPC server for the intercept process with a
-// health check endpoint that reports whether the interceptor is initialized.
+// interceptServer accepts inbound dispatcher tunnel connections and hands them
+// to the interceptor stream via a channel.
 type interceptServer struct {
-	healthpb.UnimplementedHealthServer
-
-	server *grpc.Server
-	ready  bool
+	httpServer   *http.Server
+	tunnelConnCh chan *websocket.Conn
+	upgrader     websocket.Upgrader
 }
 
 func newInterceptServer(addr string) (*interceptServer, error) {
-	s := &interceptServer{}
-	s.server = grpcutil.NewServer()
-	healthpb.RegisterHealthServer(s.server, s)
+	s := &interceptServer{
+		tunnelConnCh: make(chan *websocket.Conn, 1),
+		upgrader: websocket.Upgrader{
+			CheckOrigin: func(r *http.Request) bool { return true },
+		},
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/__tunnel/connect", s.handleTunnelWS)
+
+	s.httpServer = &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
 
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
-	slog.Info("Intercept server listening", "addr", lis.Addr().String())
+	logger := slog.With("addr", lis.Addr().String())
+	logger.Info("Intercept server listening")
 
-	go s.server.Serve(lis)
+	go s.httpServer.Serve(lis)
 	return s, nil
 }
 
-// SetReady marks the intercept as ready.
-func (s *interceptServer) SetReady() {
-	s.ready = true
-}
+func (s *interceptServer) SetReady() {}
 
-// Stop gracefully stops the gRPC server.
 func (s *interceptServer) Stop() {
-	s.server.GracefulStop()
+	_ = s.httpServer.Shutdown(context.Background())
 }
 
-// Check implements the gRPC health check by reporting the interceptor's
-// own readiness state.
-func (s *interceptServer) Check(_ context.Context, _ *healthpb.HealthCheckRequest) (*healthpb.HealthCheckResponse, error) {
-	if !s.ready {
-		return &healthpb.HealthCheckResponse{
-			Status: healthpb.HealthCheckResponse_NOT_SERVING,
-		}, nil
+func (s *interceptServer) TunnelConnCh() <-chan *websocket.Conn {
+	return s.tunnelConnCh
+}
+
+func (s *interceptServer) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
+	conn, err := s.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		logger := slog.With("path", r.URL.Path)
+		logger.Error("WebSocket upgrade failed", "error", err)
+		return
 	}
 
-	return &healthpb.HealthCheckResponse{
-		Status: healthpb.HealthCheckResponse_SERVING,
-	}, nil
+	select {
+	case s.tunnelConnCh <- conn:
+	default:
+		select {
+		case staleConn := <-s.tunnelConnCh:
+			if staleConn != nil {
+				_ = staleConn.Close()
+			}
+		default:
+		}
+		s.tunnelConnCh <- conn
+	}
 }

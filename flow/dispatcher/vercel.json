@@ -1,12 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
-  "builds": [
-    {
-      "src": "api/index.ts",
-      "use": "@vercel/node"
+  "framework": null,
+  "buildCommand": "",
+  "installCommand": "corepack enable && pnpm install",
+  "functions": {
+    "api/index.ts": {
+      "maxDuration": 300
     }
-  ],
+  },
   "routes": [
     {
       "src": "/(.*)",

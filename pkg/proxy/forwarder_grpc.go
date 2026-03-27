@@ -8,6 +8,7 @@ import (
 
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"github.com/vercel/bridge/pkg/grpcutil"
+	"github.com/vercel/bridge/pkg/tunnel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -70,6 +71,6 @@ func (s *ForwarderGRPCServer) CopyFiles(ctx context.Context, req *bridgev1.CopyF
 }
 
 func (s *ForwarderGRPCServer) TunnelNetwork(stream grpc.BidiStreamingServer[bridgev1.TunnelNetworkMessage, bridgev1.TunnelNetworkMessage]) error {
-	s.forwarder.HandleTunnelStream(stream.Context(), stream)
+	s.forwarder.HandleTunnelStream(stream.Context(), tunnel.NewStaticStream(stream))
 	return nil
 }

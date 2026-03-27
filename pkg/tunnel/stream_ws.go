@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -17,11 +18,51 @@ type WSStream struct {
 
 	// WebSocket writes are not concurrent-safe; guard with a mutex.
 	writeMu sync.Mutex
+	connMu  sync.RWMutex
+
+	refresher func(context.Context) (*websocket.Conn, error)
 }
 
 // NewWSStream wraps a WebSocket connection as a tunnel Stream.
 func NewWSStream(conn *websocket.Conn) *WSStream {
 	return &WSStream{conn: conn}
+}
+
+// NewReconnectableWSStream wraps a WebSocket connection as a tunnel Stream
+// and uses the refresher to replace the underlying connection after failures.
+func NewReconnectableWSStream(conn *websocket.Conn, refresher func(context.Context) (*websocket.Conn, error)) *WSStream {
+	return &WSStream{
+		conn:      conn,
+		refresher: refresher,
+	}
+}
+
+// NewWakeableWSStream waits for inbound WebSocket connections on connCh after
+// calling wake. Refreshes replace the underlying connection with the next
+// accepted socket from connCh.
+func NewWakeableWSStream(connCh <-chan *websocket.Conn, wake func(context.Context) error) *WSStream {
+	return &WSStream{
+		refresher: func(ctx context.Context) (*websocket.Conn, error) {
+			if wake == nil {
+				return nil, fmt.Errorf("ws stream: wake not configured")
+			}
+			if connCh == nil {
+				return nil, fmt.Errorf("ws stream: tunnel connection channel not configured")
+			}
+			if err := wake(ctx); err != nil {
+				return nil, err
+			}
+			select {
+			case conn := <-connCh:
+				if conn == nil {
+					return nil, fmt.Errorf("ws stream: accepted connection is nil")
+				}
+				return conn, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}
 }
 
 func (s *WSStream) Send(msg *bridgev1.TunnelNetworkMessage) error {
@@ -31,14 +72,22 @@ func (s *WSStream) Send(msg *bridgev1.TunnelNetworkMessage) error {
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+	conn := s.currentConn()
+	if conn == nil {
+		return fmt.Errorf("ws stream: send: no active connection")
+	}
+	if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
 		return fmt.Errorf("ws stream: send: %w", err)
 	}
 	return nil
 }
 
 func (s *WSStream) Recv() (*bridgev1.TunnelNetworkMessage, error) {
-	_, data, err := s.conn.ReadMessage()
+	conn := s.currentConn()
+	if conn == nil {
+		return nil, fmt.Errorf("ws stream: recv: no active connection")
+	}
+	_, data, err := conn.ReadMessage()
 	if err != nil {
 		return nil, fmt.Errorf("ws stream: recv: %w", err)
 	}
@@ -49,7 +98,44 @@ func (s *WSStream) Recv() (*bridgev1.TunnelNetworkMessage, error) {
 	return msg, nil
 }
 
+func (s *WSStream) Refresh(ctx context.Context) error {
+	if s.refresher == nil {
+		return fmt.Errorf("ws stream: refresh not supported")
+	}
+	conn, err := s.refresher(ctx)
+	if err != nil {
+		return fmt.Errorf("ws stream: refresh: %w", err)
+	}
+
+	s.writeMu.Lock()
+	s.connMu.Lock()
+	oldConn := s.conn
+	s.conn = conn
+	s.connMu.Unlock()
+	s.writeMu.Unlock()
+
+	if oldConn != nil {
+		_ = oldConn.Close()
+	}
+	return nil
+}
+
 // Close closes the underlying WebSocket connection.
 func (s *WSStream) Close() error {
-	return s.conn.Close()
+	s.writeMu.Lock()
+	s.connMu.Lock()
+	conn := s.conn
+	s.conn = nil
+	s.connMu.Unlock()
+	s.writeMu.Unlock()
+	if conn == nil {
+		return nil
+	}
+	return conn.Close()
+}
+
+func (s *WSStream) currentConn() *websocket.Conn {
+	s.connMu.RLock()
+	defer s.connMu.RUnlock()
+	return s.conn
 }

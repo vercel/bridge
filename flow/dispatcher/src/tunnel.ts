@@ -49,14 +49,14 @@ export class TunnelClient {
     }
     this.isConnected = false;
 
-    // Build WebSocket URL pointing to the BridgeProxyService tunnel endpoint.
+    // Build WebSocket URL pointing to the interceptor tunnel endpoint.
     let wsUrl = this.config.serverAddr;
     if (wsUrl.startsWith("https://")) {
       wsUrl = "wss://" + wsUrl.slice(8);
     } else if (wsUrl.startsWith("http://")) {
       wsUrl = "ws://" + wsUrl.slice(7);
     }
-    wsUrl = wsUrl.replace(/\/$/, "") + "/bridge.v1.BridgeProxyService/TunnelNetwork";
+    wsUrl = wsUrl.replace(/\/$/, "") + "/__tunnel/connect";
 
     logger.debug(`Connecting to WebSocket: ${wsUrl}`);
 

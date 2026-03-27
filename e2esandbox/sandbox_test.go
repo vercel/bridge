@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
-	"strings"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"github.com/vercel/bridge/api/go/bridge/v1/bridgev1connect"
 	"github.com/vercel/bridge/pkg/flow/sandbox"
+	"github.com/vercel/bridge/pkg/flow/vercel"
 )
 
 const (
@@ -217,37 +219,12 @@ func (s *SandboxSuite) TestResolveDNS() {
 func resolveVercelToken(t *testing.T) string {
 	t.Helper()
 
-	if token := os.Getenv("VERCEL_TOKEN"); token != "" {
-		return token
+	token, err := vercel.ResolveToken()
+	if errors.Is(err, vercel.ErrTokenNotFound) {
+		t.Skip("skipping: VERCEL_TOKEN not set and no Vercel CLI auth.json found")
 	}
-
-	// Try to read from Vercel CLI auth config.
-	home, err := os.UserHomeDir()
 	require.NoError(t, err)
-
-	// Vercel CLI stores auth in platform-specific config directories.
-	candidates := []string{
-		home + "/.local/share/com.vercel.cli/auth.json",                // Linux (XDG)
-		home + "/Library/Application Support/com.vercel.cli/auth.json", // macOS
-		home + "/.config/com.vercel.cli/auth.json",                     // Fallback
-	}
-
-	for _, path := range candidates {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		var auth struct {
-			Token string `json:"token"`
-		}
-		if err := json.Unmarshal(data, &auth); err == nil && auth.Token != "" {
-			t.Logf("Using Vercel token from %s", path)
-			return auth.Token
-		}
-	}
-
-	t.Skip("skipping: VERCEL_TOKEN not set and no Vercel CLI auth.json found")
-	return ""
+	return token
 }
 
 // projectRoot returns the path to the bridge repository root.
@@ -260,7 +237,7 @@ func projectRoot(t *testing.T) string {
 		if _, err := os.Stat(dir + "/go.mod"); err == nil {
 			return dir
 		}
-		parent := dir[:strings.LastIndex(dir, "/")]
+		parent := filepath.Dir(dir)
 		if parent == dir {
 			t.Fatal("could not find project root (go.mod)")
 		}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vercel/bridge/pkg/grpcutil"
+	"github.com/vercel/bridge/pkg/tunnel"
 
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"google.golang.org/grpc"
@@ -157,6 +158,6 @@ func (s *GRPCServer) CopyFiles(ctx context.Context, req *bridgev1.CopyFilesReque
 
 // TunnelNetwork handles the single bidirectional tunnel stream.
 func (s *GRPCServer) TunnelNetwork(stream grpc.BidiStreamingServer[bridgev1.TunnelNetworkMessage, bridgev1.TunnelNetworkMessage]) error {
-	s.Service.HandleTunnelStream(stream.Context(), stream)
+	s.Service.HandleTunnelStream(stream.Context(), tunnel.NewStaticStream(stream))
 	return nil
 }
