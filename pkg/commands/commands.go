@@ -118,6 +118,7 @@ func NewApp() *cli.Command {
 			Debug(),
 			Update(),
 			Schema(),
+			Hackathon(),
 		},
 	}
 }
