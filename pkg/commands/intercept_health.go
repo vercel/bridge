@@ -28,6 +28,7 @@ func newInterceptServer(addr string) (*interceptServer, error) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/__tunnel/connect", s.handleTunnelWS)
+	mux.HandleFunc("/__exec", s.handleExecWS)
 
 	s.httpServer = &http.Server{
 		Addr:    addr,
