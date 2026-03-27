@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -44,11 +43,8 @@ func (s *interceptServer) handleExecWS(w http.ResponseWriter, r *http.Request) {
 		rows = 24
 	}
 
-	home, _ := os.UserHomeDir()
-
 	shell := getShell()
 	cmd := exec.Command(shell)
-	cmd.Dir = filepath.Join(home, "devbox-todo")
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor")
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{
