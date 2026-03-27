@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { listTodos, createTodo } from "./store";
+import { listTodos, createTodo } from "./stores";
 
 export function GET() {
   return NextResponse.json({ todos: listTodos() });
