@@ -68,7 +68,7 @@ func (s *interceptServer) handleExecWS(w http.ResponseWriter, r *http.Request) {
 		for {
 			n, readErr := ptmx.Read(buf)
 			if n > 0 {
-				if writeErr := conn.WriteMessage(websocket.TextMessage, buf[:n]); writeErr != nil {
+				if writeErr := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); writeErr != nil {
 					return
 				}
 			}
