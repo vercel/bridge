@@ -25,6 +25,8 @@ function adaptResponse(res: VercelResponse): ResponseWriter {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  console.log(`[dispatcher] handler invoked: ${req.method} ${req.url}`);
+
   // Get body as string for POST requests
   let body: string | undefined;
   if (req.method === "POST" && req.body) {
@@ -64,6 +66,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Keep the Vercel function alive while the WebSocket processes messages
   const client = getCurrentTunnelClient();
   if (client) {
+    console.log(`[dispatcher] waitUntil: tunnel client active, keeping function alive`);
     waitUntil(client.runUntilDone());
+  } else {
+    console.log(`[dispatcher] no active tunnel client after handleRequest`);
   }
 }

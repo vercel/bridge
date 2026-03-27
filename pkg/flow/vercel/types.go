@@ -12,6 +12,7 @@ type Client interface {
 	CreateDeployment(ctx context.Context, opts CreateDeploymentOpts) (*Deployment, error)
 	GetDeployment(ctx context.Context, idOrURL string) (*Deployment, error)
 	WaitDeployment(ctx context.Context, idOrURL string, pollInterval time.Duration) (*Deployment, error)
+	GetProject(ctx context.Context, projectID string) (*Project, error)
 }
 
 type Config struct {
@@ -88,6 +89,16 @@ type Deployment struct {
 	Meta         map[string]string `json:"meta"`
 	CreatedAt    int64             `json:"createdAt"`
 	Ready        int64             `json:"ready"`
+}
+
+type Project struct {
+	ID               string                       `json:"id"`
+	Name             string                       `json:"name"`
+	ProtectionBypass map[string]ProtectionBypassEntry `json:"protectionBypass"`
+}
+
+type ProtectionBypassEntry struct {
+	Scope string `json:"scope"`
 }
 
 const (

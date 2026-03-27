@@ -22,6 +22,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
  * Reads BRIDGE_SERVER_ADDR from the environment to know where to connect.
  */
 export async function getTunnelClient(): Promise<TunnelClient> {
+  console.log(`[connection] getTunnelClient called, existing=${!!tunnelClient}, connected=${tunnelClient?.connected}`);
+
   // Return existing client if connected
   if (tunnelClient && tunnelClient.connected) {
     return tunnelClient;
@@ -42,6 +44,7 @@ export async function getTunnelClient(): Promise<TunnelClient> {
   }
 
   const serverAddr = process.env.BRIDGE_SERVER_ADDR || "http://localhost:3000";
+  console.log(`[connection] creating TunnelClient, serverAddr=${serverAddr}`);
 
   // Create tunnel client
   tunnelClient = new TunnelClient({ serverAddr });
@@ -55,9 +58,9 @@ export async function getTunnelClient(): Promise<TunnelClient> {
 
   try {
     await connectionPromise;
-    console.log(`Connected to bridge server at ${serverAddr}`);
+    console.log(`[connection] connected to bridge server at ${serverAddr}`);
   } catch (error) {
-    // Reset state on connection failure
+    console.error(`[connection] connection failed:`, error);
     tunnelClient = null;
     connectionPromise = null;
     throw error;

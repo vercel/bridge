@@ -86,6 +86,15 @@ func (c *httpAPIClient) CreateDeployment(ctx context.Context, opts CreateDeploym
 	return &deployment, nil
 }
 
+func (c *httpAPIClient) GetProject(ctx context.Context, projectID string) (*Project, error) {
+	var project Project
+	path := "/v9/projects/" + url.PathEscape(projectID)
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &project); err != nil {
+		return nil, err
+	}
+	return &project, nil
+}
+
 func (c *httpAPIClient) GetDeployment(ctx context.Context, idOrURL string) (*Deployment, error) {
 	var deployment Deployment
 	path := "/v13/deployments/" + url.PathEscape(idOrURL)

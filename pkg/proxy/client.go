@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"strings"
 	"time"
 
@@ -77,18 +78,21 @@ func (c *grpcProxyClient) Close() error {
 // httpProxyClient implements ProxyClient over the dispatcher HTTP control
 // endpoints plus the existing WebSocket tunnel path.
 type httpProxyClient struct {
-	baseURL      string
-	client       *http.Client
-	tunnelConnCh <-chan *websocket.Conn
+	baseURL          string
+	client           *http.Client
+	tunnelConnCh     <-chan *websocket.Conn
+	protectionBypass string
 }
 
 // NewHTTPProxyClient creates a ProxyClient backed by dispatcher HTTP control
 // endpoints and an inbound WebSocket tunnel stream.
-func NewHTTPProxyClient(baseURL string, tunnelConnCh <-chan *websocket.Conn) ProxyClient {
+func NewHTTPProxyClient(baseURL string, tunnelConnCh <-chan *websocket.Conn, protectionBypass string) ProxyClient {
+	jar, _ := cookiejar.New(nil)
 	return &httpProxyClient{
-		baseURL:      strings.TrimRight(baseURL, "/"),
-		client:       http.DefaultClient,
-		tunnelConnCh: tunnelConnCh,
+		baseURL:          strings.TrimRight(baseURL, "/"),
+		client:           &http.Client{Jar: jar, Timeout: 30 * time.Second},
+		tunnelConnCh:     tunnelConnCh,
+		protectionBypass: protectionBypass,
 	}
 }
 
@@ -123,13 +127,21 @@ func (c *httpProxyClient) Close() error {
 }
 
 const (
-	dispatcherConnectTimeout = 10 * time.Second
+	dispatcherConnectTimeout = 30 * time.Second
 )
 
 func (c *httpProxyClient) wakeTunnel(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/__tunnel/connect", nil)
+	wakeURL := c.baseURL + "/__tunnel/connect"
+	if c.protectionBypass != "" {
+		wakeURL += "?x-vercel-protection-bypass=" + c.protectionBypass + "&x-vercel-set-bypass-cookie=true"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, wakeURL, nil)
 	if err != nil {
 		return fmt.Errorf("build wake request: %w", err)
+	}
+	if c.protectionBypass != "" {
+		req.Header.Set("x-vercel-protection-bypass", c.protectionBypass)
+		req.Header.Set("x-vercel-set-bypass-cookie", "true")
 	}
 
 	resp, err := c.client.Do(req)

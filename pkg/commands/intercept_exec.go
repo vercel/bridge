@@ -11,17 +11,14 @@ import (
 	"os"
 	"os/exec"
 	"sync"
-	"syscall"
 
 	"github.com/gorilla/websocket"
 )
 
-// execMessageType identifies the kind of WebSocket message in the exec protocol.
 type execMessageType struct {
 	Type string `json:"type"`
 }
 
-// execStartRequest is sent once by the client after WebSocket upgrade to start a command.
 type execStartRequest struct {
 	Type    string            `json:"type"`
 	Command []string          `json:"command"`
@@ -29,26 +26,22 @@ type execStartRequest struct {
 	Env     map[string]string `json:"env,omitempty"`
 }
 
-// execStdinMessage forwards data to the process's stdin.
 type execStdinMessage struct {
 	Type string `json:"type"`
 	Data string `json:"data"`
 }
 
-// execSignalMessage sends a signal to the process group.
 type execSignalMessage struct {
 	Type   string `json:"type"`
 	Signal string `json:"signal"`
 }
 
-// execOutputMessage streams a chunk of process output to the client.
 type execOutputMessage struct {
 	Type   string `json:"type"`
 	Stream string `json:"stream"`
 	Data   string `json:"data"`
 }
 
-// execExitMessage is the final message sent when the process exits.
 type execExitMessage struct {
 	Type  string `json:"type"`
 	Code  int    `json:"code"`
@@ -63,7 +56,6 @@ func (s *interceptServer) handleExecWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Read the start request.
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
 		slog.Error("Failed to read exec start message", "error", err)
@@ -84,7 +76,7 @@ func (s *interceptServer) handleExecWS(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setSysProcAttr(cmd)
 
 	if start.Dir != "" {
 		cmd.Dir = start.Dir
@@ -121,19 +113,16 @@ func (s *interceptServer) handleExecWS(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// Stream stdout.
 	go func() {
 		defer wg.Done()
 		streamOutput(conn, &writeMu, stdout, "stdout")
 	}()
 
-	// Stream stderr.
 	go func() {
 		defer wg.Done()
 		streamOutput(conn, &writeMu, stderr, "stderr")
 	}()
 
-	// Read client messages (stdin, signals).
 	go func() {
 		defer stdin.Close()
 		for {
@@ -162,15 +151,11 @@ func (s *interceptServer) handleExecWS(w http.ResponseWriter, r *http.Request) {
 				if json.Unmarshal(raw, &sm) != nil {
 					continue
 				}
-				sig := parseSignal(sm.Signal)
-				if sig != 0 && cmd.Process != nil {
-					_ = syscall.Kill(-cmd.Process.Pid, sig)
-				}
+				sendSignalToProcess(cmd, sm.Signal)
 			}
 		}
 	}()
 
-	// Wait for output streams to drain, then wait for process exit.
 	wg.Wait()
 	exitCode := 0
 	waitErr := cmd.Wait()
@@ -220,17 +205,4 @@ func writeExecExit(conn *websocket.Conn, mu *sync.Mutex, code int, errMsg string
 		defer mu.Unlock()
 	}
 	_ = conn.WriteMessage(websocket.TextMessage, data)
-}
-
-func parseSignal(name string) syscall.Signal {
-	switch name {
-	case "SIGTERM":
-		return syscall.SIGTERM
-	case "SIGKILL":
-		return syscall.SIGKILL
-	case "SIGINT":
-		return syscall.SIGINT
-	default:
-		return 0
-	}
 }

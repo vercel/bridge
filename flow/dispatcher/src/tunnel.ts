@@ -58,7 +58,7 @@ export class TunnelClient {
     }
     wsUrl = wsUrl.replace(/\/$/, "") + "/__tunnel/connect";
 
-    logger.debug(`Connecting to WebSocket: ${wsUrl}`);
+    console.log(`[tunnel] connecting to WebSocket: ${wsUrl}`);
 
     return new Promise<void>((resolve, reject) => {
       this.ws = new WebSocket(wsUrl, {
@@ -68,7 +68,7 @@ export class TunnelClient {
       this.ws.binaryType = "nodebuffer";
 
       this.ws.on("open", () => {
-        logger.debug("WebSocket connection established");
+        console.log(`[tunnel] WebSocket connection established to ${wsUrl}`);
         this.isConnected = true;
 
         this.processingPromise = new Promise<void>((doneResolve) => {
@@ -88,7 +88,7 @@ export class TunnelClient {
       });
 
       this.ws.on("close", () => {
-        logger.debug("WebSocket connection closed");
+        console.log(`[tunnel] WebSocket connection closed`);
         this.isConnected = false;
         for (const [, pending] of this.pendingRequests) {
           pending.reject(new Error("WebSocket connection closed"));
@@ -100,7 +100,7 @@ export class TunnelClient {
       });
 
       this.ws.on("error", (err) => {
-        logger.error("WebSocket error:", err);
+        console.error(`[tunnel] WebSocket error (connected=${this.isConnected}):`, err);
         if (!this.isConnected) {
           reject(err);
         }

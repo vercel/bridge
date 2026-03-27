@@ -86,6 +86,11 @@ func Intercept() *cli.Command {
 				Value:   ":1080",
 				Sources: cli.EnvVars("BRIDGE_SOCKS_ADDR"),
 			},
+			&cli.StringFlag{
+				Name:    "protection-bypass",
+				Usage:   "Vercel deployment protection bypass token",
+				Sources: cli.EnvVars("VERCEL_AUTOMATION_BYPASS_SECRET"),
+			},
 		},
 		Action: runIntercept,
 	}
@@ -168,7 +173,8 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	defer interceptSrv.Stop()
 
 	// Connect to the bridge proxy server via gRPC or HTTP, depending on the address.
-	proxyClient, err := newProxyClient(serverAddr, interceptSrv.TunnelConnCh())
+	protectionBypass := c.String("protection-bypass")
+	proxyClient, err := newProxyClient(serverAddr, interceptSrv.TunnelConnCh(), protectionBypass)
 	if err != nil {
 		return fmt.Errorf("failed to connect to bridge proxy: %w", err)
 	}
@@ -409,9 +415,9 @@ func restoreResolvConf(original []byte) {
 	}
 }
 
-func newProxyClient(serverAddr string, tunnelConnCh <-chan *websocket.Conn) (proxy.ProxyClient, error) {
+func newProxyClient(serverAddr string, tunnelConnCh <-chan *websocket.Conn, protectionBypass string) (proxy.ProxyClient, error) {
 	if strings.HasPrefix(serverAddr, "http://") || strings.HasPrefix(serverAddr, "https://") {
-		return proxy.NewHTTPProxyClient(serverAddr, tunnelConnCh), nil
+		return proxy.NewHTTPProxyClient(serverAddr, tunnelConnCh, protectionBypass), nil
 	}
 
 	builder := k8spf.NewBuilder(k8spf.BuilderConfig{})

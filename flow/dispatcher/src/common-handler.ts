@@ -125,16 +125,17 @@ export async function handleRequest(
   req: RequestInfo,
   res: ResponseWriter
 ): Promise<boolean> {
-  console.log(`Incoming request: ${req.method} ${req.url}`);
+  const pathname = req.url.split("?")[0];
+  console.log(`[handler] incoming: ${req.method} ${req.url} (pathname=${pathname})`);
 
   // Health check endpoint
-  if (req.url === "/__bridge/health") {
+  if (pathname === "/__bridge/health") {
     res.status(200).send("dispatcher ok");
     return true;
   }
 
   // Tunnel connect endpoint - called by the bridge server to trigger tunnel connection
-  if (req.url === "/__tunnel/connect" && req.method === "POST") {
+  if (pathname === "/__tunnel/connect" && req.method === "POST") {
     try {
       await getTunnelClient();
       res.status(200).json({ status: "connected" });
@@ -149,7 +150,7 @@ export async function handleRequest(
   }
 
   // Status endpoint - check if tunnel is connected
-  if (req.url === "/__tunnel/status") {
+  if (pathname === "/__tunnel/status") {
     const client = getCurrentTunnelClient();
     if (client && client.connected) {
       res.status(200).json({

@@ -2,281 +2,195 @@
 
 ## Goal
 
-Create an end-to-end sandbox test that proves this flow:
+Prove this end-to-end flow:
 
-1. A bridge proxy server runs inside a Vercel Sandbox.
-2. A Vercel preview deployment runs the dispatcher code from this repo.
-3. The sandbox interceptor connects to that preview deployment.
-4. A `userservice` process runs inside the sandbox behind the bridge/interceptor.
-5. Ingress to the preview deployment reaches the sandbox app.
-6. Outbound traffic from the sandbox app can flow through the interceptor SOCKS proxy.
+1. A Vercel preview deployment runs `flow/dispatcher`.
+2. A sandbox runs `bridge intercept`.
+3. The interceptor wakes the dispatcher with `POST /__tunnel/connect`.
+4. The dispatcher connects back to the interceptor over WebSocket at `GET /__tunnel/connect`.
+5. Preview ingress is forwarded through the dispatcher to the sandbox app.
+6. Sandbox egress flows through the interceptor SOCKS proxy and back out through the dispatcher.
 
-## Current Building Blocks
+## Current Implementation State
 
-- `pkg/flow/sandbox` already creates sandboxes, runs commands, streams logs, and exposes sandbox routes.
-- `pkg/flow/vercel` now resolves the Vercel token and can create / poll deployments.
-- `flow/dispatcher` already has a Vercel function entrypoint and tunnel logic.
-- `flow/userservice` is a minimal Vercel API app suitable for ingress validation.
-- `bridge intercept` now has a path to support HTTP proxy targets by reusing `pkg/proxy.NewHTTPProxyClient`.
-- the Go bridge proxy server already exposes BridgeProxyService over Connect RPC for unary methods.
+### Transport shape
 
-## Planned Test Shape
+The old “dispatcher exposes BridgeProxyService over ConnectRPC” direction was abandoned.
 
-### 1. Add a new e2e suite
+Current model:
 
-Create a new sandbox e2e suite, likely in `e2esandbox/dispatcher_test.go`, with one main test that owns the full flow.
+- the dispatcher is a plain HTTP service
+- the interceptor uses plain HTTP to wake it
+- the actual tunnel is a WebSocket initiated by the dispatcher back to the interceptor
 
-Suggested suite state:
+The relevant endpoints are now:
 
-- sandbox client
-- vercel client
-- sandbox ID
-- sandbox public routes
-- preview deployment metadata
-- built linux bridge binary path
+- dispatcher:
+  - `POST /__tunnel/connect`
+  - `GET /__tunnel/status`
+  - normal forwarded HTTP requests
+- interceptor:
+  - `GET /__tunnel/connect` as a WebSocket upgrade endpoint
 
-### 2. Resolve local project metadata
+### What was changed in Go
 
-Read the local Vercel project link for `flow/userservice/.vercel/project.json` to get:
+Implemented:
 
-- target Vercel project ID
-- owning team ID
-- project name
+- `pkg/proxy/client.go`
+  - the HTTP proxy client no longer uses ConnectRPC for the dispatcher path
+  - `GetMetadata` returns an empty response
+  - `CopyFiles` returns an empty response
+  - `ResolveDNS` returns an empty result
+  - `OpenTunnel()` now creates a stream that wakes the dispatcher and then waits for an inbound WebSocket from the interceptor server
+- `pkg/tunnel/tunnel.go`
+  - `Stream` now has `Refresh(context.Context) error`
+  - tunnel send/recv paths retry by calling `Refresh()` when the underlying stream dies
+- `pkg/tunnel/stream_ws.go`
+  - added reconnect support for WebSocket streams
+  - added `NewWakeableWSStream(...)` so the stream itself owns the wake-and-wait protocol
+- `pkg/commands/intercept.go`
+  - interceptor starts its local tunnel acceptor before opening the proxy client
+  - the HTTP proxy client receives the accepted-connection channel from the interceptor server
+- `pkg/commands/intercept_health.go`
+  - despite the filename, this is now just the interceptor-side HTTP/WebSocket acceptor for `GET /__tunnel/connect`
+  - it upgrades inbound dispatcher WebSockets and passes accepted sockets to the stream through a channel
 
-Resolve Git source metadata from the local repo:
+Removed / intentionally avoided:
 
-- remote origin repo: `vercel/bridge`
-- current branch/ref
-- current commit SHA
+- no `Connector` interface
+- no dispatcher-side unary BridgeProxyService implementation
+- no ConnectRPC dependency in the dispatcher HTTP path
 
-Use `gitSource` in the deployment body rather than inlined files.
+### What was changed in dispatcher
 
-### 3. Provision the sandbox
+Implemented:
 
-Create a sandbox with:
+- `flow/dispatcher/src/common-handler.ts`
+  - `POST /__tunnel/connect` wakes the singleton tunnel client
+  - `GET /__tunnel/status` reports whether the tunnel is connected
+  - all other HTTP requests are forwarded through the tunnel client
+- `flow/dispatcher/src/tunnel.ts`
+  - the dispatcher unmarshals tunnel frames with protobuf via `fromBinary(TunnelNetworkMessageSchema, ...)`
+  - outbound tunnel frames are encoded with protobuf via `toBinary(...)`
+  - the dispatcher WebSocket now connects to `.../__tunnel/connect` on the interceptor, not `/bridge.v1.BridgeProxyService/TunnelNetwork`
+  - incoming tunnel frames are handled in 3 buckets:
+    - connection error / close
+    - response chunks for pending forwarded HTTP requests
+    - outbound traffic from the sandbox app, which the dispatcher handles by opening a real TCP socket to the requested destination and proxying bytes back over the tunnel
 
-- runtime: Node 24
-- timeout: at least 10 minutes
-- exposed port for the bridge HTTP server
+## E2E Test Status
 
-Initial assumption:
+### Added
 
-- expose port `9090` for the bridge HTTP server, because the dispatcher needs a reachable `BRIDGE_SERVER_ADDR`
+A first-pass test suite was added in:
 
-### 4. Build and upload bridge
+- `e2esandbox/dispatcher_test.go`
 
-Reuse the existing linux build pattern from the sandbox e2e tests:
+The draft test currently does this:
 
-- `GOOS=linux`
-- `GOARCH=amd64`
-- `CGO_ENABLED=0`
+1. creates a sandbox with port `8081` exposed for the interceptor
+2. builds and uploads the Linux `bridge` binary
+3. creates a Vercel preview deployment for the linked `flow/dispatcher` project
+4. sets `BRIDGE_SERVER_ADDR` for the dispatcher deployment to the sandbox interceptor route
+5. starts `bridge intercept` in SOCKS mode inside the sandbox
+6. clones `vercel/bridge` inside the sandbox
+7. installs `flow/userservice`
+8. starts `vercel dev` for `userservice` on port `3000`
+9. tries preview ingress with `GET /api/health`
+10. tries sandbox-side `curl` through `socks5h://127.0.0.1:1080`
 
-Upload the binary into the sandbox and `chmod +x` it.
+### Validation done
 
-### 5. Start the sandbox bridge proxy server
-
-Start `bridge server` inside the sandbox in HTTP mode on the exposed port.
-
-Current expected command shape:
+Only a compile-level check was run:
 
 ```sh
-/vercel/sandbox/bridge server --protocol http --addr :9090
+env GOCACHE=/tmp/bridge-gocache GOMODCACHE=/tmp/bridge-gomodcache \
+  go test ./e2esandbox -run TestDispatcherSuite -count=0
 ```
 
-This server is the target for the dispatcher’s `BRIDGE_SERVER_ADDR`.
+No live sandbox/Vercel end-to-end run has been completed yet.
 
-### 6. Create the preview deployment
+## Known Gaps
 
-Create a preview deployment against the `userservice` Vercel project using:
+### Preview protection bypass
 
-- `gitSource` pointing at `vercel/bridge`
-- `projectSettings.rootDirectory = "flow/dispatcher"`
-- dispatcher-compatible project settings (`framework`, `buildCommand`, `installCommand`, node version)
-- `env.BRIDGE_SERVER_ADDR = <sandbox public route for 9090>`
+The test currently looks for:
 
-Wait for the deployment to reach a terminal ready state and fail fast with the Vercel error fields if the build fails.
-
-### 7. Start the sandbox interceptor
-
-Start `bridge intercept` inside the sandbox in SOCKS mode.
-
-Target:
-
-- `--server-addr <preview deployment URL>`
-
-Other expected flags:
-
-- `--intercept-mode socks`
-- `--socks-addr :1080`
-- `--app-port 3000`
-- `--addr :8081`
-
-This assumes the interceptor can talk to the preview deployment over the HTTP proxy client path.
-
-Current constraint:
-
-- Vercel Functions can do WebSocket egress
-- Vercel Functions cannot act as the inbound WebSocket server endpoint for the interceptor-facing tunnel path
-
-So the dispatcher work should start with the unary BridgeProxyService API surface first.
-
-### 8. Clone the repo inside the sandbox
-
-Clone `https://github.com/vercel/bridge.git` into the sandbox and start the local `userservice`.
-
-Expected flow:
-
-1. clone repo into a writable sandbox directory
-2. `cd flow/userservice`
-3. install deps
-4. run `vercel dev` on port `3000`
-
-### 9. Start userservice with SOCKS env
-
-Run `userservice` with outbound proxy env configured to the local interceptor:
-
-- `ALL_PROXY=socks5://127.0.0.1:1080`
-- `HTTP_PROXY=socks5://127.0.0.1:1080`
-- `HTTPS_PROXY=socks5://127.0.0.1:1080`
-- `NO_PROXY=127.0.0.1,localhost,::1`
-
-Wait until `http://127.0.0.1:3000/api/health` is healthy inside the sandbox.
-
-### 10. Verify ingress
-
-Send a request to the preview deployment and assert it reaches `userservice`.
-
-Primary check:
-
-- `GET /api/health`
-
-Possible implementation options:
-
-- plain HTTP request if the preview URL is publicly reachable
-- Vercel-authenticated request if preview protection is enabled
-
-### 11. Verify sandbox-side curl
-
-From inside the sandbox, run a `curl` that exercises the configured flow and assert success.
-
-Candidate checks:
-
-- `curl` to the preview deployment URL
-- `curl` to a public URL with SOCKS env set, to prove outbound proxying
-
-The first option is preferable if preview protection can be bypassed cleanly from test code.
-
-## Known Risks / Open Questions
-
-### Preview protection
-
-Preview deployments may be behind Vercel Authentication.
+- `VERCEL_AUTOMATION_BYPASS_SECRET`
 
 Current state:
 
-- a preview protection bypass secret is available for the test run
-- do not commit the raw secret into the repository
-- inject it at runtime through env or test-only configuration
+- this secret is not checked into the repo
+- it was not present in the current shell environment when the test was drafted
 
-Use the bypass secret for:
+Impact:
 
-- local ingress verification against the preview deployment
-- sandbox-side `curl` when the sandbox needs to hit the protected preview URL
+- if the preview deployment is protected, ingress verification may skip or fail until this secret is supplied at runtime
 
-Without this, ingress verification can fail even when deployment setup is correct.
+### Userservice runtime assumptions
 
-### Dispatcher upstream destination
-
-The dispatcher currently knows how to connect to the bridge server via `BRIDGE_SERVER_ADDR`, but ingress forwarding behavior needs to be validated against the actual bridge server / interceptor topology in this test.
-
-If ingress does not reach the sandbox app with the current runtime behavior, likely fixes will be in one of:
-
-- dispatcher request destination selection
-- bridge server listen-port / ingress listener configuration
-- interceptor upstream selection
-
-### Protocol mismatch between intercept and dispatcher
-
-This is the main architectural blocker discovered during planning.
-
-`bridge intercept --server-addr ...` expects a BridgeProxyService endpoint:
-
-- gRPC for native bridge targets
-- Connect RPC for unary methods on HTTP targets
-
-The Go bridge proxy server already implements the Connect RPC API. The problem is specifically that `flow/dispatcher` does **not** expose BridgeProxyService today. It exposes:
-
-- `POST /__tunnel/connect`
-- `GET /__tunnel/status`
-- regular HTTP request forwarding through its own tunnel client
-
-That means the exact requested flow still fails because the interceptor cannot call the BridgeProxyService methods it needs on the dispatcher preview deployment.
-
-The first concrete dispatcher API gap is:
-
-- `GetMetadata`
-- `CopyFiles`
-- `ResolveDNSQuery`
-
-### Bridge retry / reconnect behavior
-
-The bridge-side reconnect path also needs a targeted update.
-
-`bridge intercept` currently fetches metadata once during startup, then opens the tunnel. If the bridge-side connection dies and the retry path re-establishes it later, the client should refresh state by calling `GetMetadata` again before continuing.
-
-Current conclusion:
-
-- do not start with a broad Go transport rewrite
-- do start with a focused retry change so reconnect re-runs `GetMetadata`
-
-This is the smallest Go-side change currently believed necessary.
-
-### Narrowed implementation direction
-
-The working assumption is now:
-
-1. `flow/dispatcher` implements the unary BridgeProxyService API surface expected by `bridge intercept`
-2. bridge retry/reconnect refreshes metadata with `GetMetadata`
-3. only after that do we revisit tunnel transport shape if the e2e still fails
-
-### Previous broader options retained for context
-
-Earlier planning considered either:
-
-- changing the e2e topology so interceptor skips the dispatcher, or
-- immediately replacing the HTTP tunnel transport
-
-That is no longer the default plan.
-
-The narrower path above should be attempted first.
-
-### Current failure mode
-
-Before the new dispatcher API work, the exact requested flow fails because:
-
-- sandbox interceptor
-- `--server-addr <preview deployment url>`
-
-cannot yet call `GetMetadata`, `CopyFiles`, or `ResolveDNSQuery` on the dispatcher.
-
-### Userservice runtime in sandbox
-
-The test assumes the sandbox image has what is needed to run:
+The test currently assumes the sandbox image can run all of:
 
 - `git`
 - `node`
-- `npm` / `npx`
+- `npm`
+- `npx`
 - `vercel dev`
 
-If `vercel dev` is not viable in the sandbox, switch to a simpler local server process for validation.
+If that turns out false, the likely fix is to replace `vercel dev` with a simpler local server process.
 
-## Execution Order
+### Dispatcher deployment assumptions
 
-1. Finish `pkg/flow/vercel` support needed for `gitSource` deployments and preview-protection helpers that consume the runtime bypass secret.
-2. Implement the unary BridgeProxyService endpoints in `flow/dispatcher`.
-3. Update bridge retry/reconnect so reconnect re-fetches metadata with `GetMetadata`.
-4. Re-run the preview-deployment flow and see whether the remaining tunnel transport is sufficient.
-5. Add the new `e2esandbox` suite and helpers.
-6. Run the test manually and fix the first failing runtime assumption.
-7. Revisit tunnel transport only if the narrower dispatcher API + retry changes are insufficient.
-8. Tighten assertions and cleanup once the end-to-end path is stable.
+The draft test currently uses:
+
+- the linked local Vercel project file at `flow/dispatcher/.vercel/project.json`
+- the current git remote / branch / SHA
+
+That means it will skip or fail if:
+
+- the local project is not linked
+- the repo remote is not `vercel/bridge`
+- the linked Vercel project or org is inaccessible to the current token
+
+### HTTP no-op unary methods
+
+The HTTP proxy client intentionally returns empty results for:
+
+- `GetMetadata`
+- `CopyFiles`
+- `ResolveDNS`
+
+This matches the current simplified dispatcher path, but it means the HTTP dispatcher path does not currently provide real metadata, file copy, or DNS behavior.
+
+## Remaining TODOs
+
+1. Run the new `DispatcherSuite` against real Sandbox and Vercel infrastructure.
+2. Confirm the preview deployment can reach the sandbox interceptor route set in `BRIDGE_SERVER_ADDR`.
+3. Confirm `bridge intercept --server-addr <preview-url>` successfully wakes the dispatcher and receives the inbound dispatcher WebSocket on `GET /__tunnel/connect`.
+4. Verify that forwarded preview ingress actually reaches the sandbox app on port `3000`.
+5. Verify that sandbox-side egress through `socks5h://127.0.0.1:1080` works end to end through the dispatcher.
+6. Provide the runtime preview-protection bypass secret through `VERCEL_AUTOMATION_BYPASS_SECRET`, or decide to hard-fail on protected previews instead of skipping.
+7. Decide whether `userservice` should keep using `vercel dev` in the sandbox or be replaced with a smaller purpose-built local HTTP server.
+8. Decide whether the HTTP path should keep empty no-op unary methods or whether the dispatcher needs real metadata / file-copy / DNS behavior later.
+9. Clean up naming: `pkg/commands/intercept_health.go` no longer primarily represents gRPC health behavior.
+
+## Likely First Runtime Failure Points
+
+Most likely places this test breaks first:
+
+1. preview deployment protection blocks `/api/health`
+2. the dispatcher cannot dial back to the sandbox interceptor route
+3. `vercel dev` is too heavy or unavailable in the sandbox
+4. ingress forwarding does not target the expected sandbox app port
+5. SOCKS egress works differently than the current test assumes
+
+## Current Conclusion
+
+The architecture is now aligned with the intended flow:
+
+- interceptor wakes dispatcher via HTTP
+- dispatcher connects back to interceptor via WebSocket
+- stream refresh owns reconnect behavior
+- dispatcher forwards ingress and outbound traffic using protobuf-framed tunnel messages
+
+What remains is runtime validation and cleanup, not another transport rewrite.
