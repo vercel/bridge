@@ -32,11 +32,19 @@ func PruneAllMetadata() Transformer {
 	})
 }
 
-// StripOrphanedVolumes returns a Transformer that removes projected volumes
-// from deployments and strips volume mounts that reference non-existent
-// volumes. This handles both explicitly projected volumes and volume mounts
-// injected by the kubelet (e.g. kube-api-access-*) that have no matching
-// volume definition in the deployment template.
+// StripOrphanedVolumes returns a Transformer that removes the kubelet-
+// injected default ServiceAccount token mount (volume name `kube-api-access-
+// <random>`) from deployments, and strips any volume mounts that reference
+// it. The kubelet generates a fresh random suffix per pod, so the source-
+// spec entry won't match what the new bridge pod gets — leaving it in
+// causes admission to reject the spec or the wrong path to be mounted.
+//
+// Other projected volumes (e.g. `azure-identity-token` for AKS workload
+// identity, explicit `aws-iam-token` mounts for IRSA, projected configMaps)
+// are explicitly declared in service manifests and MUST be preserved so
+// the bridge pod can authenticate to upstream services. Previously this
+// function stripped EVERY projected volume regardless of source, which
+// broke Cosmos auth for any service using AKS workload identity.
 func StripOrphanedVolumes() Transformer {
 	return TransformFunc(func(_ *TransformContext, b *Bundle) error {
 		for _, r := range b.Resources {
@@ -46,22 +54,20 @@ func StripOrphanedVolumes() Transformer {
 			}
 			spec := &deploy.Spec.Template.Spec
 
-			// Remove projected volumes.
 			var kept []corev1.Volume
 			for _, v := range spec.Volumes {
-				if v.Projected == nil {
-					kept = append(kept, v)
+				if isAutoMountedSATokenVolume(v) {
+					continue
 				}
+				kept = append(kept, v)
 			}
 			spec.Volumes = kept
 
-			// Build set of remaining volume names.
 			valid := make(map[string]bool, len(kept))
 			for _, v := range kept {
 				valid[v.Name] = true
 			}
 
-			// Strip mounts referencing removed or missing volumes.
 			for i := range spec.Containers {
 				spec.Containers[i].VolumeMounts = filterMounts(spec.Containers[i].VolumeMounts, valid)
 			}
@@ -71,6 +77,14 @@ func StripOrphanedVolumes() Transformer {
 		}
 		return nil
 	})
+}
+
+// isAutoMountedSATokenVolume reports whether v is the kubelet-injected
+// default ServiceAccount token mount. Match on the well-known
+// `kube-api-access-<random>` name prefix the kubelet generates when
+// `automountServiceAccountToken` is enabled.
+func isAutoMountedSATokenVolume(v corev1.Volume) bool {
+	return strings.HasPrefix(v.Name, "kube-api-access-")
 }
 
 func filterMounts(mounts []corev1.VolumeMount, validVolumes map[string]bool) []corev1.VolumeMount {
