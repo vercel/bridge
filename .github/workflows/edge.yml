@@ -23,8 +23,6 @@ jobs:
             goarch: amd64
           - goos: darwin
             goarch: arm64
-          - goos: windows
-            goarch: amd64
 
     steps:
       - uses: actions/checkout@v4
@@ -38,9 +36,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          ext=""
-          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-          output="bridge-${GOOS}-${GOARCH}${ext}"
+          output="bridge-${GOOS}-${GOARCH}"
           version="edge-$(git rev-parse --short HEAD)"
           feature_tag="$(git rev-parse --short HEAD)"
           go build -ldflags="-s -w -X main.version=${version} -X main.bridgeFeatureTag=${feature_tag}" -o "$output" ./cmd/bridge
