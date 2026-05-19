@@ -72,8 +72,8 @@ func TestStripOrphanedVolumes_PreservesExplicitProjectedVolumes(t *testing.T) {
 		},
 	}
 
-	bundle := &Bundle{Resources: []*Resource{{Object: deploy}}}
-	require.NoError(t, StripOrphanedVolumes().Transform(&TransformContext{}, bundle))
+	bundle := &Bundle{Resources: []Resource{{Object: deploy}}}
+	require.NoError(t, StripOrphanedVolumes().Apply(&TransformContext{}, bundle))
 
 	gotVolumeNames := make([]string, 0, len(deploy.Spec.Template.Spec.Volumes))
 	for _, v := range deploy.Spec.Template.Spec.Volumes {
@@ -121,9 +121,76 @@ func TestStripOrphanedVolumes_StripsKubeAPIAccess(t *testing.T) {
 		},
 	}
 
-	bundle := &Bundle{Resources: []*Resource{{Object: deploy}}}
-	require.NoError(t, StripOrphanedVolumes().Transform(&TransformContext{}, bundle))
+	bundle := &Bundle{Resources: []Resource{{Object: deploy}}}
+	require.NoError(t, StripOrphanedVolumes().Apply(&TransformContext{}, bundle))
 
 	assert.Empty(t, deploy.Spec.Template.Spec.Volumes, "kube-api-access-* volume should be stripped")
 	assert.Empty(t, deploy.Spec.Template.Spec.Containers[0].VolumeMounts, "mount referencing stripped volume should be removed")
+}
+
+// TestInjectProxyImage_PassesMountRoots verifies that the container's original
+// VolumeMounts are surfaced as --mount-roots so the bridge filesystem service
+// is configured with the same paths the source app saw.
+func TestInjectProxyImage_PassesMountRoots(t *testing.T) {
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "app"},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name: "app",
+						Ports: []corev1.ContainerPort{
+							{ContainerPort: 8080},
+						},
+						VolumeMounts: []corev1.VolumeMount{
+							{Name: "secrets", MountPath: "/var/run/secrets/app"},
+							{Name: "config", MountPath: "/etc/app/config"},
+						},
+					}},
+				},
+			},
+		},
+	}
+
+	injectProxyImage(deploy, "ghcr.io/bridge:test")
+
+	cmd := deploy.Spec.Template.Spec.Containers[0].Command
+
+	// Collect the --mount-roots argument.
+	var mountRootsArg string
+	for i, a := range cmd {
+		if a == "--mount-roots" && i+1 < len(cmd) {
+			mountRootsArg = cmd[i+1]
+			break
+		}
+	}
+	require.NotEmpty(t, mountRootsArg, "expected --mount-roots argument in command: %v", cmd)
+
+	// Original VolumeMounts must be preserved on the container.
+	assert.Len(t, deploy.Spec.Template.Spec.Containers[0].VolumeMounts, 2)
+
+	// Both paths should appear in the joined arg.
+	assert.Contains(t, mountRootsArg, "/var/run/secrets/app")
+	assert.Contains(t, mountRootsArg, "/etc/app/config")
+}
+
+// TestInjectProxyImage_OmitsMountRootsWhenNoVolumes confirms we don't pass an
+// empty --mount-roots when the source container has no VolumeMounts.
+func TestInjectProxyImage_OmitsMountRootsWhenNoVolumes(t *testing.T) {
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "app"},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "app"}},
+				},
+			},
+		},
+	}
+
+	injectProxyImage(deploy, "ghcr.io/bridge:test")
+
+	for _, a := range deploy.Spec.Template.Spec.Containers[0].Command {
+		assert.NotEqual(t, "--mount-roots", a, "should not pass --mount-roots when source has no VolumeMounts")
+	}
 }

@@ -38,6 +38,11 @@ func Server() *cli.Command {
 				Usage:   "Server facade spec (JSON string or file path). May be repeated.",
 				Sources: cli.EnvVars("BRIDGE_SERVER_FACADES"),
 			},
+			&cli.StringSliceFlag{
+				Name:    "mount-roots",
+				Usage:   "Absolute paths to expose via the bridge filesystem service for FUSE mounting from the devcontainer.",
+				Sources: cli.EnvVars("BRIDGE_MOUNT_ROOTS"),
+			},
 		},
 		Action: runServer,
 	}
@@ -72,7 +77,23 @@ func runServer(ctx context.Context, c *cli.Command) error {
 		facades = append(facades, f)
 	}
 
-	grpcServer := proxy.NewGRPCServer(addr, listenPorts, facades)
+	// Parse mount-roots (may be repeated or comma-separated via env).
+	var mountRoots []string
+	for _, val := range c.StringSlice("mount-roots") {
+		for _, part := range strings.Split(val, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				mountRoots = append(mountRoots, part)
+			}
+		}
+	}
+
+	grpcServer := proxy.NewGRPCServer(proxy.Config{
+		Addr:        addr,
+		ListenPorts: listenPorts,
+		Facades:     facades,
+		MountRoots:  mountRoots,
+	})
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

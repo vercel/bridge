@@ -558,7 +558,7 @@ func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef s
 		"workspacePath":    "${containerWorkspaceFolder}",
 	}
 	if len(resp.VolumeMountPaths) > 0 {
-		featureOpts["copyFiles"] = strings.Join(resp.VolumeMountPaths, ",")
+		featureOpts["mountPaths"] = strings.Join(resp.VolumeMountPaths, ",")
 	}
 	cfg.SetFeature(featureRef, featureOpts)
 	interceptAddr := fmt.Sprintf(":%d", interceptPort)
@@ -575,6 +575,14 @@ func generateDevcontainerConfig(p interact.Printer, baseConfigPath, featureRef s
 	)
 	cfg.EnsureContainerEnv(meta.EnvInterceptorAddr, interceptAddr)
 	cfg.EnsureCapAdd("NET_ADMIN")
+	// SYS_ADMIN + /dev/fuse are required for the FUSE mounts that surface the
+	// proxy pod's volume paths inside the devcontainer. Without them, intercept
+	// falls back to skipping mounts (logged but non-fatal).
+	if len(resp.VolumeMountPaths) > 0 {
+		cfg.EnsureCapAdd("SYS_ADMIN")
+		cfg.EnsureRunArgs("--device", "/dev/fuse")
+		cfg.EnsureRunArgs("--security-opt", "apparmor:unconfined")
+	}
 	cfg.EnsureRunArgs("-l", labelBridgeDeployment+"="+dcName)
 	cfg.EnsureContainerEnv("WORKLOAD_NAME", deploymentName)
 	cfg.EnsureRemoteEnv("WORKLOAD_NAME", deploymentName)

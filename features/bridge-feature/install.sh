@@ -29,6 +29,19 @@ install_dependencies() {
         fi
     fi
 
+    # Install fuse3 if not present (needed for FUSE-mounting pod volumes).
+    # Non-fatal: only --mount-paths features need it.
+    if ! command -v fusermount3 &> /dev/null && ! command -v fusermount &> /dev/null; then
+        echo "Installing fuse3..."
+        if command -v apt-get &> /dev/null; then
+            apt-get update && apt-get install -y fuse3 || echo "WARNING: failed to install fuse3 (mounts disabled)" >&2
+        elif command -v apk &> /dev/null; then
+            apk add --no-cache fuse3 || echo "WARNING: failed to install fuse3 (mounts disabled)" >&2
+        elif command -v yum &> /dev/null; then
+            yum install -y fuse3 || echo "WARNING: failed to install fuse3 (mounts disabled)" >&2
+        fi
+    fi
+
     # Install sg (switch group) if not present. Required by the entrypoint
     # to run bridge intercept under the _bridge group for iptables GID exclusion.
     if ! command -v sg &> /dev/null; then
@@ -73,7 +86,7 @@ write_env_config() {
 export BRIDGE_SERVER_ADDR="${BRIDGESERVERADDR:-}"
 export BRIDGE_APP_PORT="${APPPORT:-3000}"
 export BRIDGE_FORWARD_DOMAINS="${FORWARDDOMAINS:-$BRIDGE_FORWARD_DOMAINS}"
-export BRIDGE_COPY_FILES="${COPYFILES:-$BRIDGE_COPY_FILES}"
+export BRIDGE_MOUNT_PATHS="${MOUNTPATHS:-$BRIDGE_MOUNT_PATHS}"
 EOF
 }
 

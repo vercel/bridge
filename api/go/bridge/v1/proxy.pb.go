@@ -262,7 +262,10 @@ type GetMetadataResponse struct {
 	CaCert []byte `protobuf:"bytes,2,opt,name=ca_cert,proto3" json:"ca_cert,omitempty"`
 	// PEM-encoded CA private key for minting per-host TLS certificates.
 	// Mounted into the bridge proxy pod from a Kubernetes Secret.
-	CaKey         []byte `protobuf:"bytes,3,opt,name=ca_key,proto3" json:"ca_key,omitempty"`
+	CaKey []byte `protobuf:"bytes,3,opt,name=ca_key,proto3" json:"ca_key,omitempty"`
+	// Absolute paths the BridgeFileSystemService is allowed to serve. The
+	// devcontainer FUSE-mounts each one at the same path on the local side.
+	MountRoots    []string `protobuf:"bytes,4,rep,name=mount_roots,proto3" json:"mount_roots,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -318,174 +321,11 @@ func (x *GetMetadataResponse) GetCaKey() []byte {
 	return nil
 }
 
-type CopyFilesRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Absolute paths to read from the pod filesystem.
-	Paths         []string `protobuf:"bytes,1,rep,name=paths,proto3" json:"paths,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CopyFilesRequest) Reset() {
-	*x = CopyFilesRequest{}
-	mi := &file_bridge_v1_proxy_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CopyFilesRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CopyFilesRequest) ProtoMessage() {}
-
-func (x *CopyFilesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_v1_proxy_proto_msgTypes[5]
+func (x *GetMetadataResponse) GetMountRoots() []string {
 	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CopyFilesRequest.ProtoReflect.Descriptor instead.
-func (*CopyFilesRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_v1_proxy_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *CopyFilesRequest) GetPaths() []string {
-	if x != nil {
-		return x.Paths
+		return x.MountRoots
 	}
 	return nil
-}
-
-type CopyFilesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Files         []*FileCopy            `protobuf:"bytes,1,rep,name=files,proto3" json:"files,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CopyFilesResponse) Reset() {
-	*x = CopyFilesResponse{}
-	mi := &file_bridge_v1_proxy_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CopyFilesResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CopyFilesResponse) ProtoMessage() {}
-
-func (x *CopyFilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_v1_proxy_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CopyFilesResponse.ProtoReflect.Descriptor instead.
-func (*CopyFilesResponse) Descriptor() ([]byte, []int) {
-	return file_bridge_v1_proxy_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *CopyFilesResponse) GetFiles() []*FileCopy {
-	if x != nil {
-		return x.Files
-	}
-	return nil
-}
-
-type FileCopy struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// The absolute path of the file or directory.
-	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	// The raw file contents (empty for directories).
-	Content []byte `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
-	// File permission mode (e.g. 0644).
-	Mode uint32 `protobuf:"varint,3,opt,name=mode,proto3" json:"mode,omitempty"`
-	// Modification time as Unix seconds.
-	ModTime int64 `protobuf:"varint,4,opt,name=mod_time,json=modTime,proto3" json:"mod_time,omitempty"`
-	// Error message if the file could not be read.
-	Error         string `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *FileCopy) Reset() {
-	*x = FileCopy{}
-	mi := &file_bridge_v1_proxy_proto_msgTypes[7]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *FileCopy) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*FileCopy) ProtoMessage() {}
-
-func (x *FileCopy) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_v1_proxy_proto_msgTypes[7]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use FileCopy.ProtoReflect.Descriptor instead.
-func (*FileCopy) Descriptor() ([]byte, []int) {
-	return file_bridge_v1_proxy_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *FileCopy) GetPath() string {
-	if x != nil {
-		return x.Path
-	}
-	return ""
-}
-
-func (x *FileCopy) GetContent() []byte {
-	if x != nil {
-		return x.Content
-	}
-	return nil
-}
-
-func (x *FileCopy) GetMode() uint32 {
-	if x != nil {
-		return x.Mode
-	}
-	return 0
-}
-
-func (x *FileCopy) GetModTime() int64 {
-	if x != nil {
-		return x.ModTime
-	}
-	return 0
-}
-
-func (x *FileCopy) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
 }
 
 type TunnelNetworkMessage struct {
@@ -511,7 +351,7 @@ type TunnelNetworkMessage struct {
 
 func (x *TunnelNetworkMessage) Reset() {
 	*x = TunnelNetworkMessage{}
-	mi := &file_bridge_v1_proxy_proto_msgTypes[8]
+	mi := &file_bridge_v1_proxy_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -523,7 +363,7 @@ func (x *TunnelNetworkMessage) String() string {
 func (*TunnelNetworkMessage) ProtoMessage() {}
 
 func (x *TunnelNetworkMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_v1_proxy_proto_msgTypes[8]
+	mi := &file_bridge_v1_proxy_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -536,7 +376,7 @@ func (x *TunnelNetworkMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelNetworkMessage.ProtoReflect.Descriptor instead.
 func (*TunnelNetworkMessage) Descriptor() ([]byte, []int) {
-	return file_bridge_v1_proxy_proto_rawDescGZIP(), []int{8}
+	return file_bridge_v1_proxy_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *TunnelNetworkMessage) GetSource() *TunnelAddress {
@@ -601,24 +441,15 @@ const file_bridge_v1_proxy_proto_rawDesc = "" +
 	"\rTunnelAddress\x12\x0e\n" +
 	"\x02ip\x18\x01 \x01(\tR\x02ip\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"\x14\n" +
-	"\x12GetMetadataRequest\"\xcb\x01\n" +
+	"\x12GetMetadataRequest\"\xed\x01\n" +
 	"\x13GetMetadataResponse\x12F\n" +
 	"\benv_vars\x18\x01 \x03(\v2+.bridge.v1.GetMetadataResponse.EnvVarsEntryR\aenvVars\x12\x18\n" +
 	"\aca_cert\x18\x02 \x01(\fR\aca_cert\x12\x16\n" +
-	"\x06ca_key\x18\x03 \x01(\fR\x06ca_key\x1a:\n" +
+	"\x06ca_key\x18\x03 \x01(\fR\x06ca_key\x12 \n" +
+	"\vmount_roots\x18\x04 \x03(\tR\vmount_roots\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"(\n" +
-	"\x10CopyFilesRequest\x12\x14\n" +
-	"\x05paths\x18\x01 \x03(\tR\x05paths\">\n" +
-	"\x11CopyFilesResponse\x12)\n" +
-	"\x05files\x18\x01 \x03(\v2\x13.bridge.v1.FileCopyR\x05files\"}\n" +
-	"\bFileCopy\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
-	"\acontent\x18\x02 \x01(\fR\acontent\x12\x12\n" +
-	"\x04mode\x18\x03 \x01(\rR\x04mode\x12\x19\n" +
-	"\bmod_time\x18\x04 \x01(\x03R\amodTime\x12\x14\n" +
-	"\x05error\x18\x05 \x01(\tR\x05error\"\x99\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x99\x02\n" +
 	"\x14TunnelNetworkMessage\x120\n" +
 	"\x06source\x18\x01 \x01(\v2\x18.bridge.v1.TunnelAddressR\x06source\x12,\n" +
 	"\x04dest\x18\x02 \x01(\v2\x18.bridge.v1.TunnelAddressR\x04dest\x12$\n" +
@@ -630,12 +461,11 @@ const file_bridge_v1_proxy_proto_rawDesc = "" +
 	"\x0eTunnelProtocol\x12\x1f\n" +
 	"\x1bTUNNEL_PROTOCOL_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13TUNNEL_PROTOCOL_TCP\x10\x01\x12\x17\n" +
-	"\x13TUNNEL_PROTOCOL_UDP\x10\x022\xdb\x02\n" +
+	"\x13TUNNEL_PROTOCOL_UDP\x10\x022\x93\x02\n" +
 	"\x12BridgeProxyService\x12X\n" +
 	"\x0fResolveDNSQuery\x12!.bridge.v1.ProxyResolveDNSRequest\x1a\".bridge.v1.ProxyResolveDNSResponse\x12U\n" +
 	"\rTunnelNetwork\x12\x1f.bridge.v1.TunnelNetworkMessage\x1a\x1f.bridge.v1.TunnelNetworkMessage(\x010\x01\x12L\n" +
-	"\vGetMetadata\x12\x1d.bridge.v1.GetMetadataRequest\x1a\x1e.bridge.v1.GetMetadataResponse\x12F\n" +
-	"\tCopyFiles\x12\x1b.bridge.v1.CopyFilesRequest\x1a\x1c.bridge.v1.CopyFilesResponseB\x94\x01\n" +
+	"\vGetMetadata\x12\x1d.bridge.v1.GetMetadataRequest\x1a\x1e.bridge.v1.GetMetadataResponseB\x94\x01\n" +
 	"\rcom.bridge.v1B\n" +
 	"ProxyProtoP\x01Z2github.com/vercel/bridge/api/go/bridge/v1;bridgev1\xa2\x02\x03BXX\xaa\x02\tBridge.V1\xca\x02\tBridge\\V1\xe2\x02\x15Bridge\\V1\\GPBMetadata\xea\x02\n" +
 	"Bridge::V1b\x06proto3"
@@ -653,7 +483,7 @@ func file_bridge_v1_proxy_proto_rawDescGZIP() []byte {
 }
 
 var file_bridge_v1_proxy_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_bridge_v1_proxy_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_bridge_v1_proxy_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_bridge_v1_proxy_proto_goTypes = []any{
 	(TunnelProtocol)(0),             // 0: bridge.v1.TunnelProtocol
 	(*ProxyResolveDNSRequest)(nil),  // 1: bridge.v1.ProxyResolveDNSRequest
@@ -661,31 +491,25 @@ var file_bridge_v1_proxy_proto_goTypes = []any{
 	(*TunnelAddress)(nil),           // 3: bridge.v1.TunnelAddress
 	(*GetMetadataRequest)(nil),      // 4: bridge.v1.GetMetadataRequest
 	(*GetMetadataResponse)(nil),     // 5: bridge.v1.GetMetadataResponse
-	(*CopyFilesRequest)(nil),        // 6: bridge.v1.CopyFilesRequest
-	(*CopyFilesResponse)(nil),       // 7: bridge.v1.CopyFilesResponse
-	(*FileCopy)(nil),                // 8: bridge.v1.FileCopy
-	(*TunnelNetworkMessage)(nil),    // 9: bridge.v1.TunnelNetworkMessage
-	nil,                             // 10: bridge.v1.GetMetadataResponse.EnvVarsEntry
+	(*TunnelNetworkMessage)(nil),    // 6: bridge.v1.TunnelNetworkMessage
+	nil,                             // 7: bridge.v1.GetMetadataResponse.EnvVarsEntry
 }
 var file_bridge_v1_proxy_proto_depIdxs = []int32{
-	10, // 0: bridge.v1.GetMetadataResponse.env_vars:type_name -> bridge.v1.GetMetadataResponse.EnvVarsEntry
-	8,  // 1: bridge.v1.CopyFilesResponse.files:type_name -> bridge.v1.FileCopy
-	3,  // 2: bridge.v1.TunnelNetworkMessage.source:type_name -> bridge.v1.TunnelAddress
-	3,  // 3: bridge.v1.TunnelNetworkMessage.dest:type_name -> bridge.v1.TunnelAddress
-	0,  // 4: bridge.v1.TunnelNetworkMessage.protocol:type_name -> bridge.v1.TunnelProtocol
-	1,  // 5: bridge.v1.BridgeProxyService.ResolveDNSQuery:input_type -> bridge.v1.ProxyResolveDNSRequest
-	9,  // 6: bridge.v1.BridgeProxyService.TunnelNetwork:input_type -> bridge.v1.TunnelNetworkMessage
-	4,  // 7: bridge.v1.BridgeProxyService.GetMetadata:input_type -> bridge.v1.GetMetadataRequest
-	6,  // 8: bridge.v1.BridgeProxyService.CopyFiles:input_type -> bridge.v1.CopyFilesRequest
-	2,  // 9: bridge.v1.BridgeProxyService.ResolveDNSQuery:output_type -> bridge.v1.ProxyResolveDNSResponse
-	9,  // 10: bridge.v1.BridgeProxyService.TunnelNetwork:output_type -> bridge.v1.TunnelNetworkMessage
-	5,  // 11: bridge.v1.BridgeProxyService.GetMetadata:output_type -> bridge.v1.GetMetadataResponse
-	7,  // 12: bridge.v1.BridgeProxyService.CopyFiles:output_type -> bridge.v1.CopyFilesResponse
-	9,  // [9:13] is the sub-list for method output_type
-	5,  // [5:9] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	7, // 0: bridge.v1.GetMetadataResponse.env_vars:type_name -> bridge.v1.GetMetadataResponse.EnvVarsEntry
+	3, // 1: bridge.v1.TunnelNetworkMessage.source:type_name -> bridge.v1.TunnelAddress
+	3, // 2: bridge.v1.TunnelNetworkMessage.dest:type_name -> bridge.v1.TunnelAddress
+	0, // 3: bridge.v1.TunnelNetworkMessage.protocol:type_name -> bridge.v1.TunnelProtocol
+	1, // 4: bridge.v1.BridgeProxyService.ResolveDNSQuery:input_type -> bridge.v1.ProxyResolveDNSRequest
+	6, // 5: bridge.v1.BridgeProxyService.TunnelNetwork:input_type -> bridge.v1.TunnelNetworkMessage
+	4, // 6: bridge.v1.BridgeProxyService.GetMetadata:input_type -> bridge.v1.GetMetadataRequest
+	2, // 7: bridge.v1.BridgeProxyService.ResolveDNSQuery:output_type -> bridge.v1.ProxyResolveDNSResponse
+	6, // 8: bridge.v1.BridgeProxyService.TunnelNetwork:output_type -> bridge.v1.TunnelNetworkMessage
+	5, // 9: bridge.v1.BridgeProxyService.GetMetadata:output_type -> bridge.v1.GetMetadataResponse
+	7, // [7:10] is the sub-list for method output_type
+	4, // [4:7] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_bridge_v1_proxy_proto_init() }
@@ -699,7 +523,7 @@ func file_bridge_v1_proxy_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bridge_v1_proxy_proto_rawDesc), len(file_bridge_v1_proxy_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   10,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

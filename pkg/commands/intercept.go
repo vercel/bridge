@@ -8,15 +8,15 @@ import (
 	"os/exec"
 	"os/signal"
 	"os/user"
-	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
+	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/urfave/cli/v3"
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"github.com/vercel/bridge/pkg/conntrack"
 	bridgedns "github.com/vercel/bridge/pkg/dns"
+	"github.com/vercel/bridge/pkg/fsmount"
 	"github.com/vercel/bridge/pkg/grpcutil"
 	"github.com/vercel/bridge/pkg/ippool"
 	"github.com/vercel/bridge/pkg/k8s/k8spf"
@@ -59,9 +59,9 @@ func Intercept() *cli.Command {
 				Value: 53,
 			},
 			&cli.StringSliceFlag{
-				Name:    "copy-files",
-				Usage:   "File paths to copy from the bridge proxy into the devcontainer",
-				Sources: cli.EnvVars("BRIDGE_COPY_FILES", "COPY_FILES"),
+				Name:    "mount-paths",
+				Usage:   "Absolute paths to FUSE-mount from the bridge proxy pod into the devcontainer. If empty, paths are discovered via GetMetadata.",
+				Sources: cli.EnvVars("BRIDGE_MOUNT_PATHS", "MOUNT_PATHS"),
 			},
 			&cli.StringSliceFlag{
 				Name:    "ignore-env-vars",
@@ -105,13 +105,14 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		}
 	}
 
-	// Parse copy-files, handling comma-separated values from env vars.
-	var copyFiles []string
-	for _, src := range c.StringSlice("copy-files") {
+	// Parse mount-paths, handling comma-separated values from env vars. Empty
+	// means use whatever the server advertises via GetMetadata.
+	var mountPaths []string
+	for _, src := range c.StringSlice("mount-paths") {
 		for _, part := range strings.Split(src, ",") {
 			part = strings.TrimSpace(part)
 			if part != "" {
-				copyFiles = append(copyFiles, part)
+				mountPaths = append(mountPaths, part)
 			}
 		}
 	}
@@ -174,11 +175,20 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		}
 	}
 
-	// Copy files from the proxy pod if requested.
-	if len(copyFiles) > 0 {
-		if err := copyFilesFromProxy(ctx, client, copyFiles); err != nil {
-			slog.Warn("Failed to copy files from proxy", "error", err)
-		}
+	// If no explicit mount paths were provided, use whatever the server
+	// advertises via GetMetadata.
+	if len(mountPaths) == 0 && metadata != nil {
+		mountPaths = append(mountPaths, metadata.GetMountRoots()...)
+	}
+
+	// Set up FUSE mounts for the proxy pod's volume paths. Each mount uses
+	// the same gRPC connection that hosts the proxy service, so it doesn't
+	// require the tunnel. Failures are non-fatal: log and continue so the
+	// developer still gets network interception.
+	var mountServers []*fuseServer
+	if len(mountPaths) > 0 {
+		fsClient := bridgev1.NewBridgeFileSystemServiceClient(conn)
+		mountServers = startMounts(ctx, fsClient, mountPaths)
 	}
 
 	// Open the shared tunnel stream. If app-port is set, ingress traffic from
@@ -291,13 +301,18 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	// Block until context is cancelled
 	proxyComp.Wait(ctx)
 
-	// Cleanup in order: DNS → resolv.conf → registry → proxy
+	// Cleanup in order: DNS → resolv.conf → registry → proxy → FUSE mounts
 	if dns != nil {
 		dns.Stop()
 	}
 	restoreResolvConf(originalResolvConf)
 	registry.Stop()
 	proxyComp.Stop()
+	for _, m := range mountServers {
+		if m != nil && m.server != nil {
+			_ = m.server.Unmount()
+		}
+	}
 
 	return nil
 }
@@ -400,42 +415,25 @@ func (r *grpcDNSResolver) ResolveDNS(ctx context.Context, hostname string) (*bri
 	}, nil
 }
 
-// copyFilesFromProxy calls the CopyFiles RPC and writes each file to the local
-// filesystem at the same absolute path with relaxed permissions (0666/0777).
-func copyFilesFromProxy(ctx context.Context, client bridgev1.BridgeProxyServiceClient, paths []string) error {
-	slog.Info("Copying files from proxy pod", "paths", paths)
-
-	resp, err := client.CopyFiles(ctx, &bridgev1.CopyFilesRequest{Paths: paths})
-	if err != nil {
-		return fmt.Errorf("CopyFiles RPC: %w", err)
-	}
-
-	for _, f := range resp.GetFiles() {
-		if f.Error != "" {
-			slog.Warn("Failed to copy file", "path", f.Path, "error", f.Error)
-			continue
-		}
-
-		// Ensure parent directory exists.
-		if err := os.MkdirAll(filepath.Dir(f.Path), 0777); err != nil {
-			slog.Warn("Failed to create directory", "path", filepath.Dir(f.Path), "error", err)
-			continue
-		}
-
-		// Write with relaxed permissions so all users can access.
-		if err := os.WriteFile(f.Path, f.Content, 0666); err != nil {
-			slog.Warn("Failed to write file", "path", f.Path, "error", err)
-			continue
-		}
-
-		// Restore modification time.
-		if f.ModTime > 0 {
-			modTime := time.Unix(f.ModTime, 0)
-			os.Chtimes(f.Path, modTime, modTime)
-		}
-
-		slog.Info("Copied file", "path", f.Path, "size", len(f.Content))
-	}
-
-	return nil
+// fuseServer tracks one FUSE mount so it can be unmounted at shutdown.
+type fuseServer struct {
+	mountpoint string
+	server     *fuse.Server
 }
+
+// startMounts establishes a FUSE mount at each remote path under the same
+// absolute path locally. Mount failures are logged but non-fatal — the
+// caller continues without that mount.
+func startMounts(ctx context.Context, client bridgev1.BridgeFileSystemServiceClient, paths []string) []*fuseServer {
+	servers := make([]*fuseServer, 0, len(paths))
+	for _, p := range paths {
+		srv, err := fsmount.Mount(ctx, p, p, client)
+		if err != nil {
+			slog.Warn("Failed to FUSE-mount path; skipping", "path", p, "error", err)
+			continue
+		}
+		servers = append(servers, &fuseServer{mountpoint: p, server: srv})
+	}
+	return servers
+}
+

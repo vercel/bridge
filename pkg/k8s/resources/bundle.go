@@ -130,17 +130,6 @@ func appPorts(deploy *appsv1.Deployment) []int32 {
 	return nil
 }
 
-func volumeMountPaths(deploy *appsv1.Deployment) []string {
-	if containers := deploy.Spec.Template.Spec.Containers; len(containers) > 0 {
-		var paths []string
-		for _, vm := range containers[0].VolumeMounts {
-			paths = append(paths, vm.MountPath)
-		}
-		return paths
-	}
-	return nil
-}
-
 // serviceTargetPort returns the port a bridge Service should target: the first
 // app port if any exist, otherwise the gRPC port.
 func serviceTargetPort(deploy *appsv1.Deployment) int32 {

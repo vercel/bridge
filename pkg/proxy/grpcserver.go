@@ -6,12 +6,12 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/vercel/bridge/pkg/fsmount"
 	"github.com/vercel/bridge/pkg/grpcutil"
 	"github.com/vercel/bridge/pkg/mitm"
 	"github.com/vercel/bridge/pkg/tunnel"
@@ -67,13 +67,29 @@ type GRPCServer struct {
 	caKey  []byte
 
 	hijacker mitm.Hijacker
+
+	// fsServer exposes a read-only view of mountRoots to FUSE clients.
+	mountRoots []string
+	fsServer   *fsmount.Server
+}
+
+// Config configures a new GRPCServer.
+type Config struct {
+	Addr        string
+	ListenPorts []ListenPort
+	Facades     []*bridgev1.ServerFacade
+
+	// MountRoots are absolute paths the bridge filesystem service will expose
+	// for FUSE-mounting from the devcontainer. Empty disables the service.
+	MountRoots []string
 }
 
 // NewGRPCServer creates a new gRPC proxy server.
-func NewGRPCServer(addr string, listenPorts []ListenPort, facades []*bridgev1.ServerFacade) *GRPCServer {
+func NewGRPCServer(cfg Config) *GRPCServer {
 	s := &GRPCServer{
-		addr:        addr,
-		listenPorts: listenPorts,
+		addr:        cfg.Addr,
+		listenPorts: cfg.ListenPorts,
+		mountRoots:  append([]string(nil), cfg.MountRoots...),
 	}
 
 	// Read the CA cert and key once at startup.
@@ -87,18 +103,25 @@ func NewGRPCServer(addr string, listenPorts []ListenPort, facades []*bridgev1.Se
 	}
 
 	// Create facade hijacker if specs are provided.
-	if len(facades) > 0 {
-		h, err := mitm.NewFacadeHijacker(facades, s.caCert, s.caKey)
+	if len(cfg.Facades) > 0 {
+		h, err := mitm.NewFacadeHijacker(cfg.Facades, s.caCert, s.caKey)
 		if err != nil {
 			slog.Error("Failed to compile server facade specs", "error", err)
 		} else {
 			s.hijacker = h
-			slog.Info("Loaded server facade specs", "count", len(facades))
+			slog.Info("Loaded server facade specs", "count", len(cfg.Facades))
 		}
 	}
 
 	s.server = grpcutil.NewServer()
 	bridgev1.RegisterBridgeProxyServiceServer(s.server, s)
+
+	if len(s.mountRoots) > 0 {
+		s.fsServer = fsmount.NewServer(s.mountRoots)
+		bridgev1.RegisterBridgeFileSystemServiceServer(s.server, s.fsServer)
+		slog.Info("Bridge filesystem service registered", "roots", s.mountRoots)
+	}
+
 	healthSrv := health.NewServer()
 	healthpb.RegisterHealthServer(s.server, healthSrv)
 	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
@@ -196,62 +219,11 @@ func (s *GRPCServer) GetMetadata(_ context.Context, _ *bridgev1.GetMetadataReque
 	}
 
 	return &bridgev1.GetMetadataResponse{
-		EnvVars: envVars,
-		CaCert:  s.caCert,
-		CaKey:   s.caKey,
+		EnvVars:    envVars,
+		CaCert:     s.caCert,
+		CaKey:      s.caKey,
+		MountRoots: append([]string(nil), s.mountRoots...),
 	}, nil
-}
-
-// CopyFiles reads the requested files and directories from the local filesystem
-// and returns their contents along with metadata (permissions, modification time).
-// Directories are walked recursively.
-func (s *GRPCServer) CopyFiles(_ context.Context, req *bridgev1.CopyFilesRequest) (*bridgev1.CopyFilesResponse, error) {
-	var files []*bridgev1.FileCopy
-	for _, p := range req.GetPaths() {
-		info, err := os.Stat(p)
-		if err != nil {
-			files = append(files, &bridgev1.FileCopy{Path: p, Error: err.Error()})
-			continue
-		}
-
-		if !info.IsDir() {
-			files = append(files, readFileCopy(p, info))
-			continue
-		}
-
-		// Walk directory recursively, only emitting regular files.
-		err = filepath.Walk(p, func(path string, fi os.FileInfo, walkErr error) error {
-			if walkErr != nil {
-				files = append(files, &bridgev1.FileCopy{Path: path, Error: walkErr.Error()})
-				return nil
-			}
-			if fi.IsDir() {
-				return nil
-			}
-			files = append(files, readFileCopy(path, fi))
-			return nil
-		})
-		if err != nil {
-			files = append(files, &bridgev1.FileCopy{Path: p, Error: err.Error()})
-		}
-	}
-	return &bridgev1.CopyFilesResponse{Files: files}, nil
-}
-
-// readFileCopy reads a single file and returns a FileCopy proto message.
-func readFileCopy(path string, info os.FileInfo) *bridgev1.FileCopy {
-	fc := &bridgev1.FileCopy{
-		Path:    path,
-		Mode:    uint32(info.Mode().Perm()),
-		ModTime: info.ModTime().Unix(),
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		fc.Error = err.Error()
-		return fc
-	}
-	fc.Content = data
-	return fc
 }
 
 // TunnelNetwork handles the single bidirectional tunnel stream. All egress and

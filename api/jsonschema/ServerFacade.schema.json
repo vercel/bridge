@@ -86,6 +86,7 @@
         "title": "Server Facade Route",
         "type": "object"
       },
+      "minItems": 1,
       "type": "array"
     }
   },

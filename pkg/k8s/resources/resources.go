@@ -164,7 +164,9 @@ func findApplicationDeployment(b *Bundle, name string) (*appsv1.Deployment, erro
 
 // injectProxyImage swaps the first container in the deployment for the bridge
 // proxy. App ports are preserved as additional container ports after the named
-// "grpc" port so they can be queried from the deployment state later.
+// "grpc" port so they can be queried from the deployment state later. Existing
+// VolumeMounts on the container are kept and surfaced as --mount-roots so the
+// bridge filesystem service can expose them to the devcontainer over gRPC.
 func injectProxyImage(deploy *appsv1.Deployment, proxyImage string) {
 	containers := deploy.Spec.Template.Spec.Containers
 	if len(containers) == 0 {
@@ -187,6 +189,9 @@ func injectProxyImage(deploy *appsv1.Deployment, proxyImage string) {
 			specs = append(specs, fmt.Sprintf("%d/tcp", p))
 		}
 		args = append(args, "--listen-ports", strings.Join(specs, ","))
+	}
+	if mountRoots := containerMountPaths(c); len(mountRoots) > 0 {
+		args = append(args, "--mount-roots", strings.Join(mountRoots, ","))
 	}
 
 	c.Image = proxyImage
@@ -230,6 +235,20 @@ func chooseGRPCPort(appPorts []int32) int32 {
 			return p
 		}
 	}
+}
+
+// containerMountPaths returns the absolute mount paths from a container's
+// VolumeMounts. Used to derive --mount-roots for the bridge proxy so that the
+// filesystem service exposes the same paths the original app saw.
+func containerMountPaths(c *corev1.Container) []string {
+	if len(c.VolumeMounts) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(c.VolumeMounts))
+	for _, vm := range c.VolumeMounts {
+		paths = append(paths, vm.MountPath)
+	}
+	return paths
 }
 
 // configRef tracks a reference to a Secret or ConfigMap.

@@ -91,6 +91,7 @@ The bridge proxy runs as the main container in the cloned deployment pod. It:
 2. Serves `BridgeProxyService` gRPC on port 9090
 3. Accepts a `TunnelNetwork` bidirectional stream from the devcontainer
 4. Handles `ResolveDNSQuery` RPCs — resolves hostnames using the cluster's DNS
+5. Serves `BridgeFileSystemService` on the same port — a read-only view of the source container's volume mount paths, consumed by the devcontainer's FUSE client (see [Volume Mount Forwarding](#volume-mount-forwarding))
 
 When an ingress connection arrives on a listen port, it's multiplexed through the tunnel to the devcontainer, which dials `localhost:3000` (or the configured app port) to reach the local app.
 
@@ -206,6 +207,41 @@ The connection registry maps proxy IPs (from the `10.128.0.0/16` pool) to real d
 
 ---
 
+## Volume Mount Forwarding
+
+The proxy pod inherits the source deployment's `VolumeMounts` — ConfigMaps, Secrets, projected volumes (IRSA tokens, workload identity), and any other Kubernetes-managed volumes the application relied on. Those paths are made visible inside the devcontainer at the same absolute locations via FUSE.
+
+```
+Local app reads /var/run/secrets/.../token
+  │
+  ▼
+Kernel routes the open/read to the bridge FUSE mount at /var/run/secrets/...
+  │
+  ▼
+FUSE client issues Stat / ReadDir / ReadFile RPC over gRPC
+  │
+  ▼
+BridgeFileSystemService on the proxy pod authorizes the path against the
+allowlist of mount roots (the source container's VolumeMounts) and reads the
+real file from the pod filesystem
+  │
+  ▼
+Bytes flow back to the kernel, satisfying the app's read
+```
+
+**Properties:**
+
+- **Read-only.** Most mount roots in the pod (ConfigMap/Secret/projected) are read-only at the kernel level anyway. Writes return `EROFS`.
+- **Live.** Reads always hit the proxy pod's current filesystem, so rotated tokens and updated ConfigMap content appear within the FUSE attribute TTL (5 s) without restarting the bridge.
+- **Allowlisted.** The server only serves paths under one of the `--mount-roots` it was configured with at startup. Requests for arbitrary pod paths return `PermissionDenied`.
+- **Chunked.** Large files are split into 1 MiB reads on the wire — well below gRPC's default message limit.
+
+The administrator derives `--mount-roots` from the original container's `VolumeMounts` and bakes it into the proxy `Command`. The same paths flow back to the CLI via `CreateBridgeResponse.volume_mount_paths` and are passed to the devcontainer feature as the `mountPaths` option. `bridge intercept` runs one FUSE mount per path; failures are logged but non-fatal so network interception still works on systems without `/dev/fuse`.
+
+**Container requirements:** the devcontainer needs `--cap-add SYS_ADMIN`, `--device /dev/fuse`, and (on AppArmor systems) `--security-opt apparmor:unconfined`. The feature install script also installs `fuse3` when not already present.
+
+---
+
 ## Tunnel Multiplexing
 
 All traffic between the devcontainer and the cluster flows over a single gRPC bidirectional stream (`TunnelNetwork`). Connections are multiplexed using deterministic connection IDs of the form `<src-ip>:<src-port>-><dst-ip>:<dst-port>`.
@@ -285,6 +321,7 @@ The entrypoint uses a split heredoc pattern: the unquoted section bakes in the w
 | `bridgeServerAddr` | k8spf address of the bridge proxy | — |
 | `appPort` | Local application port | 3000 |
 | `forwardDomains` | Domain patterns to intercept | — |
+| `mountPaths` | Comma-separated paths to FUSE-mount from the proxy pod (defaults to whatever the server advertises) | — |
 | `bridgeVersion` | Version to install (dev/latest/tag) | latest |
 | `workspacePath` | Container workspace path | — |
 

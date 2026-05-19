@@ -1,8 +1,8 @@
 {
   "id": "bridge-feature",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "name": "Bridge Tunnel Client",
-  "description": "Connects to a bridge proxy server to intercept outbound traffic via iptables and tunnel it over gRPC.",
+  "description": "Connects to a bridge proxy server to intercept outbound traffic via iptables, tunnel it over gRPC, and FUSE-mount the proxy pod's volume paths into the devcontainer.",
   "entrypoint": "/usr/local/bin/bridge-entrypoint.sh",
   "options": {
     "bridgeServerAddr": {
@@ -30,14 +30,15 @@
       "description": "Comma-separated list of domain patterns to intercept and resolve through the tunnel (e.g., '*.vercel.app,example.com')",
       "default": ""
     },
-    "copyFiles": {
+    "mountPaths": {
       "type": "string",
-      "description": "Comma-separated list of absolute file paths to copy from the bridge proxy pod into the devcontainer (e.g., '/etc/ssl/certs/ca-certificates.crt,/app/config.json')",
+      "description": "Comma-separated list of absolute paths to FUSE-mount from the bridge proxy pod into the devcontainer (e.g., '/etc/ssl/certs,/var/run/secrets/kubernetes.io/serviceaccount'). Defaults to whatever the proxy advertises.",
       "default": ""
     }
   },
   "capAdd": [
-    "NET_ADMIN"
+    "NET_ADMIN",
+    "SYS_ADMIN"
   ],
   "installsAfter": [
     "ghcr.io/devcontainers/features/common-utils"
