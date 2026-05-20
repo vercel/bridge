@@ -71,6 +71,13 @@ type GRPCServer struct {
 	// fsServer exposes a read-only view of mountRoots to FUSE clients.
 	mountRoots []string
 	fsServer   *fsmount.Server
+
+	// Source-deployment probe metadata served via GetMetadata so the
+	// interceptor can run the same checks against the developer's local app.
+	sourceAppPort  int32
+	livenessProbe  *bridgev1.Probe
+	readinessProbe *bridgev1.Probe
+	startupProbe   *bridgev1.Probe
 }
 
 // Config configures a new GRPCServer.
@@ -82,14 +89,32 @@ type Config struct {
 	// MountRoots are absolute paths the bridge filesystem service will expose
 	// for FUSE-mounting from the devcontainer. Empty disables the service.
 	MountRoots []string
+
+	// SourceAppPort is the source container's primary app port. The
+	// interceptor uses it as a hint to remap probe targets to its --app-port.
+	SourceAppPort int32
+
+	// LivenessProbe is the source deployment's liveness probe, surfaced via
+	// GetMetadata for the interceptor to monitor against the local app.
+	LivenessProbe *bridgev1.Probe
+
+	// ReadinessProbe is the source deployment's readiness probe.
+	ReadinessProbe *bridgev1.Probe
+
+	// StartupProbe is the source deployment's startup probe.
+	StartupProbe *bridgev1.Probe
 }
 
 // NewGRPCServer creates a new gRPC proxy server.
 func NewGRPCServer(cfg Config) *GRPCServer {
 	s := &GRPCServer{
-		addr:        cfg.Addr,
-		listenPorts: cfg.ListenPorts,
-		mountRoots:  append([]string(nil), cfg.MountRoots...),
+		addr:           cfg.Addr,
+		listenPorts:    cfg.ListenPorts,
+		mountRoots:     append([]string(nil), cfg.MountRoots...),
+		sourceAppPort:  cfg.SourceAppPort,
+		livenessProbe:  cfg.LivenessProbe,
+		readinessProbe: cfg.ReadinessProbe,
+		startupProbe:   cfg.StartupProbe,
 	}
 
 	// Read the CA cert and key once at startup.
@@ -219,10 +244,14 @@ func (s *GRPCServer) GetMetadata(_ context.Context, _ *bridgev1.GetMetadataReque
 	}
 
 	return &bridgev1.GetMetadataResponse{
-		EnvVars:    envVars,
-		CaCert:     s.caCert,
-		CaKey:      s.caKey,
-		MountRoots: append([]string(nil), s.mountRoots...),
+		EnvVars:        envVars,
+		CaCert:         s.caCert,
+		CaKey:          s.caKey,
+		MountRoots:     append([]string(nil), s.mountRoots...),
+		SourceAppPort:  s.sourceAppPort,
+		LivenessProbe:  s.livenessProbe,
+		ReadinessProbe: s.readinessProbe,
+		StartupProbe:   s.startupProbe,
 	}, nil
 }
 

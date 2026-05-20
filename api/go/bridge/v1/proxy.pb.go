@@ -265,7 +265,22 @@ type GetMetadataResponse struct {
 	CaKey []byte `protobuf:"bytes,3,opt,name=ca_key,proto3" json:"ca_key,omitempty"`
 	// Absolute paths the BridgeFileSystemService is allowed to serve. The
 	// devcontainer FUSE-mounts each one at the same path on the local side.
-	MountRoots    []string `protobuf:"bytes,4,rep,name=mount_roots,proto3" json:"mount_roots,omitempty"`
+	MountRoots []string `protobuf:"bytes,4,rep,name=mount_roots,proto3" json:"mount_roots,omitempty"`
+	// The source container's primary application port (the first non-grpc port
+	// declared on the original deployment). The interceptor uses this to
+	// remap probe targets: if a probe's port matches source_app_port, the
+	// interceptor checks --app-port locally instead. Zero if the source had
+	// no app ports.
+	SourceAppPort int32 `protobuf:"varint,5,opt,name=source_app_port,proto3" json:"source_app_port,omitempty"`
+	// Liveness probe from the source deployment's application container, or
+	// unset if the source had none.
+	LivenessProbe *Probe `protobuf:"bytes,6,opt,name=liveness_probe,proto3" json:"liveness_probe,omitempty"`
+	// Readiness probe from the source deployment's application container, or
+	// unset if the source had none.
+	ReadinessProbe *Probe `protobuf:"bytes,7,opt,name=readiness_probe,proto3" json:"readiness_probe,omitempty"`
+	// Startup probe from the source deployment's application container, or
+	// unset if the source had none.
+	StartupProbe  *Probe `protobuf:"bytes,8,opt,name=startup_probe,proto3" json:"startup_probe,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -328,6 +343,473 @@ func (x *GetMetadataResponse) GetMountRoots() []string {
 	return nil
 }
 
+func (x *GetMetadataResponse) GetSourceAppPort() int32 {
+	if x != nil {
+		return x.SourceAppPort
+	}
+	return 0
+}
+
+func (x *GetMetadataResponse) GetLivenessProbe() *Probe {
+	if x != nil {
+		return x.LivenessProbe
+	}
+	return nil
+}
+
+func (x *GetMetadataResponse) GetReadinessProbe() *Probe {
+	if x != nil {
+		return x.ReadinessProbe
+	}
+	return nil
+}
+
+func (x *GetMetadataResponse) GetStartupProbe() *Probe {
+	if x != nil {
+		return x.StartupProbe
+	}
+	return nil
+}
+
+// Probe mirrors a Kubernetes-style probe definition for a single check (HTTP
+// GET, TCP open, gRPC health, or shell exec). Exactly one handler is set.
+type Probe struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Handler:
+	//
+	//	*Probe_HttpGet
+	//	*Probe_TcpSocket
+	//	*Probe_Grpc
+	//	*Probe_Exec
+	Handler isProbe_Handler `protobuf_oneof:"handler"`
+	// Seconds to wait before the first check. Default 0.
+	InitialDelaySeconds int32 `protobuf:"varint,10,opt,name=initial_delay_seconds,proto3" json:"initial_delay_seconds,omitempty"`
+	// How often (in seconds) to perform the probe. Default 10.
+	PeriodSeconds int32 `protobuf:"varint,11,opt,name=period_seconds,proto3" json:"period_seconds,omitempty"`
+	// Seconds after which a single check is considered failed. Default 1.
+	TimeoutSeconds int32 `protobuf:"varint,12,opt,name=timeout_seconds,proto3" json:"timeout_seconds,omitempty"`
+	// Minimum consecutive successes for the probe to be considered healthy
+	// after having been failing. Default 1.
+	SuccessThreshold int32 `protobuf:"varint,13,opt,name=success_threshold,proto3" json:"success_threshold,omitempty"`
+	// After this many consecutive failures the probe is considered failing.
+	// Default 3.
+	FailureThreshold int32 `protobuf:"varint,14,opt,name=failure_threshold,proto3" json:"failure_threshold,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *Probe) Reset() {
+	*x = Probe{}
+	mi := &file_bridge_v1_proxy_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Probe) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Probe) ProtoMessage() {}
+
+func (x *Probe) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_v1_proxy_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Probe.ProtoReflect.Descriptor instead.
+func (*Probe) Descriptor() ([]byte, []int) {
+	return file_bridge_v1_proxy_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *Probe) GetHandler() isProbe_Handler {
+	if x != nil {
+		return x.Handler
+	}
+	return nil
+}
+
+func (x *Probe) GetHttpGet() *HTTPGetAction {
+	if x != nil {
+		if x, ok := x.Handler.(*Probe_HttpGet); ok {
+			return x.HttpGet
+		}
+	}
+	return nil
+}
+
+func (x *Probe) GetTcpSocket() *TCPSocketAction {
+	if x != nil {
+		if x, ok := x.Handler.(*Probe_TcpSocket); ok {
+			return x.TcpSocket
+		}
+	}
+	return nil
+}
+
+func (x *Probe) GetGrpc() *GRPCAction {
+	if x != nil {
+		if x, ok := x.Handler.(*Probe_Grpc); ok {
+			return x.Grpc
+		}
+	}
+	return nil
+}
+
+func (x *Probe) GetExec() *ExecAction {
+	if x != nil {
+		if x, ok := x.Handler.(*Probe_Exec); ok {
+			return x.Exec
+		}
+	}
+	return nil
+}
+
+func (x *Probe) GetInitialDelaySeconds() int32 {
+	if x != nil {
+		return x.InitialDelaySeconds
+	}
+	return 0
+}
+
+func (x *Probe) GetPeriodSeconds() int32 {
+	if x != nil {
+		return x.PeriodSeconds
+	}
+	return 0
+}
+
+func (x *Probe) GetTimeoutSeconds() int32 {
+	if x != nil {
+		return x.TimeoutSeconds
+	}
+	return 0
+}
+
+func (x *Probe) GetSuccessThreshold() int32 {
+	if x != nil {
+		return x.SuccessThreshold
+	}
+	return 0
+}
+
+func (x *Probe) GetFailureThreshold() int32 {
+	if x != nil {
+		return x.FailureThreshold
+	}
+	return 0
+}
+
+type isProbe_Handler interface {
+	isProbe_Handler()
+}
+
+type Probe_HttpGet struct {
+	HttpGet *HTTPGetAction `protobuf:"bytes,1,opt,name=http_get,proto3,oneof"`
+}
+
+type Probe_TcpSocket struct {
+	TcpSocket *TCPSocketAction `protobuf:"bytes,2,opt,name=tcp_socket,proto3,oneof"`
+}
+
+type Probe_Grpc struct {
+	Grpc *GRPCAction `protobuf:"bytes,3,opt,name=grpc,proto3,oneof"`
+}
+
+type Probe_Exec struct {
+	Exec *ExecAction `protobuf:"bytes,4,opt,name=exec,proto3,oneof"`
+}
+
+func (*Probe_HttpGet) isProbe_Handler() {}
+
+func (*Probe_TcpSocket) isProbe_Handler() {}
+
+func (*Probe_Grpc) isProbe_Handler() {}
+
+func (*Probe_Exec) isProbe_Handler() {}
+
+// HTTPGetAction performs an HTTP GET against the local app.
+type HTTPGetAction struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Request path. Defaults to "/".
+	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// Target port. The interceptor remaps this to --app-port if it matches
+	// source_app_port.
+	Port int32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	// "HTTP" or "HTTPS". Defaults to HTTP.
+	Scheme string `protobuf:"bytes,3,opt,name=scheme,proto3" json:"scheme,omitempty"`
+	// Extra request headers.
+	HttpHeaders   []*HTTPHeader `protobuf:"bytes,4,rep,name=http_headers,proto3" json:"http_headers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HTTPGetAction) Reset() {
+	*x = HTTPGetAction{}
+	mi := &file_bridge_v1_proxy_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HTTPGetAction) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HTTPGetAction) ProtoMessage() {}
+
+func (x *HTTPGetAction) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_v1_proxy_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HTTPGetAction.ProtoReflect.Descriptor instead.
+func (*HTTPGetAction) Descriptor() ([]byte, []int) {
+	return file_bridge_v1_proxy_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *HTTPGetAction) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *HTTPGetAction) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *HTTPGetAction) GetScheme() string {
+	if x != nil {
+		return x.Scheme
+	}
+	return ""
+}
+
+func (x *HTTPGetAction) GetHttpHeaders() []*HTTPHeader {
+	if x != nil {
+		return x.HttpHeaders
+	}
+	return nil
+}
+
+type HTTPHeader struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HTTPHeader) Reset() {
+	*x = HTTPHeader{}
+	mi := &file_bridge_v1_proxy_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HTTPHeader) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HTTPHeader) ProtoMessage() {}
+
+func (x *HTTPHeader) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_v1_proxy_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HTTPHeader.ProtoReflect.Descriptor instead.
+func (*HTTPHeader) Descriptor() ([]byte, []int) {
+	return file_bridge_v1_proxy_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *HTTPHeader) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *HTTPHeader) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+// TCPSocketAction opens a TCP connection.
+type TCPSocketAction struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Target port. The interceptor remaps this to --app-port if it matches
+	// source_app_port.
+	Port          int32 `protobuf:"varint,1,opt,name=port,proto3" json:"port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TCPSocketAction) Reset() {
+	*x = TCPSocketAction{}
+	mi := &file_bridge_v1_proxy_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TCPSocketAction) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TCPSocketAction) ProtoMessage() {}
+
+func (x *TCPSocketAction) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_v1_proxy_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TCPSocketAction.ProtoReflect.Descriptor instead.
+func (*TCPSocketAction) Descriptor() ([]byte, []int) {
+	return file_bridge_v1_proxy_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *TCPSocketAction) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+// GRPCAction calls the gRPC health service on the target.
+type GRPCAction struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Target port. The interceptor remaps this to --app-port if it matches
+	// source_app_port.
+	Port int32 `protobuf:"varint,1,opt,name=port,proto3" json:"port,omitempty"`
+	// Optional service name to check (passed as `service` in the health
+	// request). Empty checks the overall server health.
+	Service       string `protobuf:"bytes,2,opt,name=service,proto3" json:"service,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GRPCAction) Reset() {
+	*x = GRPCAction{}
+	mi := &file_bridge_v1_proxy_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GRPCAction) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GRPCAction) ProtoMessage() {}
+
+func (x *GRPCAction) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_v1_proxy_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GRPCAction.ProtoReflect.Descriptor instead.
+func (*GRPCAction) Descriptor() ([]byte, []int) {
+	return file_bridge_v1_proxy_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *GRPCAction) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *GRPCAction) GetService() string {
+	if x != nil {
+		return x.Service
+	}
+	return ""
+}
+
+// ExecAction runs a command inside the devcontainer; exit code 0 is healthy.
+type ExecAction struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Argv. The first element is the program; the rest are arguments.
+	Command       []string `protobuf:"bytes,1,rep,name=command,proto3" json:"command,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecAction) Reset() {
+	*x = ExecAction{}
+	mi := &file_bridge_v1_proxy_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecAction) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecAction) ProtoMessage() {}
+
+func (x *ExecAction) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_v1_proxy_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecAction.ProtoReflect.Descriptor instead.
+func (*ExecAction) Descriptor() ([]byte, []int) {
+	return file_bridge_v1_proxy_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ExecAction) GetCommand() []string {
+	if x != nil {
+		return x.Command
+	}
+	return nil
+}
+
 type TunnelNetworkMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The address that is sending the message.
@@ -351,7 +833,7 @@ type TunnelNetworkMessage struct {
 
 func (x *TunnelNetworkMessage) Reset() {
 	*x = TunnelNetworkMessage{}
-	mi := &file_bridge_v1_proxy_proto_msgTypes[5]
+	mi := &file_bridge_v1_proxy_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -363,7 +845,7 @@ func (x *TunnelNetworkMessage) String() string {
 func (*TunnelNetworkMessage) ProtoMessage() {}
 
 func (x *TunnelNetworkMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_v1_proxy_proto_msgTypes[5]
+	mi := &file_bridge_v1_proxy_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -376,7 +858,7 @@ func (x *TunnelNetworkMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelNetworkMessage.ProtoReflect.Descriptor instead.
 func (*TunnelNetworkMessage) Descriptor() ([]byte, []int) {
-	return file_bridge_v1_proxy_proto_rawDescGZIP(), []int{5}
+	return file_bridge_v1_proxy_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *TunnelNetworkMessage) GetSource() *TunnelAddress {
@@ -441,15 +923,51 @@ const file_bridge_v1_proxy_proto_rawDesc = "" +
 	"\rTunnelAddress\x12\x0e\n" +
 	"\x02ip\x18\x01 \x01(\tR\x02ip\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"\x14\n" +
-	"\x12GetMetadataRequest\"\xed\x01\n" +
+	"\x12GetMetadataRequest\"\xc5\x03\n" +
 	"\x13GetMetadataResponse\x12F\n" +
 	"\benv_vars\x18\x01 \x03(\v2+.bridge.v1.GetMetadataResponse.EnvVarsEntryR\aenvVars\x12\x18\n" +
 	"\aca_cert\x18\x02 \x01(\fR\aca_cert\x12\x16\n" +
 	"\x06ca_key\x18\x03 \x01(\fR\x06ca_key\x12 \n" +
-	"\vmount_roots\x18\x04 \x03(\tR\vmount_roots\x1a:\n" +
+	"\vmount_roots\x18\x04 \x03(\tR\vmount_roots\x12(\n" +
+	"\x0fsource_app_port\x18\x05 \x01(\x05R\x0fsource_app_port\x128\n" +
+	"\x0eliveness_probe\x18\x06 \x01(\v2\x10.bridge.v1.ProbeR\x0eliveness_probe\x12:\n" +
+	"\x0freadiness_probe\x18\a \x01(\v2\x10.bridge.v1.ProbeR\x0freadiness_probe\x126\n" +
+	"\rstartup_probe\x18\b \x01(\v2\x10.bridge.v1.ProbeR\rstartup_probe\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x99\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc6\x03\n" +
+	"\x05Probe\x126\n" +
+	"\bhttp_get\x18\x01 \x01(\v2\x18.bridge.v1.HTTPGetActionH\x00R\bhttp_get\x12<\n" +
+	"\n" +
+	"tcp_socket\x18\x02 \x01(\v2\x1a.bridge.v1.TCPSocketActionH\x00R\n" +
+	"tcp_socket\x12+\n" +
+	"\x04grpc\x18\x03 \x01(\v2\x15.bridge.v1.GRPCActionH\x00R\x04grpc\x12+\n" +
+	"\x04exec\x18\x04 \x01(\v2\x15.bridge.v1.ExecActionH\x00R\x04exec\x124\n" +
+	"\x15initial_delay_seconds\x18\n" +
+	" \x01(\x05R\x15initial_delay_seconds\x12&\n" +
+	"\x0eperiod_seconds\x18\v \x01(\x05R\x0eperiod_seconds\x12(\n" +
+	"\x0ftimeout_seconds\x18\f \x01(\x05R\x0ftimeout_seconds\x12,\n" +
+	"\x11success_threshold\x18\r \x01(\x05R\x11success_threshold\x12,\n" +
+	"\x11failure_threshold\x18\x0e \x01(\x05R\x11failure_thresholdB\t\n" +
+	"\ahandler\"\x8a\x01\n" +
+	"\rHTTPGetAction\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
+	"\x04port\x18\x02 \x01(\x05R\x04port\x12\x16\n" +
+	"\x06scheme\x18\x03 \x01(\tR\x06scheme\x129\n" +
+	"\fhttp_headers\x18\x04 \x03(\v2\x15.bridge.v1.HTTPHeaderR\fhttp_headers\"6\n" +
+	"\n" +
+	"HTTPHeader\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"%\n" +
+	"\x0fTCPSocketAction\x12\x12\n" +
+	"\x04port\x18\x01 \x01(\x05R\x04port\":\n" +
+	"\n" +
+	"GRPCAction\x12\x12\n" +
+	"\x04port\x18\x01 \x01(\x05R\x04port\x12\x18\n" +
+	"\aservice\x18\x02 \x01(\tR\aservice\"&\n" +
+	"\n" +
+	"ExecAction\x12\x18\n" +
+	"\acommand\x18\x01 \x03(\tR\acommand\"\x99\x02\n" +
 	"\x14TunnelNetworkMessage\x120\n" +
 	"\x06source\x18\x01 \x01(\v2\x18.bridge.v1.TunnelAddressR\x06source\x12,\n" +
 	"\x04dest\x18\x02 \x01(\v2\x18.bridge.v1.TunnelAddressR\x04dest\x12$\n" +
@@ -483,7 +1001,7 @@ func file_bridge_v1_proxy_proto_rawDescGZIP() []byte {
 }
 
 var file_bridge_v1_proxy_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_bridge_v1_proxy_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_bridge_v1_proxy_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_bridge_v1_proxy_proto_goTypes = []any{
 	(TunnelProtocol)(0),             // 0: bridge.v1.TunnelProtocol
 	(*ProxyResolveDNSRequest)(nil),  // 1: bridge.v1.ProxyResolveDNSRequest
@@ -491,25 +1009,39 @@ var file_bridge_v1_proxy_proto_goTypes = []any{
 	(*TunnelAddress)(nil),           // 3: bridge.v1.TunnelAddress
 	(*GetMetadataRequest)(nil),      // 4: bridge.v1.GetMetadataRequest
 	(*GetMetadataResponse)(nil),     // 5: bridge.v1.GetMetadataResponse
-	(*TunnelNetworkMessage)(nil),    // 6: bridge.v1.TunnelNetworkMessage
-	nil,                             // 7: bridge.v1.GetMetadataResponse.EnvVarsEntry
+	(*Probe)(nil),                   // 6: bridge.v1.Probe
+	(*HTTPGetAction)(nil),           // 7: bridge.v1.HTTPGetAction
+	(*HTTPHeader)(nil),              // 8: bridge.v1.HTTPHeader
+	(*TCPSocketAction)(nil),         // 9: bridge.v1.TCPSocketAction
+	(*GRPCAction)(nil),              // 10: bridge.v1.GRPCAction
+	(*ExecAction)(nil),              // 11: bridge.v1.ExecAction
+	(*TunnelNetworkMessage)(nil),    // 12: bridge.v1.TunnelNetworkMessage
+	nil,                             // 13: bridge.v1.GetMetadataResponse.EnvVarsEntry
 }
 var file_bridge_v1_proxy_proto_depIdxs = []int32{
-	7, // 0: bridge.v1.GetMetadataResponse.env_vars:type_name -> bridge.v1.GetMetadataResponse.EnvVarsEntry
-	3, // 1: bridge.v1.TunnelNetworkMessage.source:type_name -> bridge.v1.TunnelAddress
-	3, // 2: bridge.v1.TunnelNetworkMessage.dest:type_name -> bridge.v1.TunnelAddress
-	0, // 3: bridge.v1.TunnelNetworkMessage.protocol:type_name -> bridge.v1.TunnelProtocol
-	1, // 4: bridge.v1.BridgeProxyService.ResolveDNSQuery:input_type -> bridge.v1.ProxyResolveDNSRequest
-	6, // 5: bridge.v1.BridgeProxyService.TunnelNetwork:input_type -> bridge.v1.TunnelNetworkMessage
-	4, // 6: bridge.v1.BridgeProxyService.GetMetadata:input_type -> bridge.v1.GetMetadataRequest
-	2, // 7: bridge.v1.BridgeProxyService.ResolveDNSQuery:output_type -> bridge.v1.ProxyResolveDNSResponse
-	6, // 8: bridge.v1.BridgeProxyService.TunnelNetwork:output_type -> bridge.v1.TunnelNetworkMessage
-	5, // 9: bridge.v1.BridgeProxyService.GetMetadata:output_type -> bridge.v1.GetMetadataResponse
-	7, // [7:10] is the sub-list for method output_type
-	4, // [4:7] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	13, // 0: bridge.v1.GetMetadataResponse.env_vars:type_name -> bridge.v1.GetMetadataResponse.EnvVarsEntry
+	6,  // 1: bridge.v1.GetMetadataResponse.liveness_probe:type_name -> bridge.v1.Probe
+	6,  // 2: bridge.v1.GetMetadataResponse.readiness_probe:type_name -> bridge.v1.Probe
+	6,  // 3: bridge.v1.GetMetadataResponse.startup_probe:type_name -> bridge.v1.Probe
+	7,  // 4: bridge.v1.Probe.http_get:type_name -> bridge.v1.HTTPGetAction
+	9,  // 5: bridge.v1.Probe.tcp_socket:type_name -> bridge.v1.TCPSocketAction
+	10, // 6: bridge.v1.Probe.grpc:type_name -> bridge.v1.GRPCAction
+	11, // 7: bridge.v1.Probe.exec:type_name -> bridge.v1.ExecAction
+	8,  // 8: bridge.v1.HTTPGetAction.http_headers:type_name -> bridge.v1.HTTPHeader
+	3,  // 9: bridge.v1.TunnelNetworkMessage.source:type_name -> bridge.v1.TunnelAddress
+	3,  // 10: bridge.v1.TunnelNetworkMessage.dest:type_name -> bridge.v1.TunnelAddress
+	0,  // 11: bridge.v1.TunnelNetworkMessage.protocol:type_name -> bridge.v1.TunnelProtocol
+	1,  // 12: bridge.v1.BridgeProxyService.ResolveDNSQuery:input_type -> bridge.v1.ProxyResolveDNSRequest
+	12, // 13: bridge.v1.BridgeProxyService.TunnelNetwork:input_type -> bridge.v1.TunnelNetworkMessage
+	4,  // 14: bridge.v1.BridgeProxyService.GetMetadata:input_type -> bridge.v1.GetMetadataRequest
+	2,  // 15: bridge.v1.BridgeProxyService.ResolveDNSQuery:output_type -> bridge.v1.ProxyResolveDNSResponse
+	12, // 16: bridge.v1.BridgeProxyService.TunnelNetwork:output_type -> bridge.v1.TunnelNetworkMessage
+	5,  // 17: bridge.v1.BridgeProxyService.GetMetadata:output_type -> bridge.v1.GetMetadataResponse
+	15, // [15:18] is the sub-list for method output_type
+	12, // [12:15] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_bridge_v1_proxy_proto_init() }
@@ -517,13 +1049,19 @@ func file_bridge_v1_proxy_proto_init() {
 	if File_bridge_v1_proxy_proto != nil {
 		return
 	}
+	file_bridge_v1_proxy_proto_msgTypes[5].OneofWrappers = []any{
+		(*Probe_HttpGet)(nil),
+		(*Probe_TcpSocket)(nil),
+		(*Probe_Grpc)(nil),
+		(*Probe_Exec)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bridge_v1_proxy_proto_rawDesc), len(file_bridge_v1_proxy_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

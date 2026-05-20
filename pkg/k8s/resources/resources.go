@@ -167,6 +167,9 @@ func findApplicationDeployment(b *Bundle, name string) (*appsv1.Deployment, erro
 // "grpc" port so they can be queried from the deployment state later. Existing
 // VolumeMounts on the container are kept and surfaced as --mount-roots so the
 // bridge filesystem service can expose them to the devcontainer over gRPC.
+// The source container's probes are captured (before being nulled out) and
+// passed as JSON args so the interceptor can monitor them against the local
+// app.
 func injectProxyImage(deploy *appsv1.Deployment, proxyImage string) {
 	containers := deploy.Spec.Template.Spec.Containers
 	if len(containers) == 0 {
@@ -193,6 +196,12 @@ func injectProxyImage(deploy *appsv1.Deployment, proxyImage string) {
 	if mountRoots := containerMountPaths(c); len(mountRoots) > 0 {
 		args = append(args, "--mount-roots", strings.Join(mountRoots, ","))
 	}
+	if appPort := primaryAppPort(c.Ports); appPort > 0 {
+		args = append(args, "--source-app-port", fmt.Sprintf("%d", appPort))
+	}
+	args = appendProbeArg(args, "--liveness-probe", convertProbe(c.LivenessProbe, c.Ports))
+	args = appendProbeArg(args, "--readiness-probe", convertProbe(c.ReadinessProbe, c.Ports))
+	args = appendProbeArg(args, "--startup-probe", convertProbe(c.StartupProbe, c.Ports))
 
 	c.Image = proxyImage
 	c.ImagePullPolicy = "" // clear so k8s defaults to Always for :latest tags

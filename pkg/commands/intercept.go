@@ -22,6 +22,7 @@ import (
 	"github.com/vercel/bridge/pkg/k8s/k8spf"
 	"github.com/vercel/bridge/pkg/k8s/meta"
 	"github.com/vercel/bridge/pkg/plumbing"
+	"github.com/vercel/bridge/pkg/probe"
 	"github.com/vercel/bridge/pkg/tunnel"
 )
 
@@ -289,6 +290,17 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	}
 	defer interceptSrv.Stop()
 
+	// Spin up probe monitors using the source deployment's probes. Each
+	// monitor runs in its own goroutine and is cancelled when ctx is done.
+	// GetStatus reads each monitor's current Status() directly, so there's
+	// no fan-in goroutine on the server side.
+	if metadata != nil {
+		liveness := startProbeMonitor(ctx, "liveness", metadata.GetLivenessProbe(), metadata.GetSourceAppPort(), int32(appPort))
+		readiness := startProbeMonitor(ctx, "readiness", metadata.GetReadinessProbe(), metadata.GetSourceAppPort(), int32(appPort))
+		startup := startProbeMonitor(ctx, "startup", metadata.GetStartupProbe(), metadata.GetSourceAppPort(), int32(appPort))
+		interceptSrv.SetMonitors(liveness, readiness, startup)
+	}
+
 	// Test hook: simulate a crash after full initialization.
 	if os.Getenv("__TEST_FAIL_INTERCEPT") == "true" {
 		return fmt.Errorf("injected test failure")
@@ -369,19 +381,43 @@ func readOriginalNameserver() string {
 	return "8.8.8.8:53"
 }
 
-// updateResolvConf prepends a nameserver entry to /etc/resolv.conf and returns
-// the original content for later restoration.
+// updateResolvConf rewrites /etc/resolv.conf so the bridge DNS server is the
+// only nameserver, preserving non-nameserver directives (search, options,
+// etc.) from the original. Returns the original content for restoration.
+//
+// We replace rather than prepend because the resolver falls through to other
+// nameservers on SERVFAIL / timeout — and a brief tunnel hiccup would cause
+// the original DNS to "win", silently bypassing the bridge for an
+// intercepted domain. Bridge DNS already handles unmatched domains itself by
+// proxying to the captured original nameserver, so removing the fall-through
+// loses no real functionality but eliminates the silent-bypass class of bug.
 func updateResolvConf(nameserverIP string) ([]byte, error) {
 	original, err := os.ReadFile("/etc/resolv.conf")
 	if err != nil {
 		return nil, err
 	}
-	newContent := fmt.Sprintf("nameserver %s\n%s", nameserverIP, string(original))
-	if err := os.WriteFile("/etc/resolv.conf", []byte(newContent), 0644); err != nil {
+	if err := os.WriteFile("/etc/resolv.conf", rewriteResolvConf(original, nameserverIP), 0644); err != nil {
 		return original, err
 	}
 	slog.Info("Updated /etc/resolv.conf", "nameserver", nameserverIP)
 	return original, nil
+}
+
+// rewriteResolvConf returns new /etc/resolv.conf content with exactly one
+// nameserver directive (the bridge DNS) followed by the non-nameserver
+// directives from the original. Exposed for unit testing.
+func rewriteResolvConf(original []byte, nameserverIP string) []byte {
+	var b strings.Builder
+	fmt.Fprintf(&b, "nameserver %s\n", nameserverIP)
+	for _, line := range strings.Split(string(original), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "nameserver") {
+			continue
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return []byte(b.String())
 }
 
 // restoreResolvConf restores /etc/resolv.conf to its original content.
@@ -413,6 +449,50 @@ func (r *grpcDNSResolver) ResolveDNS(ctx context.Context, hostname string) (*bri
 		Addresses: resp.GetAddresses(),
 		Error:     resp.GetError(),
 	}, nil
+}
+
+// startProbeMonitor builds and starts a probe monitor for one probe (or
+// returns nil if the probe is unset). It remaps the probe's target port to
+// the developer's local --app-port when the source's primary app port is
+// targeted; other ports (e.g. dedicated health-check ports) are passed
+// through unchanged.
+func startProbeMonitor(ctx context.Context, label string, p *bridgev1.Probe, sourceAppPort, localAppPort int32) probe.Monitor {
+	if p == nil {
+		return nil
+	}
+
+	port := probeTargetPort(p)
+	if port == sourceAppPort && sourceAppPort > 0 {
+		port = localAppPort
+	}
+	if port <= 0 {
+		slog.Warn("Skipping probe: could not resolve target port", "label", label)
+		return nil
+	}
+
+	m, err := probe.NewMonitor(probe.Config{Probe: p, Port: port})
+	if err != nil {
+		slog.Warn("Skipping probe: invalid config", "label", label, "error", err)
+		return nil
+	}
+	m.Start(ctx)
+	slog.Info("Probe monitor started", "label", label, "port", port)
+	return m
+}
+
+// probeTargetPort returns the port field from whichever handler is set, or 0
+// if the handler is Exec (no port) or unknown.
+func probeTargetPort(p *bridgev1.Probe) int32 {
+	switch h := p.GetHandler().(type) {
+	case *bridgev1.Probe_HttpGet:
+		return h.HttpGet.GetPort()
+	case *bridgev1.Probe_TcpSocket:
+		return h.TcpSocket.GetPort()
+	case *bridgev1.Probe_Grpc:
+		return h.Grpc.GetPort()
+	default:
+		return 0
+	}
 }
 
 // fuseServer tracks one FUSE mount so it can be unmounted at shutdown.

@@ -60,6 +60,98 @@ message GetMetadataResponse {
   // Absolute paths the BridgeFileSystemService is allowed to serve. The
   // devcontainer FUSE-mounts each one at the same path on the local side.
   repeated string mount_roots = 4 [json_name = "mount_roots"];
+
+  // The source container's primary application port (the first non-grpc port
+  // declared on the original deployment). The interceptor uses this to
+  // remap probe targets: if a probe's port matches source_app_port, the
+  // interceptor checks --app-port locally instead. Zero if the source had
+  // no app ports.
+  int32 source_app_port = 5 [json_name = "source_app_port"];
+
+  // Liveness probe from the source deployment's application container, or
+  // unset if the source had none.
+  Probe liveness_probe = 6 [json_name = "liveness_probe"];
+
+  // Readiness probe from the source deployment's application container, or
+  // unset if the source had none.
+  Probe readiness_probe = 7 [json_name = "readiness_probe"];
+
+  // Startup probe from the source deployment's application container, or
+  // unset if the source had none.
+  Probe startup_probe = 8 [json_name = "startup_probe"];
+}
+
+// Probe mirrors a Kubernetes-style probe definition for a single check (HTTP
+// GET, TCP open, gRPC health, or shell exec). Exactly one handler is set.
+message Probe {
+  oneof handler {
+    HTTPGetAction http_get = 1 [json_name = "http_get"];
+    TCPSocketAction tcp_socket = 2 [json_name = "tcp_socket"];
+    GRPCAction grpc = 3;
+    ExecAction exec = 4;
+  }
+
+  // Seconds to wait before the first check. Default 0.
+  int32 initial_delay_seconds = 10 [json_name = "initial_delay_seconds"];
+
+  // How often (in seconds) to perform the probe. Default 10.
+  int32 period_seconds = 11 [json_name = "period_seconds"];
+
+  // Seconds after which a single check is considered failed. Default 1.
+  int32 timeout_seconds = 12 [json_name = "timeout_seconds"];
+
+  // Minimum consecutive successes for the probe to be considered healthy
+  // after having been failing. Default 1.
+  int32 success_threshold = 13 [json_name = "success_threshold"];
+
+  // After this many consecutive failures the probe is considered failing.
+  // Default 3.
+  int32 failure_threshold = 14 [json_name = "failure_threshold"];
+}
+
+// HTTPGetAction performs an HTTP GET against the local app.
+message HTTPGetAction {
+  // Request path. Defaults to "/".
+  string path = 1;
+
+  // Target port. The interceptor remaps this to --app-port if it matches
+  // source_app_port.
+  int32 port = 2;
+
+  // "HTTP" or "HTTPS". Defaults to HTTP.
+  string scheme = 3;
+
+  // Extra request headers.
+  repeated HTTPHeader http_headers = 4 [json_name = "http_headers"];
+}
+
+message HTTPHeader {
+  string name = 1;
+  string value = 2;
+}
+
+// TCPSocketAction opens a TCP connection.
+message TCPSocketAction {
+  // Target port. The interceptor remaps this to --app-port if it matches
+  // source_app_port.
+  int32 port = 1;
+}
+
+// GRPCAction calls the gRPC health service on the target.
+message GRPCAction {
+  // Target port. The interceptor remaps this to --app-port if it matches
+  // source_app_port.
+  int32 port = 1;
+
+  // Optional service name to check (passed as `service` in the health
+  // request). Empty checks the overall server health.
+  string service = 2;
+}
+
+// ExecAction runs a command inside the devcontainer; exit code 0 is healthy.
+message ExecAction {
+  // Argv. The first element is the program; the rest are arguments.
+  repeated string command = 1;
 }
 
 message TunnelNetworkMessage {

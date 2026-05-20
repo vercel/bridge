@@ -22,7 +22,20 @@ type tunnelDNSResolver interface {
 	ResolveDNS(ctx context.Context, hostname string) (*DNSResolveResult, error)
 }
 
-const defaultTunnelDNSTimeout = 5 * time.Second
+const (
+	defaultTunnelDNSTimeout = 5 * time.Second
+
+	// tunnelDNSMaxAttempts is the total number of attempts for a single
+	// tunnel DNS resolution before surfacing an error. Transient gRPC
+	// blips (port-forward reconnects, in-flight stream drops) usually
+	// recover within a few tens of milliseconds; a small retry budget
+	// absorbs them without making bad-state cases hang.
+	tunnelDNSMaxAttempts = 3
+
+	// tunnelDNSBaseBackoff is the initial backoff between retries; each
+	// attempt doubles it.
+	tunnelDNSBaseBackoff = 50 * time.Millisecond
+)
 
 var _ ExchangeClient = (*TunnelExchangeClient)(nil)
 
@@ -80,10 +93,7 @@ func (c *TunnelExchangeClient) ExchangeContext(ctx context.Context, msg *dns.Msg
 
 	slog.Debug("Resolving via tunnel", "hostname", name)
 
-	ctx, cancel := context.WithTimeout(ctx, defaultTunnelDNSTimeout)
-	defer cancel()
-
-	resp, err := c.tunnel.ResolveDNS(ctx, name)
+	resp, err := c.resolveWithRetry(ctx, name)
 	if err != nil {
 		return nil, false, fmt.Errorf("tunnel DNS resolution for %s: %w", name, err)
 	}
@@ -114,6 +124,43 @@ func (c *TunnelExchangeClient) ExchangeContext(ctx context.Context, msg *dns.Msg
 	}
 
 	return reply, true, nil
+}
+
+// resolveWithRetry calls the underlying tunnel resolver up to
+// tunnelDNSMaxAttempts times. Each attempt has its own deadline derived from
+// defaultTunnelDNSTimeout; the parent context still bounds the total budget.
+// Only RPC-level transport errors are retried — a successful RPC that
+// reports a DNS-level error (resp.Error) is returned to the caller as-is.
+func (c *TunnelExchangeClient) resolveWithRetry(parent context.Context, name string) (*DNSResolveResult, error) {
+	var lastErr error
+	backoff := tunnelDNSBaseBackoff
+	for attempt := 1; attempt <= tunnelDNSMaxAttempts; attempt++ {
+		ctx, cancel := context.WithTimeout(parent, defaultTunnelDNSTimeout)
+		resp, err := c.tunnel.ResolveDNS(ctx, name)
+		cancel()
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+
+		// Stop retrying if the caller cancelled.
+		if parent.Err() != nil {
+			break
+		}
+		if attempt == tunnelDNSMaxAttempts {
+			break
+		}
+
+		slog.Debug("Tunnel DNS attempt failed; retrying",
+			"hostname", name, "attempt", attempt, "error", err, "backoff", backoff)
+		select {
+		case <-parent.Done():
+			return nil, parent.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
+	return nil, lastErr
 }
 
 // matchesPattern checks if the hostname matches any configured pattern.

@@ -45,6 +45,26 @@ func Server() *cli.Command {
 				Usage:   "Absolute paths to expose via the bridge filesystem service for FUSE mounting from the devcontainer.",
 				Sources: cli.EnvVars("BRIDGE_MOUNT_ROOTS"),
 			},
+			&cli.IntFlag{
+				Name:    "source-app-port",
+				Usage:   "Primary application port of the source deployment. The interceptor remaps probe targets matching this port to its --app-port locally.",
+				Sources: cli.EnvVars("BRIDGE_SOURCE_APP_PORT"),
+			},
+			&cli.StringFlag{
+				Name:    "liveness-probe",
+				Usage:   "Source deployment's liveness probe as protojson-encoded bridge.v1.Probe.",
+				Sources: cli.EnvVars("BRIDGE_LIVENESS_PROBE"),
+			},
+			&cli.StringFlag{
+				Name:    "readiness-probe",
+				Usage:   "Source deployment's readiness probe as protojson-encoded bridge.v1.Probe.",
+				Sources: cli.EnvVars("BRIDGE_READINESS_PROBE"),
+			},
+			&cli.StringFlag{
+				Name:    "startup-probe",
+				Usage:   "Source deployment's startup probe as protojson-encoded bridge.v1.Probe.",
+				Sources: cli.EnvVars("BRIDGE_STARTUP_PROBE"),
+			},
 		},
 		Action: runServer,
 	}
@@ -102,11 +122,28 @@ func runServer(ctx context.Context, c *cli.Command) error {
 		mountRoots = append(mountRoots, discovered...)
 	}
 
+	livenessProbe, err := parseProbeFlag(c.String("liveness-probe"))
+	if err != nil {
+		return fmt.Errorf("invalid liveness-probe: %w", err)
+	}
+	readinessProbe, err := parseProbeFlag(c.String("readiness-probe"))
+	if err != nil {
+		return fmt.Errorf("invalid readiness-probe: %w", err)
+	}
+	startupProbe, err := parseProbeFlag(c.String("startup-probe"))
+	if err != nil {
+		return fmt.Errorf("invalid startup-probe: %w", err)
+	}
+
 	grpcServer := proxy.NewGRPCServer(proxy.Config{
-		Addr:        addr,
-		ListenPorts: listenPorts,
-		Facades:     facades,
-		MountRoots:  mountRoots,
+		Addr:           addr,
+		ListenPorts:    listenPorts,
+		Facades:        facades,
+		MountRoots:     mountRoots,
+		SourceAppPort:  int32(c.Int("source-app-port")),
+		LivenessProbe:  livenessProbe,
+		ReadinessProbe: readinessProbe,
+		StartupProbe:   startupProbe,
 	})
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -126,6 +163,18 @@ func runServer(ctx context.Context, c *cli.Command) error {
 		grpcServer.Shutdown(shutdownCtx)
 		return nil
 	}
+}
+
+// parseProbeFlag decodes a protojson-encoded Probe. Empty input returns nil.
+func parseProbeFlag(val string) (*bridgev1.Probe, error) {
+	if strings.TrimSpace(val) == "" {
+		return nil, nil
+	}
+	var p bridgev1.Probe
+	if err := protojson.Unmarshal([]byte(val), &p); err != nil {
+		return nil, fmt.Errorf("parse probe JSON: %w", err)
+	}
+	return &p, nil
 }
 
 // parseServerFacade parses a server facade spec from a JSON string or file path.

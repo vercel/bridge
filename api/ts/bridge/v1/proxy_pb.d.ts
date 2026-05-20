@@ -112,6 +112,41 @@ export declare type GetMetadataResponse = Message<"bridge.v1.GetMetadataResponse
    * @generated from field: repeated string mount_roots = 4 [json_name = "mount_roots"];
    */
   mountRoots: string[];
+
+  /**
+   * The source container's primary application port (the first non-grpc port
+   * declared on the original deployment). The interceptor uses this to
+   * remap probe targets: if a probe's port matches source_app_port, the
+   * interceptor checks --app-port locally instead. Zero if the source had
+   * no app ports.
+   *
+   * @generated from field: int32 source_app_port = 5 [json_name = "source_app_port"];
+   */
+  sourceAppPort: number;
+
+  /**
+   * Liveness probe from the source deployment's application container, or
+   * unset if the source had none.
+   *
+   * @generated from field: bridge.v1.Probe liveness_probe = 6 [json_name = "liveness_probe"];
+   */
+  livenessProbe?: Probe | undefined;
+
+  /**
+   * Readiness probe from the source deployment's application container, or
+   * unset if the source had none.
+   *
+   * @generated from field: bridge.v1.Probe readiness_probe = 7 [json_name = "readiness_probe"];
+   */
+  readinessProbe?: Probe | undefined;
+
+  /**
+   * Startup probe from the source deployment's application container, or
+   * unset if the source had none.
+   *
+   * @generated from field: bridge.v1.Probe startup_probe = 8 [json_name = "startup_probe"];
+   */
+  startupProbe?: Probe | undefined;
 };
 
 /**
@@ -119,6 +154,219 @@ export declare type GetMetadataResponse = Message<"bridge.v1.GetMetadataResponse
  * Use `create(GetMetadataResponseSchema)` to create a new message.
  */
 export declare const GetMetadataResponseSchema: GenMessage<GetMetadataResponse>;
+
+/**
+ * Probe mirrors a Kubernetes-style probe definition for a single check (HTTP
+ * GET, TCP open, gRPC health, or shell exec). Exactly one handler is set.
+ *
+ * @generated from message bridge.v1.Probe
+ */
+export declare type Probe = Message<"bridge.v1.Probe"> & {
+  /**
+   * @generated from oneof bridge.v1.Probe.handler
+   */
+  handler: {
+    /**
+     * @generated from field: bridge.v1.HTTPGetAction http_get = 1 [json_name = "http_get"];
+     */
+    value: HTTPGetAction;
+    case: "httpGet";
+  } | {
+    /**
+     * @generated from field: bridge.v1.TCPSocketAction tcp_socket = 2 [json_name = "tcp_socket"];
+     */
+    value: TCPSocketAction;
+    case: "tcpSocket";
+  } | {
+    /**
+     * @generated from field: bridge.v1.GRPCAction grpc = 3;
+     */
+    value: GRPCAction;
+    case: "grpc";
+  } | {
+    /**
+     * @generated from field: bridge.v1.ExecAction exec = 4;
+     */
+    value: ExecAction;
+    case: "exec";
+  } | { case: undefined; value?: undefined };
+
+  /**
+   * Seconds to wait before the first check. Default 0.
+   *
+   * @generated from field: int32 initial_delay_seconds = 10 [json_name = "initial_delay_seconds"];
+   */
+  initialDelaySeconds: number;
+
+  /**
+   * How often (in seconds) to perform the probe. Default 10.
+   *
+   * @generated from field: int32 period_seconds = 11 [json_name = "period_seconds"];
+   */
+  periodSeconds: number;
+
+  /**
+   * Seconds after which a single check is considered failed. Default 1.
+   *
+   * @generated from field: int32 timeout_seconds = 12 [json_name = "timeout_seconds"];
+   */
+  timeoutSeconds: number;
+
+  /**
+   * Minimum consecutive successes for the probe to be considered healthy
+   * after having been failing. Default 1.
+   *
+   * @generated from field: int32 success_threshold = 13 [json_name = "success_threshold"];
+   */
+  successThreshold: number;
+
+  /**
+   * After this many consecutive failures the probe is considered failing.
+   * Default 3.
+   *
+   * @generated from field: int32 failure_threshold = 14 [json_name = "failure_threshold"];
+   */
+  failureThreshold: number;
+};
+
+/**
+ * Describes the message bridge.v1.Probe.
+ * Use `create(ProbeSchema)` to create a new message.
+ */
+export declare const ProbeSchema: GenMessage<Probe>;
+
+/**
+ * HTTPGetAction performs an HTTP GET against the local app.
+ *
+ * @generated from message bridge.v1.HTTPGetAction
+ */
+export declare type HTTPGetAction = Message<"bridge.v1.HTTPGetAction"> & {
+  /**
+   * Request path. Defaults to "/".
+   *
+   * @generated from field: string path = 1;
+   */
+  path: string;
+
+  /**
+   * Target port. The interceptor remaps this to --app-port if it matches
+   * source_app_port.
+   *
+   * @generated from field: int32 port = 2;
+   */
+  port: number;
+
+  /**
+   * "HTTP" or "HTTPS". Defaults to HTTP.
+   *
+   * @generated from field: string scheme = 3;
+   */
+  scheme: string;
+
+  /**
+   * Extra request headers.
+   *
+   * @generated from field: repeated bridge.v1.HTTPHeader http_headers = 4 [json_name = "http_headers"];
+   */
+  httpHeaders: HTTPHeader[];
+};
+
+/**
+ * Describes the message bridge.v1.HTTPGetAction.
+ * Use `create(HTTPGetActionSchema)` to create a new message.
+ */
+export declare const HTTPGetActionSchema: GenMessage<HTTPGetAction>;
+
+/**
+ * @generated from message bridge.v1.HTTPHeader
+ */
+export declare type HTTPHeader = Message<"bridge.v1.HTTPHeader"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string value = 2;
+   */
+  value: string;
+};
+
+/**
+ * Describes the message bridge.v1.HTTPHeader.
+ * Use `create(HTTPHeaderSchema)` to create a new message.
+ */
+export declare const HTTPHeaderSchema: GenMessage<HTTPHeader>;
+
+/**
+ * TCPSocketAction opens a TCP connection.
+ *
+ * @generated from message bridge.v1.TCPSocketAction
+ */
+export declare type TCPSocketAction = Message<"bridge.v1.TCPSocketAction"> & {
+  /**
+   * Target port. The interceptor remaps this to --app-port if it matches
+   * source_app_port.
+   *
+   * @generated from field: int32 port = 1;
+   */
+  port: number;
+};
+
+/**
+ * Describes the message bridge.v1.TCPSocketAction.
+ * Use `create(TCPSocketActionSchema)` to create a new message.
+ */
+export declare const TCPSocketActionSchema: GenMessage<TCPSocketAction>;
+
+/**
+ * GRPCAction calls the gRPC health service on the target.
+ *
+ * @generated from message bridge.v1.GRPCAction
+ */
+export declare type GRPCAction = Message<"bridge.v1.GRPCAction"> & {
+  /**
+   * Target port. The interceptor remaps this to --app-port if it matches
+   * source_app_port.
+   *
+   * @generated from field: int32 port = 1;
+   */
+  port: number;
+
+  /**
+   * Optional service name to check (passed as `service` in the health
+   * request). Empty checks the overall server health.
+   *
+   * @generated from field: string service = 2;
+   */
+  service: string;
+};
+
+/**
+ * Describes the message bridge.v1.GRPCAction.
+ * Use `create(GRPCActionSchema)` to create a new message.
+ */
+export declare const GRPCActionSchema: GenMessage<GRPCAction>;
+
+/**
+ * ExecAction runs a command inside the devcontainer; exit code 0 is healthy.
+ *
+ * @generated from message bridge.v1.ExecAction
+ */
+export declare type ExecAction = Message<"bridge.v1.ExecAction"> & {
+  /**
+   * Argv. The first element is the program; the rest are arguments.
+   *
+   * @generated from field: repeated string command = 1;
+   */
+  command: string[];
+};
+
+/**
+ * Describes the message bridge.v1.ExecAction.
+ * Use `create(ExecActionSchema)` to create a new message.
+ */
+export declare const ExecActionSchema: GenMessage<ExecAction>;
 
 /**
  * @generated from message bridge.v1.TunnelNetworkMessage
