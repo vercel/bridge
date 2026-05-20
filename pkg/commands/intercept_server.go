@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"github.com/vercel/bridge/pkg/grpcutil"
@@ -105,5 +107,46 @@ func (s *interceptServer) GetStatus(_ context.Context, _ *bridgev1.GetStatusRequ
 			resp.Startup = ms.startup.Status()
 		}
 	}
+	return resp, nil
+}
+
+// Probe runs each configured probe synchronously and returns the per-probe
+// pass/fail of those single checks. Bypasses the threshold-based smoothing
+// surfaced by GetStatus — useful as an authoritative "is the app
+// responding right now?" answer when the caller can't trust cached state
+// (e.g. immediately after `bridge dev` restarts the dev process).
+func (s *interceptServer) Probe(ctx context.Context, _ *bridgev1.ProbeRequest) (*bridgev1.ProbeResponse, error) {
+	resp := &bridgev1.ProbeResponse{}
+	ms := s.monitors.Load()
+	if ms == nil {
+		return resp, nil
+	}
+
+	// Run the three probes concurrently — they hit different ports / paths
+	// and have independent timeouts, so there's no reason to serialise.
+	var wg sync.WaitGroup
+	runOne := func(m probe.Monitor, dst **bridgev1.ProbeCheckResult) {
+		if m == nil {
+			return
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := m.Probe(ctx)
+			result := &bridgev1.ProbeCheckResult{
+				Passed:               err == nil,
+				CheckedAtUnixSeconds: time.Now().Unix(),
+			}
+			if err != nil {
+				result.Error = err.Error()
+			}
+			*dst = result
+		}()
+	}
+	runOne(ms.liveness, &resp.Liveness)
+	runOne(ms.readiness, &resp.Readiness)
+	runOne(ms.startup, &resp.Startup)
+	wg.Wait()
+
 	return resp, nil
 }

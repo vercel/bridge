@@ -61,6 +61,14 @@ func Schema() *cli.Command {
 					return nil
 				},
 			},
+			{
+				Name:  "dev-response",
+				Usage: "Print the JSON schema for the dev command response",
+				Action: func(_ context.Context, _ *cli.Command) error {
+					fmt.Println(string(embeds.DevCommandResponseSchema))
+					return nil
+				},
+			},
 		},
 	}
 }

@@ -31,8 +31,18 @@ type Session struct {
 	TimeCreated *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=time_created,proto3" json:"time_created,omitempty"`
 	// The absolute path to the generated devcontainer.json for this bridge.
 	DevcontainerConfigPath string `protobuf:"bytes,3,opt,name=devcontainer_config_path,proto3" json:"devcontainer_config_path,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// PID inside the devcontainer of the most recent `bridge dev` command.
+	// Zero if no dev command has been started for this bridge, or if the last
+	// one is known to have exited. Used by `bridge dev` to detect and kill a
+	// pre-existing dev process before starting a new one.
+	DevPid int32 `protobuf:"varint,4,opt,name=dev_pid,proto3" json:"dev_pid,omitempty"`
+	// When the current dev_pid was started. Absent if dev_pid is zero.
+	DevStartedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=dev_started_at,proto3" json:"dev_started_at,omitempty"`
+	// The command that was started by the most recent `bridge dev` run.
+	// Stored for diagnostics and for the `bridge dev` JSON response.
+	DevCommand    string `protobuf:"bytes,6,opt,name=dev_command,proto3" json:"dev_command,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Session) Reset() {
@@ -86,15 +96,39 @@ func (x *Session) GetDevcontainerConfigPath() string {
 	return ""
 }
 
+func (x *Session) GetDevPid() int32 {
+	if x != nil {
+		return x.DevPid
+	}
+	return 0
+}
+
+func (x *Session) GetDevStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DevStartedAt
+	}
+	return nil
+}
+
+func (x *Session) GetDevCommand() string {
+	if x != nil {
+		return x.DevCommand
+	}
+	return ""
+}
+
 var File_bridge_v1_session_proto protoreflect.FileDescriptor
 
 const file_bridge_v1_session_proto_rawDesc = "" +
 	"\n" +
-	"\x17bridge/v1/session.proto\x12\tbridge.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x99\x01\n" +
+	"\x17bridge/v1/session.proto\x12\tbridge.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x99\x02\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12>\n" +
 	"\ftime_created\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ftime_created\x12:\n" +
-	"\x18devcontainer_config_path\x18\x03 \x01(\tR\x18devcontainer_config_pathB\x96\x01\n" +
+	"\x18devcontainer_config_path\x18\x03 \x01(\tR\x18devcontainer_config_path\x12\x18\n" +
+	"\adev_pid\x18\x04 \x01(\x05R\adev_pid\x12B\n" +
+	"\x0edev_started_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x0edev_started_at\x12 \n" +
+	"\vdev_command\x18\x06 \x01(\tR\vdev_commandB\x96\x01\n" +
 	"\rcom.bridge.v1B\fSessionProtoP\x01Z2github.com/vercel/bridge/api/go/bridge/v1;bridgev1\xa2\x02\x03BXX\xaa\x02\tBridge.V1\xca\x02\tBridge\\V1\xe2\x02\x15Bridge\\V1\\GPBMetadata\xea\x02\n" +
 	"Bridge::V1b\x06proto3"
 
@@ -117,11 +151,12 @@ var file_bridge_v1_session_proto_goTypes = []any{
 }
 var file_bridge_v1_session_proto_depIdxs = []int32{
 	1, // 0: bridge.v1.Session.time_created:type_name -> google.protobuf.Timestamp
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	1, // 1: bridge.v1.Session.dev_started_at:type_name -> google.protobuf.Timestamp
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_bridge_v1_session_proto_init() }

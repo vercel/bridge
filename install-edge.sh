@@ -2,7 +2,7 @@
 set -e
 
 REPO="vercel/bridge"
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="${BRIDGE_INSTALL_DIR:-${HOME}/.local/bin}"
 
 # Detect OS
 get_os() {
@@ -22,54 +22,70 @@ get_arch() {
     esac
 }
 
-main() {
-    local os arch binary_name download_url
+# Print a one-liner the user can paste to add INSTALL_DIR to their PATH,
+# tailored to whichever rc file their default shell would source.
+print_path_hint() {
+    case "${SHELL##*/}" in
+        zsh)  rc="${ZDOTDIR:-$HOME}/.zshrc" ;;
+        bash) rc="${HOME}/.bashrc" ;;
+        fish) rc="${HOME}/.config/fish/config.fish" ;;
+        *)    rc="your shell startup file" ;;
+    esac
 
+    echo ""
+    echo "${INSTALL_DIR} is not on your PATH."
+    if [ "${SHELL##*/}" = "fish" ]; then
+        echo "Add it with:"
+        echo ""
+        echo "    fish_add_path ${INSTALL_DIR}"
+    else
+        echo "Add it by appending this line to ${rc}:"
+        echo ""
+        echo "    export PATH=\"${INSTALL_DIR}:\$PATH\""
+    fi
+    echo ""
+    echo "Then open a new shell, or run: source ${rc}"
+}
+
+main() {
     os=$(get_os)
     arch=$(get_arch)
 
-    # Cache sudo credentials up front so the prompt happens before the
-    # download — avoids issues when the script is piped via curl | sh.
-    if [ ! -w "$INSTALL_DIR" ]; then
-        echo "Installation to ${INSTALL_DIR} requires sudo access."
-        sudo -v
-    fi
+    mkdir -p "${INSTALL_DIR}"
 
     binary_name="bridge-${os}-${arch}"
     download_url="https://github.com/${REPO}/releases/download/edge/${binary_name}"
 
     echo "Downloading bridge edge (${os}/${arch})..."
-
-    curl -fsSL -o bridge "${download_url}"
-    chmod +x bridge
-
-    if [ -w "$INSTALL_DIR" ]; then
-        mv bridge "${INSTALL_DIR}/bridge"
-    else
-        sudo mv bridge "${INSTALL_DIR}/bridge"
-    fi
-
-    if [ "$os" = "darwin" ]; then
-        # Remove macOS quarantine/provenance attributes to prevent Gatekeeper killing the binary
-        sudo xattr -cr "${INSTALL_DIR}/bridge" 2>/dev/null || true
-    fi
+    curl -fsSL -o "${INSTALL_DIR}/bridge" "${download_url}"
+    chmod +x "${INSTALL_DIR}/bridge"
 
     echo "bridge (edge) installed to ${INSTALL_DIR}/bridge"
 
     install_linux_binary "$os" "$arch"
+
+    # Hint about PATH only if INSTALL_DIR isn't already discoverable. We
+    # don't try to edit rc files ourselves — that's the kind of magic
+    # users rightly distrust in install scripts.
+    case ":$PATH:" in
+        *":${INSTALL_DIR}:"*) ;;
+        *) print_path_hint ;;
+    esac
 }
 
 # Also install the linux binary to ~/.bridge/bin/bridge-linux so that
-# `bridge create` can bind-mount it into devcontainers.
+# `bridge create` can bind-mount it into devcontainers regardless of the
+# developer's host platform.
 install_linux_binary() {
-    local os="$1" arch="$2"
-    local bridge_dir="${HOME}/.bridge/bin"
+    os="$1"
+    arch="$2"
+    bridge_dir="${HOME}/.bridge/bin"
     mkdir -p "$bridge_dir"
 
     if [ "$os" = "linux" ]; then
         cp "${INSTALL_DIR}/bridge" "${bridge_dir}/bridge-linux"
     else
-        local linux_url="https://github.com/${REPO}/releases/download/edge/bridge-linux-${arch}"
+        linux_url="https://github.com/${REPO}/releases/download/edge/bridge-linux-${arch}"
         echo "Downloading linux bridge binary..."
         curl -fsSL -o "${bridge_dir}/bridge-linux" "${linux_url}"
     fi

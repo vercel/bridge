@@ -32,3 +32,8 @@ var GetCommandResponseSchema []byte
 //
 //go:embed jsonschema/RemoveCommandResponse.schema.json
 var RemoveCommandResponseSchema []byte
+
+// DevCommandResponseSchema is the dereferenced JSON Schema for DevCommandResponse.
+//
+//go:embed jsonschema/DevCommandResponse.schema.json
+var DevCommandResponseSchema []byte

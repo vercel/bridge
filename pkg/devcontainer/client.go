@@ -16,6 +16,11 @@ type Client interface {
 	Exec(ctx context.Context, cmdArgs []string) error
 	// ExecOutput runs `devcontainer exec` and returns combined stdout+stderr.
 	ExecOutput(ctx context.Context, cmdArgs []string) (string, error)
+	// NewExec returns a pre-configured `devcontainer exec` command. The caller
+	// owns the cmd: attach stdin/stdout/stderr, set Env, call Run/Start/Output,
+	// etc. The standard --workspace-folder / --config flags are already wired
+	// in.
+	NewExec(ctx context.Context, cmdArgs []string) *exec.Cmd
 }
 
 // CLIClient wraps the devcontainer CLI.
@@ -153,4 +158,18 @@ func (c *CLIClient) stderrOrDefault() io.Writer {
 		return c.Stderr
 	}
 	return os.Stderr
+}
+
+// NewExec returns a `devcontainer exec` *exec.Cmd configured with this
+// client's workspace folder and config path. The caller owns the cmd —
+// attach Stdin/Stdout/Stderr, set Env, choose Run vs Start vs Output, etc.
+// Helpful for building one-off subprocess interactions that don't fit the
+// Exec / ExecOutput shape (e.g. capturing only stdout, streaming, piping).
+func (c *CLIClient) NewExec(ctx context.Context, cmdArgs []string) *exec.Cmd {
+	args := []string{"exec", "--workspace-folder", c.WorkspaceFolder}
+	if c.ConfigPath != "" {
+		args = append(args, "--config", c.ConfigPath)
+	}
+	args = append(args, cmdArgs...)
+	return exec.CommandContext(ctx, "devcontainer", args...)
 }

@@ -10,7 +10,21 @@ A CLI that enables developers to run their code locally within the context of a 
 curl -fsSL https://raw.githubusercontent.com/vercel/bridge/main/install-edge.sh | sh
 ```
 
-This downloads the latest edge binary for your platform (macOS/Linux, amd64/arm64) and installs it to `/usr/local/bin`.
+This downloads the latest edge binary for your platform (macOS/Linux, amd64/arm64) and installs it to `~/.local/bin/bridge`. No sudo required.
+
+Make sure `~/.local/bin` is on your `PATH`:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Add that line to `~/.zshrc`, `~/.bashrc`, or your shell's config to make it permanent.
+
+Override the destination by setting `BRIDGE_INSTALL_DIR` before running the installer:
+
+```sh
+BRIDGE_INSTALL_DIR=/usr/local/bin curl -fsSL .../install-edge.sh | sh
+```
 
 ### Update
 

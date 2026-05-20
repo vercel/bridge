@@ -16,8 +16,21 @@ import (
 
 const sessionsDir = "sessions"
 
-// Save writes a session file to ~/.bridge/sessions/<name>.json.
+// Save creates a fresh session file with name + devcontainer config path.
+// Intended for use at `bridge create` time; existing dev_pid / dev_command
+// state on disk is overwritten with the fresh session.
 func Save(name, devcontainerConfigPath string) error {
+	return Write(&bridgev1.Session{
+		Name:                   name,
+		TimeCreated:            timestamppb.Now(),
+		DevcontainerConfigPath: devcontainerConfigPath,
+	})
+}
+
+// Write writes the given session proto to disk, overwriting any existing
+// session file for s.Name. Callers that want to preserve existing fields
+// should Load first, mutate, then Write.
+func Write(s *bridgev1.Session) error {
 	dir, err := sessionDir()
 	if err != nil {
 		return err
@@ -26,18 +39,12 @@ func Save(name, devcontainerConfigPath string) error {
 		return fmt.Errorf("failed to create sessions directory: %w", err)
 	}
 
-	s := &bridgev1.Session{
-		Name:                   name,
-		TimeCreated:            timestamppb.Now(),
-		DevcontainerConfigPath: devcontainerConfigPath,
-	}
-
 	data, err := protojson.Marshal(s)
 	if err != nil {
 		return fmt.Errorf("failed to marshal session: %w", err)
 	}
 
-	path := filepath.Join(dir, name+".json")
+	path := filepath.Join(dir, s.GetName()+".json")
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("failed to write session file: %w", err)
 	}

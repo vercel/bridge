@@ -105,8 +105,14 @@ func Create() *cli.Command {
 			&cli.BoolFlag{
 				Name:    "connect",
 				Aliases: []string{"c"},
-				Usage:   "Start the devcontainer and exec into it after creation",
+				Usage:   "Start the devcontainer and exec into it after creation (implies --start-container)",
 				Hidden:  interact.IsJSON(),
+			},
+			&cli.BoolFlag{
+				Name:    "start-container",
+				Aliases: []string{"s"},
+				Usage:   "Start the devcontainer after the bridge is created, without attaching to it",
+				Sources: cli.EnvVars("BRIDGE_START_CONTAINER"),
 			},
 			&cli.StringFlag{
 				Name:    "namespace",
@@ -192,15 +198,24 @@ func Create() *cli.Command {
 }
 
 // linuxBinaryPath returns the default path to the linux bridge binary that
-// will be bind-mounted into devcontainers. In dev mode it uses the local
-// build output; otherwise the installer-managed copy at ~/.bridge/bin/.
+// will be bind-mounted into devcontainers. Prefers the installer-managed
+// copy at ~/.bridge/bin/bridge-linux when it exists, so `bridge create`
+// works from any CWD. Falls back to ./dist/bridge-linux for the in-repo
+// dev workflow where the developer builds and runs from the bridge
+// checkout.
 func linuxBinaryPath() string {
+	home, err := os.UserHomeDir()
+	if err == nil {
+		installed := filepath.Join(home, ".bridge", "bin", "bridge-linux")
+		if _, err := os.Stat(installed); err == nil {
+			return installed
+		}
+	}
 	if Version == "dev" {
 		return filepath.Join("dist", "bridge-linux")
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.Getenv("HOME"), ".bridge", "bin", "bridge-linux")
+	if home == "" {
+		home = os.Getenv("HOME")
 	}
 	return filepath.Join(home, ".bridge", "bin", "bridge-linux")
 }
@@ -247,7 +262,7 @@ func applyProfile(ctx context.Context, cmd *cli.Command) (context.Context, error
 
 // preflightCreate runs pre-flight checks before the create command executes.
 func preflightCreate(ctx context.Context, c *cli.Command) (context.Context, error) {
-	if c.Bool("connect") {
+	if c.Bool("connect") || c.Bool("start-container") {
 		if err := checkDocker(ctx); err != nil {
 			return ctx, err
 		}
@@ -261,7 +276,7 @@ func checkDocker(ctx context.Context) error {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("Docker is not running: the --connect flag requires Docker to start a devcontainer. Please start Docker Desktop or the Docker daemon and try again")
+		return fmt.Errorf("Docker is not running: --connect / --start-container require Docker to start a devcontainer. Please start Docker Desktop or the Docker daemon and try again")
 	}
 	return nil
 }
@@ -275,6 +290,10 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	}
 	adminAddr := c.String("admin-addr")
 	connectFlag := c.Bool("connect")
+	// --connect implies --start-container so the existing UX (create →
+	// devcontainer up → exec bash) keeps working without forcing users to
+	// pass both flags.
+	startContainerFlag := connectFlag || c.Bool("start-container")
 	yes := c.Bool("yes") || interact.IsJSON()
 	proxyImage := c.String("proxy-image")
 	featureRef := c.String("feature-ref")
@@ -307,8 +326,9 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 	}
 	slog.Info("Device identity", "device_id", deviceID)
 
-	// Pre-flight: verify linux bridge binary exists when --connect is set.
-	if connectFlag {
+	// Pre-flight: verify linux bridge binary exists whenever we'll start a
+	// devcontainer (--connect implies --start-container; see above).
+	if startContainerFlag {
 		if _, err := os.Stat(containerBinaryPath); err != nil {
 			return fmt.Errorf("linux bridge binary not found at %s — install with: curl -fsSL https://github.com/vercel/bridge/releases/download/edge/install-edge.sh | sh", containerBinaryPath)
 		}
@@ -434,6 +454,36 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 		slog.Warn("Failed to save session", "error", err)
 	}
 
+	// Start the devcontainer first if the user asked for it, so the
+	// post-create response (and any --connect exec) sees a running container.
+	var upClient *devcontainer.CLIClient
+	if startContainerFlag {
+		ct := container.NewDockerClient()
+		labels := map[string]string{labelBridgeDeployment: createResp.Name}
+
+		// Stop any existing container for this bridge so ports are released.
+		ct.StopAll(ctx, container.StopAllOpts{Labels: labels})
+
+		sp.Start(ctx)
+		workspaceFolder, _ := filepath.Abs(filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath))))
+		upClient = &devcontainer.CLIClient{
+			WorkspaceFolder: workspaceFolder,
+			ConfigPath:      dcConfigPath,
+			Stdin:           r,
+			Stdout:          w,
+			Stderr:          c.Root().ErrWriter,
+			UpArgs:          splitArgs(c.String("devcontainer-up-args")),
+		}
+		if err := startDevcontainer(ctx, w, ct, upClient, createResp.Name); err != nil {
+			return err
+		}
+	}
+
+	// JSON-mode response. We skip it only for --connect because that flag
+	// is an interactive flow that returns when the user exits their shell
+	// — emitting a JSON envelope there would mangle the terminal. Plain
+	// --start-container does get a response so agents can script against
+	// `bridge create -s --output=json`.
 	if outputFlag == interact.OutputJSON && !connectFlag {
 		ports := map[string]int32{
 			"app":       int32(appPort),
@@ -464,32 +514,16 @@ func runCreate(ctx context.Context, c *cli.Command) error {
 		return writeResult(w, resp, "")
 	}
 
-	if connectFlag {
-		ct := container.NewDockerClient()
-		labels := map[string]string{labelBridgeDeployment: createResp.Name}
-
-		// Stop any existing container for this bridge so ports are released.
-		ct.StopAll(ctx, container.StopAllOpts{Labels: labels})
-
-		sp.Start(ctx)
-		workspaceFolder, _ := filepath.Abs(filepath.Dir(filepath.Dir(filepath.Dir(dcConfigPath))))
-		upClient := &devcontainer.CLIClient{
-			WorkspaceFolder: workspaceFolder,
-			ConfigPath:      dcConfigPath,
-			Stdin:           r,
-			Stdout:          w,
-			Stderr:          c.Root().ErrWriter,
-			UpArgs:          splitArgs(c.String("devcontainer-up-args")),
-		}
-		if err := startDevcontainer(ctx, w, ct, upClient, createResp.Name); err != nil {
-			return err
-		}
-
+	// Pretty-mode: print port mappings whenever a container was started.
+	if startContainerFlag {
 		printPortMappings(p, portMappings)
+	}
 
+	// --connect: exec a bash shell inside the just-started container and
+	// tear the bridge down when the user exits.
+	if connectFlag {
 		dcErr := upClient.Exec(ctx, []string{"bash"})
 
-		// Clean up the bridge when the user exits the devcontainer.
 		sp.SetTitle("Removing bridge...")
 		sp.Start(ctx)
 

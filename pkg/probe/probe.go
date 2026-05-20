@@ -47,6 +47,14 @@ type Monitor interface {
 	// counters, message, and last-check timestamp. Lock-free; the pointer
 	// is immutable after return. Returns nil if no check has completed yet.
 	Status() *bridgev1.ProbeStatus
+
+	// Probe runs the probe one time, synchronously, and returns whether
+	// the check passed plus any error. Does NOT update the threshold-based
+	// Health/Status surfaced by GetStatus — this is a stateless "is the
+	// app responding right now?" check used by callers that need to
+	// bypass the success/failure-threshold smoothing (e.g. bridge dev
+	// after restarting the dev process).
+	Probe(ctx context.Context) error
 }
 
 // monitor is the default Monitor implementation. All state shared across
@@ -114,6 +122,15 @@ func (m *monitor) Health() bridgev1.ProbeHealth {
 // Status returns the latest published status snapshot.
 func (m *monitor) Status() *bridgev1.ProbeStatus {
 	return m.status.Load()
+}
+
+// Probe implements Monitor.Probe — a synchronous, stateless check that
+// bypasses the threshold-tracked state used by Status/Health.
+func (m *monitor) Probe(ctx context.Context) error {
+	timeout := time.Duration(intOrDefault(m.probe.GetTimeoutSeconds(), defaultTimeoutSeconds)) * time.Second
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return runHandler(runCtx, m.probe, m.host, m.port)
 }
 
 // Start begins running the probe in a goroutine. The goroutine exits when

@@ -74,6 +74,64 @@ func (CommandResultOutcome_Enum) EnumDescriptor() ([]byte, []int) {
 	return file_bridge_v1_command_proto_rawDescGZIP(), []int{0, 0}
 }
 
+// buf:lint:ignore ENUM_VALUE_PREFIX
+// buf:lint:ignore ENUM_ZERO_VALUE_SUFFIX
+// buf:lint:ignore ENUM_VALUE_UPPER_SNAKE_CASE
+type DevCommandReason_Enum int32
+
+const (
+	DevCommandReason_unspecified DevCommandReason_Enum = 0
+	// All configured liveness/readiness probes reported healthy.
+	DevCommandReason_healthy DevCommandReason_Enum = 1
+	// The dev command exited before reaching a healthy state.
+	DevCommandReason_exited DevCommandReason_Enum = 2
+	// --timeout elapsed before health or exit.
+	DevCommandReason_timeout DevCommandReason_Enum = 3
+)
+
+// Enum value maps for DevCommandReason_Enum.
+var (
+	DevCommandReason_Enum_name = map[int32]string{
+		0: "unspecified",
+		1: "healthy",
+		2: "exited",
+		3: "timeout",
+	}
+	DevCommandReason_Enum_value = map[string]int32{
+		"unspecified": 0,
+		"healthy":     1,
+		"exited":      2,
+		"timeout":     3,
+	}
+)
+
+func (x DevCommandReason_Enum) Enum() *DevCommandReason_Enum {
+	p := new(DevCommandReason_Enum)
+	*p = x
+	return p
+}
+
+func (x DevCommandReason_Enum) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DevCommandReason_Enum) Descriptor() protoreflect.EnumDescriptor {
+	return file_bridge_v1_command_proto_enumTypes[1].Descriptor()
+}
+
+func (DevCommandReason_Enum) Type() protoreflect.EnumType {
+	return &file_bridge_v1_command_proto_enumTypes[1]
+}
+
+func (x DevCommandReason_Enum) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DevCommandReason_Enum.Descriptor instead.
+func (DevCommandReason_Enum) EnumDescriptor() ([]byte, []int) {
+	return file_bridge_v1_command_proto_rawDescGZIP(), []int{7, 0}
+}
+
 // CommandResultOutcome wraps the outcome enum so values serialize as
 // "success" and "error" without a package prefix.
 type CommandResultOutcome struct {
@@ -403,12 +461,21 @@ type GetCommandResponseBridge struct {
 	Namespace string `protobuf:"bytes,4,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	// When the bridge was created (RFC 3339).
 	CreatedAt string `protobuf:"bytes,5,opt,name=created_at,proto3" json:"created_at,omitempty"`
-	// Current status of the bridge.
+	// Current status of the bridge in the cluster (e.g. "running", "pending").
 	Status string `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
 	// The name of the bridge Deployment.
 	DeploymentName string `protobuf:"bytes,7,opt,name=deployment_name,proto3" json:"deployment_name,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Status of the developer's local application as reported by the
+	// interceptor's probe monitors. One of:
+	//   - "stopped"      — no devcontainer is running for this bridge
+	//   - "unreachable"  — devcontainer is up but the interceptor isn't responding
+	//   - "starting"     — interceptor is still initializing, or probes are pending
+	//   - "no probes"    — source deployment didn't declare liveness/readiness/startup
+	//   - "healthy"      — every configured probe reports healthy
+	//   - "unhealthy"    — at least one configured probe reports unhealthy
+	ApplicationStatus string `protobuf:"bytes,8,opt,name=application_status,proto3" json:"application_status,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *GetCommandResponseBridge) Reset() {
@@ -486,6 +553,13 @@ func (x *GetCommandResponseBridge) GetStatus() string {
 func (x *GetCommandResponseBridge) GetDeploymentName() string {
 	if x != nil {
 		return x.DeploymentName
+	}
+	return ""
+}
+
+func (x *GetCommandResponseBridge) GetApplicationStatus() string {
+	if x != nil {
+		return x.ApplicationStatus
 	}
 	return ""
 }
@@ -583,6 +657,138 @@ func (x *RemoveCommandResponse) GetRemoved() []string {
 	return nil
 }
 
+// DevCommandReason describes why `bridge dev` returned.
+type DevCommandReason struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DevCommandReason) Reset() {
+	*x = DevCommandReason{}
+	mi := &file_bridge_v1_command_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DevCommandReason) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DevCommandReason) ProtoMessage() {}
+
+func (x *DevCommandReason) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_v1_command_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DevCommandReason.ProtoReflect.Descriptor instead.
+func (*DevCommandReason) Descriptor() ([]byte, []int) {
+	return file_bridge_v1_command_proto_rawDescGZIP(), []int{7}
+}
+
+// DevCommandResponse is the structured output emitted by the "dev" command
+// when running in JSON output mode.
+type DevCommandResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The bridge name the dev command was run against.
+	BridgeName string `protobuf:"bytes,1,opt,name=bridge_name,proto3" json:"bridge_name,omitempty"`
+	// PID inside the devcontainer of the dev process. Always populated once
+	// the command starts running, even if it later exits or times out.
+	Pid int32 `protobuf:"varint,2,opt,name=pid,proto3" json:"pid,omitempty"`
+	// The exact command line that was launched (from devcontainer.json
+	// `devCommand`).
+	Command string `protobuf:"bytes,3,opt,name=command,proto3" json:"command,omitempty"`
+	// Why the call returned. See DevCommandReason.
+	Reason DevCommandReason_Enum `protobuf:"varint,4,opt,name=reason,proto3,enum=bridge.v1.DevCommandReason_Enum" json:"reason,omitempty"`
+	// Exit code of the dev process. Only populated when reason == exited.
+	ExitCode *int32 `protobuf:"varint,5,opt,name=exit_code,proto3,oneof" json:"exit_code,omitempty"`
+	// Absolute path inside the devcontainer to the dev process's stdout/stderr
+	// log file. Useful for debugging when the dev command exits unhealthy.
+	LogPath       string `protobuf:"bytes,6,opt,name=log_path,proto3" json:"log_path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DevCommandResponse) Reset() {
+	*x = DevCommandResponse{}
+	mi := &file_bridge_v1_command_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DevCommandResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DevCommandResponse) ProtoMessage() {}
+
+func (x *DevCommandResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_v1_command_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DevCommandResponse.ProtoReflect.Descriptor instead.
+func (*DevCommandResponse) Descriptor() ([]byte, []int) {
+	return file_bridge_v1_command_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *DevCommandResponse) GetBridgeName() string {
+	if x != nil {
+		return x.BridgeName
+	}
+	return ""
+}
+
+func (x *DevCommandResponse) GetPid() int32 {
+	if x != nil {
+		return x.Pid
+	}
+	return 0
+}
+
+func (x *DevCommandResponse) GetCommand() string {
+	if x != nil {
+		return x.Command
+	}
+	return ""
+}
+
+func (x *DevCommandResponse) GetReason() DevCommandReason_Enum {
+	if x != nil {
+		return x.Reason
+	}
+	return DevCommandReason_unspecified
+}
+
+func (x *DevCommandResponse) GetExitCode() int32 {
+	if x != nil && x.ExitCode != nil {
+		return *x.ExitCode
+	}
+	return 0
+}
+
+func (x *DevCommandResponse) GetLogPath() string {
+	if x != nil {
+		return x.LogPath
+	}
+	return ""
+}
+
 var File_bridge_v1_command_proto protoreflect.FileDescriptor
 
 const file_bridge_v1_command_proto_rawDesc = "" +
@@ -619,7 +825,7 @@ const file_bridge_v1_command_proto_rawDesc = "" +
 	"\n" +
 	"PortsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\x88\x02\n" +
+	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\xb8\x02\n" +
 	"\x18GetCommandResponseBridge\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12,\n" +
 	"\x11source_deployment\x18\x02 \x01(\tR\x11source_deployment\x12*\n" +
@@ -629,11 +835,28 @@ const file_bridge_v1_command_proto_rawDesc = "" +
 	"created_at\x18\x05 \x01(\tR\n" +
 	"created_at\x12\x16\n" +
 	"\x06status\x18\x06 \x01(\tR\x06status\x12(\n" +
-	"\x0fdeployment_name\x18\a \x01(\tR\x0fdeployment_name\"S\n" +
+	"\x0fdeployment_name\x18\a \x01(\tR\x0fdeployment_name\x12.\n" +
+	"\x12application_status\x18\b \x01(\tR\x12application_status\"S\n" +
 	"\x12GetCommandResponse\x12=\n" +
 	"\abridges\x18\x01 \x03(\v2#.bridge.v1.GetCommandResponseBridgeR\abridges\"1\n" +
 	"\x15RemoveCommandResponse\x12\x18\n" +
-	"\aremoved\x18\x01 \x03(\tR\aremovedB\x96\x01\n" +
+	"\aremoved\x18\x01 \x03(\tR\aremoved\"Q\n" +
+	"\x10DevCommandReason\"=\n" +
+	"\x04Enum\x12\x0f\n" +
+	"\vunspecified\x10\x00\x12\v\n" +
+	"\ahealthy\x10\x01\x12\n" +
+	"\n" +
+	"\x06exited\x10\x02\x12\v\n" +
+	"\atimeout\x10\x03\"\xe9\x01\n" +
+	"\x12DevCommandResponse\x12 \n" +
+	"\vbridge_name\x18\x01 \x01(\tR\vbridge_name\x12\x10\n" +
+	"\x03pid\x18\x02 \x01(\x05R\x03pid\x12\x18\n" +
+	"\acommand\x18\x03 \x01(\tR\acommand\x128\n" +
+	"\x06reason\x18\x04 \x01(\x0e2 .bridge.v1.DevCommandReason.EnumR\x06reason\x12!\n" +
+	"\texit_code\x18\x05 \x01(\x05H\x00R\texit_code\x88\x01\x01\x12\x1a\n" +
+	"\blog_path\x18\x06 \x01(\tR\blog_pathB\f\n" +
+	"\n" +
+	"_exit_codeB\x96\x01\n" +
 	"\rcom.bridge.v1B\fCommandProtoP\x01Z2github.com/vercel/bridge/api/go/bridge/v1;bridgev1\xa2\x02\x03BXX\xaa\x02\tBridge.V1\xca\x02\tBridge\\V1\xe2\x02\x15Bridge\\V1\\GPBMetadata\xea\x02\n" +
 	"Bridge::V1b\x06proto3"
 
@@ -649,30 +872,34 @@ func file_bridge_v1_command_proto_rawDescGZIP() []byte {
 	return file_bridge_v1_command_proto_rawDescData
 }
 
-var file_bridge_v1_command_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_bridge_v1_command_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_bridge_v1_command_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_bridge_v1_command_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_bridge_v1_command_proto_goTypes = []any{
 	(CommandResultOutcome_Enum)(0),   // 0: bridge.v1.CommandResultOutcome.Enum
-	(*CommandResultOutcome)(nil),     // 1: bridge.v1.CommandResultOutcome
-	(*CommandResult)(nil),            // 2: bridge.v1.CommandResult
-	(*CreateCommandPayload)(nil),     // 3: bridge.v1.CreateCommandPayload
-	(*CreateCommandResponse)(nil),    // 4: bridge.v1.CreateCommandResponse
-	(*GetCommandResponseBridge)(nil), // 5: bridge.v1.GetCommandResponseBridge
-	(*GetCommandResponse)(nil),       // 6: bridge.v1.GetCommandResponse
-	(*RemoveCommandResponse)(nil),    // 7: bridge.v1.RemoveCommandResponse
-	nil,                              // 8: bridge.v1.CreateCommandResponse.PortsEntry
-	(*structpb.Value)(nil),           // 9: google.protobuf.Value
+	(DevCommandReason_Enum)(0),       // 1: bridge.v1.DevCommandReason.Enum
+	(*CommandResultOutcome)(nil),     // 2: bridge.v1.CommandResultOutcome
+	(*CommandResult)(nil),            // 3: bridge.v1.CommandResult
+	(*CreateCommandPayload)(nil),     // 4: bridge.v1.CreateCommandPayload
+	(*CreateCommandResponse)(nil),    // 5: bridge.v1.CreateCommandResponse
+	(*GetCommandResponseBridge)(nil), // 6: bridge.v1.GetCommandResponseBridge
+	(*GetCommandResponse)(nil),       // 7: bridge.v1.GetCommandResponse
+	(*RemoveCommandResponse)(nil),    // 8: bridge.v1.RemoveCommandResponse
+	(*DevCommandReason)(nil),         // 9: bridge.v1.DevCommandReason
+	(*DevCommandResponse)(nil),       // 10: bridge.v1.DevCommandResponse
+	nil,                              // 11: bridge.v1.CreateCommandResponse.PortsEntry
+	(*structpb.Value)(nil),           // 12: google.protobuf.Value
 }
 var file_bridge_v1_command_proto_depIdxs = []int32{
-	0, // 0: bridge.v1.CommandResult.outcome:type_name -> bridge.v1.CommandResultOutcome.Enum
-	9, // 1: bridge.v1.CommandResult.response:type_name -> google.protobuf.Value
-	8, // 2: bridge.v1.CreateCommandResponse.ports:type_name -> bridge.v1.CreateCommandResponse.PortsEntry
-	5, // 3: bridge.v1.GetCommandResponse.bridges:type_name -> bridge.v1.GetCommandResponseBridge
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	0,  // 0: bridge.v1.CommandResult.outcome:type_name -> bridge.v1.CommandResultOutcome.Enum
+	12, // 1: bridge.v1.CommandResult.response:type_name -> google.protobuf.Value
+	11, // 2: bridge.v1.CreateCommandResponse.ports:type_name -> bridge.v1.CreateCommandResponse.PortsEntry
+	6,  // 3: bridge.v1.GetCommandResponse.bridges:type_name -> bridge.v1.GetCommandResponseBridge
+	1,  // 4: bridge.v1.DevCommandResponse.reason:type_name -> bridge.v1.DevCommandReason.Enum
+	5,  // [5:5] is the sub-list for method output_type
+	5,  // [5:5] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_bridge_v1_command_proto_init() }
@@ -681,13 +908,14 @@ func file_bridge_v1_command_proto_init() {
 		return
 	}
 	file_bridge_v1_command_proto_msgTypes[1].OneofWrappers = []any{}
+	file_bridge_v1_command_proto_msgTypes[8].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bridge_v1_command_proto_rawDesc), len(file_bridge_v1_command_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   8,
+			NumEnums:      2,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -282,6 +282,170 @@ func (x *ProbeStatus) GetTotalChecks() int64 {
 	return 0
 }
 
+type ProbeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProbeRequest) Reset() {
+	*x = ProbeRequest{}
+	mi := &file_bridge_v1_interceptor_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProbeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProbeRequest) ProtoMessage() {}
+
+func (x *ProbeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_v1_interceptor_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProbeRequest.ProtoReflect.Descriptor instead.
+func (*ProbeRequest) Descriptor() ([]byte, []int) {
+	return file_bridge_v1_interceptor_proto_rawDescGZIP(), []int{3}
+}
+
+// ProbeResponse reports the outcome of a synchronous run of each
+// configured probe. Each field is unset when the corresponding probe is
+// not configured on the source deployment.
+type ProbeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Liveness      *ProbeCheckResult      `protobuf:"bytes,1,opt,name=liveness,proto3" json:"liveness,omitempty"`
+	Readiness     *ProbeCheckResult      `protobuf:"bytes,2,opt,name=readiness,proto3" json:"readiness,omitempty"`
+	Startup       *ProbeCheckResult      `protobuf:"bytes,3,opt,name=startup,proto3" json:"startup,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProbeResponse) Reset() {
+	*x = ProbeResponse{}
+	mi := &file_bridge_v1_interceptor_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProbeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProbeResponse) ProtoMessage() {}
+
+func (x *ProbeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_v1_interceptor_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProbeResponse.ProtoReflect.Descriptor instead.
+func (*ProbeResponse) Descriptor() ([]byte, []int) {
+	return file_bridge_v1_interceptor_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ProbeResponse) GetLiveness() *ProbeCheckResult {
+	if x != nil {
+		return x.Liveness
+	}
+	return nil
+}
+
+func (x *ProbeResponse) GetReadiness() *ProbeCheckResult {
+	if x != nil {
+		return x.Readiness
+	}
+	return nil
+}
+
+func (x *ProbeResponse) GetStartup() *ProbeCheckResult {
+	if x != nil {
+		return x.Startup
+	}
+	return nil
+}
+
+// ProbeCheckResult is the outcome of one synchronous probe check.
+type ProbeCheckResult struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// True if this single check passed (HTTP 2xx/3xx, TCP open, gRPC
+	// SERVING, or Exec exit 0).
+	Passed bool `protobuf:"varint,1,opt,name=passed,proto3" json:"passed,omitempty"`
+	// Error message when passed=false. Empty on success.
+	Error string `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	// Unix seconds when this check completed.
+	CheckedAtUnixSeconds int64 `protobuf:"varint,3,opt,name=checked_at_unix_seconds,proto3" json:"checked_at_unix_seconds,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *ProbeCheckResult) Reset() {
+	*x = ProbeCheckResult{}
+	mi := &file_bridge_v1_interceptor_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProbeCheckResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProbeCheckResult) ProtoMessage() {}
+
+func (x *ProbeCheckResult) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_v1_interceptor_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProbeCheckResult.ProtoReflect.Descriptor instead.
+func (*ProbeCheckResult) Descriptor() ([]byte, []int) {
+	return file_bridge_v1_interceptor_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ProbeCheckResult) GetPassed() bool {
+	if x != nil {
+		return x.Passed
+	}
+	return false
+}
+
+func (x *ProbeCheckResult) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *ProbeCheckResult) GetCheckedAtUnixSeconds() int64 {
+	if x != nil {
+		return x.CheckedAtUnixSeconds
+	}
+	return 0
+}
+
 var File_bridge_v1_interceptor_proto protoreflect.FileDescriptor
 
 const file_bridge_v1_interceptor_proto_rawDesc = "" +
@@ -299,14 +463,24 @@ const file_bridge_v1_interceptor_proto_rawDesc = "" +
 	"\x17last_check_unix_seconds\x18\x03 \x01(\x03R\x17last_check_unix_seconds\x124\n" +
 	"\x15consecutive_successes\x18\x04 \x01(\x05R\x15consecutive_successes\x122\n" +
 	"\x14consecutive_failures\x18\x05 \x01(\x05R\x14consecutive_failures\x12\"\n" +
-	"\ftotal_checks\x18\x06 \x01(\x03R\ftotal_checks*{\n" +
+	"\ftotal_checks\x18\x06 \x01(\x03R\ftotal_checks\"\x0e\n" +
+	"\fProbeRequest\"\xba\x01\n" +
+	"\rProbeResponse\x127\n" +
+	"\bliveness\x18\x01 \x01(\v2\x1b.bridge.v1.ProbeCheckResultR\bliveness\x129\n" +
+	"\treadiness\x18\x02 \x01(\v2\x1b.bridge.v1.ProbeCheckResultR\treadiness\x125\n" +
+	"\astartup\x18\x03 \x01(\v2\x1b.bridge.v1.ProbeCheckResultR\astartup\"z\n" +
+	"\x10ProbeCheckResult\x12\x16\n" +
+	"\x06passed\x18\x01 \x01(\bR\x06passed\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x128\n" +
+	"\x17checked_at_unix_seconds\x18\x03 \x01(\x03R\x17checked_at_unix_seconds*{\n" +
 	"\vProbeHealth\x12\x1c\n" +
 	"\x18PROBE_HEALTH_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14PROBE_HEALTH_PENDING\x10\x01\x12\x18\n" +
 	"\x14PROBE_HEALTH_HEALTHY\x10\x02\x12\x1a\n" +
-	"\x16PROBE_HEALTH_UNHEALTHY\x10\x032\\\n" +
+	"\x16PROBE_HEALTH_UNHEALTHY\x10\x032\x98\x01\n" +
 	"\x12InterceptorService\x12F\n" +
-	"\tGetStatus\x12\x1b.bridge.v1.GetStatusRequest\x1a\x1c.bridge.v1.GetStatusResponseB\x9a\x01\n" +
+	"\tGetStatus\x12\x1b.bridge.v1.GetStatusRequest\x1a\x1c.bridge.v1.GetStatusResponse\x12:\n" +
+	"\x05Probe\x12\x17.bridge.v1.ProbeRequest\x1a\x18.bridge.v1.ProbeResponseB\x9a\x01\n" +
 	"\rcom.bridge.v1B\x10InterceptorProtoP\x01Z2github.com/vercel/bridge/api/go/bridge/v1;bridgev1\xa2\x02\x03BXX\xaa\x02\tBridge.V1\xca\x02\tBridge\\V1\xe2\x02\x15Bridge\\V1\\GPBMetadata\xea\x02\n" +
 	"Bridge::V1b\x06proto3"
 
@@ -323,25 +497,33 @@ func file_bridge_v1_interceptor_proto_rawDescGZIP() []byte {
 }
 
 var file_bridge_v1_interceptor_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_bridge_v1_interceptor_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_bridge_v1_interceptor_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_bridge_v1_interceptor_proto_goTypes = []any{
 	(ProbeHealth)(0),          // 0: bridge.v1.ProbeHealth
 	(*GetStatusRequest)(nil),  // 1: bridge.v1.GetStatusRequest
 	(*GetStatusResponse)(nil), // 2: bridge.v1.GetStatusResponse
 	(*ProbeStatus)(nil),       // 3: bridge.v1.ProbeStatus
+	(*ProbeRequest)(nil),      // 4: bridge.v1.ProbeRequest
+	(*ProbeResponse)(nil),     // 5: bridge.v1.ProbeResponse
+	(*ProbeCheckResult)(nil),  // 6: bridge.v1.ProbeCheckResult
 }
 var file_bridge_v1_interceptor_proto_depIdxs = []int32{
 	3, // 0: bridge.v1.GetStatusResponse.liveness:type_name -> bridge.v1.ProbeStatus
 	3, // 1: bridge.v1.GetStatusResponse.readiness:type_name -> bridge.v1.ProbeStatus
 	3, // 2: bridge.v1.GetStatusResponse.startup:type_name -> bridge.v1.ProbeStatus
 	0, // 3: bridge.v1.ProbeStatus.health:type_name -> bridge.v1.ProbeHealth
-	1, // 4: bridge.v1.InterceptorService.GetStatus:input_type -> bridge.v1.GetStatusRequest
-	2, // 5: bridge.v1.InterceptorService.GetStatus:output_type -> bridge.v1.GetStatusResponse
-	5, // [5:6] is the sub-list for method output_type
-	4, // [4:5] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	6, // 4: bridge.v1.ProbeResponse.liveness:type_name -> bridge.v1.ProbeCheckResult
+	6, // 5: bridge.v1.ProbeResponse.readiness:type_name -> bridge.v1.ProbeCheckResult
+	6, // 6: bridge.v1.ProbeResponse.startup:type_name -> bridge.v1.ProbeCheckResult
+	1, // 7: bridge.v1.InterceptorService.GetStatus:input_type -> bridge.v1.GetStatusRequest
+	4, // 8: bridge.v1.InterceptorService.Probe:input_type -> bridge.v1.ProbeRequest
+	2, // 9: bridge.v1.InterceptorService.GetStatus:output_type -> bridge.v1.GetStatusResponse
+	5, // 10: bridge.v1.InterceptorService.Probe:output_type -> bridge.v1.ProbeResponse
+	9, // [9:11] is the sub-list for method output_type
+	7, // [7:9] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_bridge_v1_interceptor_proto_init() }
@@ -355,7 +537,7 @@ func file_bridge_v1_interceptor_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bridge_v1_interceptor_proto_rawDesc), len(file_bridge_v1_interceptor_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   3,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

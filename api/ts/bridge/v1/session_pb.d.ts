@@ -37,6 +37,31 @@ export declare type Session = Message<"bridge.v1.Session"> & {
    * @generated from field: string devcontainer_config_path = 3 [json_name = "devcontainer_config_path"];
    */
   devcontainerConfigPath: string;
+
+  /**
+   * PID inside the devcontainer of the most recent `bridge dev` command.
+   * Zero if no dev command has been started for this bridge, or if the last
+   * one is known to have exited. Used by `bridge dev` to detect and kill a
+   * pre-existing dev process before starting a new one.
+   *
+   * @generated from field: int32 dev_pid = 4 [json_name = "dev_pid"];
+   */
+  devPid: number;
+
+  /**
+   * When the current dev_pid was started. Absent if dev_pid is zero.
+   *
+   * @generated from field: google.protobuf.Timestamp dev_started_at = 5 [json_name = "dev_started_at"];
+   */
+  devStartedAt?: Timestamp | undefined;
+
+  /**
+   * The command that was started by the most recent `bridge dev` run.
+   * Stored for diagnostics and for the `bridge dev` JSON response.
+   *
+   * @generated from field: string dev_command = 6 [json_name = "dev_command"];
+   */
+  devCommand: string;
 };
 
 /**

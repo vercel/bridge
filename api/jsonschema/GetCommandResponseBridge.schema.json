@@ -3,6 +3,11 @@
   "additionalProperties": false,
   "description": "GetCommandResponseBridge describes a single bridge in the get command output.",
   "properties": {
+    "application_status": {
+      "default": "",
+      "description": "Status of the developer's local application as reported by the\n interceptor's probe monitors. One of:\n   - \"stopped\"      — no devcontainer is running for this bridge\n   - \"unreachable\"  — devcontainer is up but the interceptor isn't responding\n   - \"starting\"     — interceptor is still initializing, or probes are pending\n   - \"no probes\"    — source deployment didn't declare liveness/readiness/startup\n   - \"healthy\"      — every configured probe reports healthy\n   - \"unhealthy\"    — at least one configured probe reports unhealthy",
+      "type": "string"
+    },
     "created_at": {
       "default": "",
       "description": "When the bridge was created (RFC 3339).",
@@ -35,7 +40,7 @@
     },
     "status": {
       "default": "",
-      "description": "Current status of the bridge.",
+      "description": "Current status of the bridge in the cluster (e.g. \"running\", \"pending\").",
       "type": "string"
     }
   },

@@ -110,6 +110,7 @@ func NewApp() *cli.Command {
 			Server(),
 			Intercept(),
 			Create(),
+			Dev(),
 			Exec(),
 			Get(),
 			Remove(),

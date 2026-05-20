@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "DevCommandResponse is the structured output emitted by the \"dev\" command\n when running in JSON output mode.",
+  "properties": {
+    "bridge_name": {
+      "default": "",
+      "description": "The bridge name the dev command was run against.",
+      "type": "string"
+    },
+    "command": {
+      "default": "",
+      "description": "The exact command line that was launched (from devcontainer.json\n `devCommand`).",
+      "type": "string"
+    },
+    "exit_code": {
+      "anyOf": [
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        {
+          "pattern": "^-?[0-9]+$",
+          "type": "string"
+        }
+      ],
+      "description": "Exit code of the dev process. Only populated when reason == exited."
+    },
+    "log_path": {
+      "default": "",
+      "description": "Absolute path inside the devcontainer to the dev process's stdout/stderr\n log file. Useful for debugging when the dev command exits unhealthy.",
+      "type": "string"
+    },
+    "pid": {
+      "anyOf": [
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        {
+          "pattern": "^-?[0-9]+$",
+          "type": "string"
+        }
+      ],
+      "default": 0,
+      "description": "PID inside the devcontainer of the dev process. Always populated once\n the command starts running, even if it later exits or times out."
+    },
+    "reason": {
+      "description": "Why the call returned. See DevCommandReason.",
+      "enum": [
+        "unspecified",
+        "healthy",
+        "exited",
+        "timeout"
+      ],
+      "title": "Enum",
+      "type": "string"
+    }
+  },
+  "title": "Dev Command Response",
+  "type": "object"
+}

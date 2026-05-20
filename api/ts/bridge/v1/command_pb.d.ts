@@ -267,7 +267,7 @@ export declare type GetCommandResponseBridge = Message<"bridge.v1.GetCommandResp
   createdAt: string;
 
   /**
-   * Current status of the bridge.
+   * Current status of the bridge in the cluster (e.g. "running", "pending").
    *
    * @generated from field: string status = 6;
    */
@@ -279,6 +279,20 @@ export declare type GetCommandResponseBridge = Message<"bridge.v1.GetCommandResp
    * @generated from field: string deployment_name = 7 [json_name = "deployment_name"];
    */
   deploymentName: string;
+
+  /**
+   * Status of the developer's local application as reported by the
+   * interceptor's probe monitors. One of:
+   *   - "stopped"      — no devcontainer is running for this bridge
+   *   - "unreachable"  — devcontainer is up but the interceptor isn't responding
+   *   - "starting"     — interceptor is still initializing, or probes are pending
+   *   - "no probes"    — source deployment didn't declare liveness/readiness/startup
+   *   - "healthy"      — every configured probe reports healthy
+   *   - "unhealthy"    — at least one configured probe reports unhealthy
+   *
+   * @generated from field: string application_status = 8 [json_name = "application_status"];
+   */
+  applicationStatus: string;
 };
 
 /**
@@ -326,4 +340,117 @@ export declare type RemoveCommandResponse = Message<"bridge.v1.RemoveCommandResp
  * Use `create(RemoveCommandResponseSchema)` to create a new message.
  */
 export declare const RemoveCommandResponseSchema: GenMessage<RemoveCommandResponse>;
+
+/**
+ * DevCommandReason describes why `bridge dev` returned.
+ *
+ * @generated from message bridge.v1.DevCommandReason
+ */
+export declare type DevCommandReason = Message<"bridge.v1.DevCommandReason"> & {
+};
+
+/**
+ * Describes the message bridge.v1.DevCommandReason.
+ * Use `create(DevCommandReasonSchema)` to create a new message.
+ */
+export declare const DevCommandReasonSchema: GenMessage<DevCommandReason>;
+
+/**
+ * buf:lint:ignore ENUM_VALUE_PREFIX
+ * buf:lint:ignore ENUM_ZERO_VALUE_SUFFIX
+ * buf:lint:ignore ENUM_VALUE_UPPER_SNAKE_CASE
+ *
+ * @generated from enum bridge.v1.DevCommandReason.Enum
+ */
+export enum DevCommandReason_Enum {
+  /**
+   * @generated from enum value: unspecified = 0;
+   */
+  unspecified = 0,
+
+  /**
+   * All configured liveness/readiness probes reported healthy.
+   *
+   * @generated from enum value: healthy = 1;
+   */
+  healthy = 1,
+
+  /**
+   * The dev command exited before reaching a healthy state.
+   *
+   * @generated from enum value: exited = 2;
+   */
+  exited = 2,
+
+  /**
+   * --timeout elapsed before health or exit.
+   *
+   * @generated from enum value: timeout = 3;
+   */
+  timeout = 3,
+}
+
+/**
+ * Describes the enum bridge.v1.DevCommandReason.Enum.
+ */
+export declare const DevCommandReason_EnumSchema: GenEnum<DevCommandReason_Enum>;
+
+/**
+ * DevCommandResponse is the structured output emitted by the "dev" command
+ * when running in JSON output mode.
+ *
+ * @generated from message bridge.v1.DevCommandResponse
+ */
+export declare type DevCommandResponse = Message<"bridge.v1.DevCommandResponse"> & {
+  /**
+   * The bridge name the dev command was run against.
+   *
+   * @generated from field: string bridge_name = 1 [json_name = "bridge_name"];
+   */
+  bridgeName: string;
+
+  /**
+   * PID inside the devcontainer of the dev process. Always populated once
+   * the command starts running, even if it later exits or times out.
+   *
+   * @generated from field: int32 pid = 2;
+   */
+  pid: number;
+
+  /**
+   * The exact command line that was launched (from devcontainer.json
+   * `devCommand`).
+   *
+   * @generated from field: string command = 3;
+   */
+  command: string;
+
+  /**
+   * Why the call returned. See DevCommandReason.
+   *
+   * @generated from field: bridge.v1.DevCommandReason.Enum reason = 4;
+   */
+  reason: DevCommandReason_Enum;
+
+  /**
+   * Exit code of the dev process. Only populated when reason == exited.
+   *
+   * @generated from field: optional int32 exit_code = 5 [json_name = "exit_code"];
+   */
+  exitCode?: number | undefined;
+
+  /**
+   * Absolute path inside the devcontainer to the dev process's stdout/stderr
+   * log file. Useful for debugging when the dev command exits unhealthy.
+   *
+   * @generated from field: string log_path = 6 [json_name = "log_path"];
+   */
+  logPath: string;
+};
+
+/**
+ * Describes the message bridge.v1.DevCommandResponse.
+ * Use `create(DevCommandResponseSchema)` to create a new message.
+ */
+export declare const DevCommandResponseSchema: GenMessage<DevCommandResponse>;
 

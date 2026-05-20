@@ -123,6 +123,36 @@ func ResolveConfigPath(explicit string) (string, error) {
 		"See https://containers.dev/implementors/json_reference/ to create one")
 }
 
+// DevCommand returns the value of the (non-standard) "devCommand" field from
+// the devcontainer.json. The field may be either a string (passed to sh -c) or
+// an array of strings (joined with spaces for shell evaluation). Returns
+// ("", nil) when the field is absent.
+//
+// devCommand is bridge's convention for "the long-running command that brings
+// the dev environment up" (e.g. "pnpm dev", "go run ./cmd/server"). It is the
+// command that `bridge dev` launches and probes for health.
+func (c *Config) DevCommand() (string, error) {
+	raw, ok := c.Overflow["devCommand"]
+	if !ok {
+		return "", nil
+	}
+
+	// Try string first.
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return strings.TrimSpace(s), nil
+	}
+
+	// Fall back to array of strings, joined with spaces. Matches how the
+	// devcontainer spec interprets postCreateCommand etc.
+	var arr []string
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		return strings.Join(arr, " "), nil
+	}
+
+	return "", fmt.Errorf("devCommand must be a string or array of strings, got %s", string(raw))
+}
+
 // Load reads and parses a devcontainer.json from the given path.
 // Returns an error if the file cannot be read or parsed.
 func Load(path string) (*Config, error) {

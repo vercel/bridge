@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	InterceptorService_GetStatus_FullMethodName = "/bridge.v1.InterceptorService/GetStatus"
+	InterceptorService_Probe_FullMethodName     = "/bridge.v1.InterceptorService/Probe"
 )
 
 // InterceptorServiceClient is the client API for InterceptorService service.
@@ -35,6 +36,13 @@ type InterceptorServiceClient interface {
 	// call repeatedly; the response is built from cached probe results and
 	// does not trigger fresh probe runs.
 	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error)
+	// Probe synchronously runs every configured probe (liveness, readiness,
+	// startup) against the local app once and returns the result of those
+	// single checks. Unlike GetStatus, the response is NOT subject to the
+	// success/failure thresholds — each field tells you whether that single
+	// immediate check passed. Useful as a "is the app healthy right now?"
+	// primitive that ignores any stale state from a previous dev session.
+	Probe(ctx context.Context, in *ProbeRequest, opts ...grpc.CallOption) (*ProbeResponse, error)
 }
 
 type interceptorServiceClient struct {
@@ -55,6 +63,16 @@ func (c *interceptorServiceClient) GetStatus(ctx context.Context, in *GetStatusR
 	return out, nil
 }
 
+func (c *interceptorServiceClient) Probe(ctx context.Context, in *ProbeRequest, opts ...grpc.CallOption) (*ProbeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProbeResponse)
+	err := c.cc.Invoke(ctx, InterceptorService_Probe_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InterceptorServiceServer is the server API for InterceptorService service.
 // All implementations must embed UnimplementedInterceptorServiceServer
 // for forward compatibility.
@@ -68,6 +86,13 @@ type InterceptorServiceServer interface {
 	// call repeatedly; the response is built from cached probe results and
 	// does not trigger fresh probe runs.
 	GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error)
+	// Probe synchronously runs every configured probe (liveness, readiness,
+	// startup) against the local app once and returns the result of those
+	// single checks. Unlike GetStatus, the response is NOT subject to the
+	// success/failure thresholds — each field tells you whether that single
+	// immediate check passed. Useful as a "is the app healthy right now?"
+	// primitive that ignores any stale state from a previous dev session.
+	Probe(context.Context, *ProbeRequest) (*ProbeResponse, error)
 	mustEmbedUnimplementedInterceptorServiceServer()
 }
 
@@ -80,6 +105,9 @@ type UnimplementedInterceptorServiceServer struct{}
 
 func (UnimplementedInterceptorServiceServer) GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetStatus not implemented")
+}
+func (UnimplementedInterceptorServiceServer) Probe(context.Context, *ProbeRequest) (*ProbeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Probe not implemented")
 }
 func (UnimplementedInterceptorServiceServer) mustEmbedUnimplementedInterceptorServiceServer() {}
 func (UnimplementedInterceptorServiceServer) testEmbeddedByValue()                            {}
@@ -120,6 +148,24 @@ func _InterceptorService_GetStatus_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InterceptorService_Probe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProbeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InterceptorServiceServer).Probe(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InterceptorService_Probe_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InterceptorServiceServer).Probe(ctx, req.(*ProbeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // InterceptorService_ServiceDesc is the grpc.ServiceDesc for InterceptorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -130,6 +176,10 @@ var InterceptorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetStatus",
 			Handler:    _InterceptorService_GetStatus_Handler,
+		},
+		{
+			MethodName: "Probe",
+			Handler:    _InterceptorService_Probe_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

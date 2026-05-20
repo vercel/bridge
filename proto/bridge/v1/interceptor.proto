@@ -11,6 +11,14 @@ service InterceptorService {
   // call repeatedly; the response is built from cached probe results and
   // does not trigger fresh probe runs.
   rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+
+  // Probe synchronously runs every configured probe (liveness, readiness,
+  // startup) against the local app once and returns the result of those
+  // single checks. Unlike GetStatus, the response is NOT subject to the
+  // success/failure thresholds — each field tells you whether that single
+  // immediate check passed. Useful as a "is the app healthy right now?"
+  // primitive that ignores any stale state from a previous dev session.
+  rpc Probe(ProbeRequest) returns (ProbeResponse);
 }
 
 message GetStatusRequest {}
@@ -65,4 +73,26 @@ enum ProbeHealth {
   PROBE_HEALTH_HEALTHY = 2;
   // Probe has been failing — failure_threshold consecutive failures.
   PROBE_HEALTH_UNHEALTHY = 3;
+}
+
+message ProbeRequest {}
+
+// ProbeResponse reports the outcome of a synchronous run of each
+// configured probe. Each field is unset when the corresponding probe is
+// not configured on the source deployment.
+message ProbeResponse {
+  ProbeCheckResult liveness = 1;
+  ProbeCheckResult readiness = 2;
+  ProbeCheckResult startup = 3;
+}
+
+// ProbeCheckResult is the outcome of one synchronous probe check.
+message ProbeCheckResult {
+  // True if this single check passed (HTTP 2xx/3xx, TCP open, gRPC
+  // SERVING, or Exec exit 0).
+  bool passed = 1;
+  // Error message when passed=false. Empty on success.
+  string error = 2;
+  // Unix seconds when this check completed.
+  int64 checked_at_unix_seconds = 3 [json_name = "checked_at_unix_seconds"];
 }

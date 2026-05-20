@@ -102,11 +102,21 @@ message GetCommandResponseBridge {
   // When the bridge was created (RFC 3339).
   string created_at = 5 [json_name = "created_at"];
 
-  // Current status of the bridge.
+  // Current status of the bridge in the cluster (e.g. "running", "pending").
   string status = 6;
 
   // The name of the bridge Deployment.
   string deployment_name = 7 [json_name = "deployment_name"];
+
+  // Status of the developer's local application as reported by the
+  // interceptor's probe monitors. One of:
+  //   - "stopped"      — no devcontainer is running for this bridge
+  //   - "unreachable"  — devcontainer is up but the interceptor isn't responding
+  //   - "starting"     — interceptor is still initializing, or probes are pending
+  //   - "no probes"    — source deployment didn't declare liveness/readiness/startup
+  //   - "healthy"      — every configured probe reports healthy
+  //   - "unhealthy"    — at least one configured probe reports unhealthy
+  string application_status = 8 [json_name = "application_status"];
 }
 
 // GetCommandResponse is the structured output emitted by the "get" command
@@ -120,4 +130,45 @@ message GetCommandResponse {
 message RemoveCommandResponse {
   // Names of bridges that were successfully removed.
   repeated string removed = 1;
+}
+
+// DevCommandReason describes why `bridge dev` returned.
+message DevCommandReason {
+  // buf:lint:ignore ENUM_VALUE_PREFIX
+  // buf:lint:ignore ENUM_ZERO_VALUE_SUFFIX
+  // buf:lint:ignore ENUM_VALUE_UPPER_SNAKE_CASE
+  enum Enum {
+    unspecified = 0;
+    // All configured liveness/readiness probes reported healthy.
+    healthy = 1;
+    // The dev command exited before reaching a healthy state.
+    exited = 2;
+    // --timeout elapsed before health or exit.
+    timeout = 3;
+  }
+}
+
+// DevCommandResponse is the structured output emitted by the "dev" command
+// when running in JSON output mode.
+message DevCommandResponse {
+  // The bridge name the dev command was run against.
+  string bridge_name = 1 [json_name = "bridge_name"];
+
+  // PID inside the devcontainer of the dev process. Always populated once
+  // the command starts running, even if it later exits or times out.
+  int32 pid = 2;
+
+  // The exact command line that was launched (from devcontainer.json
+  // `devCommand`).
+  string command = 3;
+
+  // Why the call returned. See DevCommandReason.
+  DevCommandReason.Enum reason = 4;
+
+  // Exit code of the dev process. Only populated when reason == exited.
+  optional int32 exit_code = 5 [json_name = "exit_code"];
+
+  // Absolute path inside the devcontainer to the dev process's stdout/stderr
+  // log file. Useful for debugging when the dev command exits unhealthy.
+  string log_path = 6 [json_name = "log_path"];
 }

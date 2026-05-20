@@ -124,6 +124,83 @@ export declare type ProbeStatus = Message<"bridge.v1.ProbeStatus"> & {
 export declare const ProbeStatusSchema: GenMessage<ProbeStatus>;
 
 /**
+ * @generated from message bridge.v1.ProbeRequest
+ */
+export declare type ProbeRequest = Message<"bridge.v1.ProbeRequest"> & {
+};
+
+/**
+ * Describes the message bridge.v1.ProbeRequest.
+ * Use `create(ProbeRequestSchema)` to create a new message.
+ */
+export declare const ProbeRequestSchema: GenMessage<ProbeRequest>;
+
+/**
+ * ProbeResponse reports the outcome of a synchronous run of each
+ * configured probe. Each field is unset when the corresponding probe is
+ * not configured on the source deployment.
+ *
+ * @generated from message bridge.v1.ProbeResponse
+ */
+export declare type ProbeResponse = Message<"bridge.v1.ProbeResponse"> & {
+  /**
+   * @generated from field: bridge.v1.ProbeCheckResult liveness = 1;
+   */
+  liveness?: ProbeCheckResult | undefined;
+
+  /**
+   * @generated from field: bridge.v1.ProbeCheckResult readiness = 2;
+   */
+  readiness?: ProbeCheckResult | undefined;
+
+  /**
+   * @generated from field: bridge.v1.ProbeCheckResult startup = 3;
+   */
+  startup?: ProbeCheckResult | undefined;
+};
+
+/**
+ * Describes the message bridge.v1.ProbeResponse.
+ * Use `create(ProbeResponseSchema)` to create a new message.
+ */
+export declare const ProbeResponseSchema: GenMessage<ProbeResponse>;
+
+/**
+ * ProbeCheckResult is the outcome of one synchronous probe check.
+ *
+ * @generated from message bridge.v1.ProbeCheckResult
+ */
+export declare type ProbeCheckResult = Message<"bridge.v1.ProbeCheckResult"> & {
+  /**
+   * True if this single check passed (HTTP 2xx/3xx, TCP open, gRPC
+   * SERVING, or Exec exit 0).
+   *
+   * @generated from field: bool passed = 1;
+   */
+  passed: boolean;
+
+  /**
+   * Error message when passed=false. Empty on success.
+   *
+   * @generated from field: string error = 2;
+   */
+  error: string;
+
+  /**
+   * Unix seconds when this check completed.
+   *
+   * @generated from field: int64 checked_at_unix_seconds = 3 [json_name = "checked_at_unix_seconds"];
+   */
+  checkedAtUnixSeconds: bigint;
+};
+
+/**
+ * Describes the message bridge.v1.ProbeCheckResult.
+ * Use `create(ProbeCheckResultSchema)` to create a new message.
+ */
+export declare const ProbeCheckResultSchema: GenMessage<ProbeCheckResult>;
+
+/**
  * @generated from enum bridge.v1.ProbeHealth
  */
 export enum ProbeHealth {
@@ -179,6 +256,21 @@ export declare const InterceptorService: GenService<{
     methodKind: "unary";
     input: typeof GetStatusRequestSchema;
     output: typeof GetStatusResponseSchema;
+  },
+  /**
+   * Probe synchronously runs every configured probe (liveness, readiness,
+   * startup) against the local app once and returns the result of those
+   * single checks. Unlike GetStatus, the response is NOT subject to the
+   * success/failure thresholds — each field tells you whether that single
+   * immediate check passed. Useful as a "is the app healthy right now?"
+   * primitive that ignores any stale state from a previous dev session.
+   *
+   * @generated from rpc bridge.v1.InterceptorService.Probe
+   */
+  probe: {
+    methodKind: "unary";
+    input: typeof ProbeRequestSchema;
+    output: typeof ProbeResponseSchema;
   },
 }>;
 
