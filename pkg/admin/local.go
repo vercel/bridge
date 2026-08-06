@@ -183,13 +183,13 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 	if req.Force {
 		if existing, err := l.findBridge(ctx, targetNS, bridgeName, req.DeviceId); err == nil {
 			logger.Info("Tearing down existing bridge", "existing_deployment", existing.Name)
-			_ = resources.DeleteBridgeResources(ctx, l.client, targetNS, existing.Name, req.DeviceId)
+			_ = resources.DeleteBridgeResources(ctx, l.client, l.dynClient, targetNS, existing.Name, req.DeviceId)
 		}
 	}
 
 	if err := resources.Save(ctx, l.client, l.dynClient, bundle); err != nil {
 		logger.Error("Failed to save bridge resources", "deployment", deployName, "error", err)
-		_ = resources.DeleteBridgeResources(ctx, l.client, targetNS, deployName, req.DeviceId)
+		_ = resources.DeleteBridgeResources(ctx, l.client, l.dynClient, targetNS, deployName, req.DeviceId)
 		return nil, err
 	}
 
@@ -203,7 +203,7 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 	pod, err := kube.WaitForPod(ctx, l.client, targetNS, meta.DeploymentSelector(deployName), 2*time.Minute)
 	if err != nil {
 		logger.Error("Pod failed to become ready", "deployment", deployName, "error", err)
-		_ = resources.DeleteBridgeResources(ctx, l.client, targetNS, deployName, req.DeviceId)
+		_ = resources.DeleteBridgeResources(ctx, l.client, l.dynClient, targetNS, deployName, req.DeviceId)
 		return nil, fmt.Errorf("failed waiting for pod: %w", err)
 	}
 
@@ -293,7 +293,7 @@ func (l *adminService) DeleteBridge(ctx context.Context, req *bridgev1.DeleteBri
 
 	slog.Info("Deleting bridge", "device_id", req.DeviceId, "namespace", ns, "deployment", deploy.Name)
 
-	if err := resources.DeleteBridgeResources(ctx, l.client, ns, deploy.Name, req.DeviceId); err != nil {
+	if err := resources.DeleteBridgeResources(ctx, l.client, l.dynClient, ns, deploy.Name, req.DeviceId); err != nil {
 		slog.Error("Failed to delete bridge", "device_id", req.DeviceId, "namespace", ns, "name", req.Name, "error", err)
 		return nil, err
 	}

@@ -18,6 +18,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -666,7 +667,16 @@ func ListBridgeResources(ctx context.Context, client kubernetes.Interface, names
 
 // DeleteBridgeResources deletes all resources associated with a bridge
 // in the given namespace, identified by the deployment name and device ID labels.
-func DeleteBridgeResources(ctx context.Context, client kubernetes.Interface, namespace, deployName, deviceID string) error {
+//
+// The typed kinds below are deleted directly. Everything else Save may have
+// created — it accepts any kind via the dynamic client — is swept by
+// deleteDynamicBridgeResources, which discovers the kinds rather than
+// hardcoding them. Without that sweep, any resource in the source manifests
+// that is not one of the typed kinds (HorizontalPodAutoscaler and
+// PodDisruptionBudget in practice) is created on every bridge and never
+// removed. dynClient may be nil, in which case only the typed kinds are
+// deleted.
+func DeleteBridgeResources(ctx context.Context, client kubernetes.Interface, dynClient dynamic.Interface, namespace, deployName, deviceID string) error {
 	sel := meta.LabelBridgeDeployment + "=" + deployName + "," + meta.LabelDeviceID + "=" + deviceID
 	listOpts := metav1.ListOptions{LabelSelector: sel}
 	delOpts := metav1.DeleteOptions{}
@@ -696,5 +706,125 @@ func DeleteBridgeResources(ctx context.Context, client kubernetes.Interface, nam
 		slog.Warn("Failed to delete service accounts", "deployment", deployName, "error", err)
 	}
 
+	deleteDynamicBridgeResources(ctx, client.Discovery(), dynClient, namespace, deployName, sel)
+
 	return nil
+}
+
+// namespacedResourceDiscoverer reports the namespaced resource kinds the server
+// supports. kubernetes.Interface's discovery client satisfies it directly.
+// It exists as an interface because client-go's FakeDiscovery hardcodes
+// ServerPreferredNamespacedResources to (nil, nil), so a test using the fake
+// clientset would skip the sweep entirely and pass without asserting anything.
+type namespacedResourceDiscoverer interface {
+	ServerPreferredNamespacedResources() ([]*metav1.APIResourceList, error)
+}
+
+// typedDeleteKinds are the lowercase plural resource names already deleted
+// above through the typed client. The dynamic sweep skips them.
+var typedDeleteKinds = map[string]bool{
+	"deployments": true, "services": true, "secrets": true,
+	"configmaps": true, "serviceaccounts": true,
+}
+
+// garbageCollectedKinds carry the bridge labels (pods inherit them from the
+// deployment's pod template, endpoints from the service) but are removed by
+// the API server's garbage collector once their owner is gone. Deleting them
+// explicitly is redundant API churn, so the sweep skips them.
+var garbageCollectedKinds = map[string]bool{
+	"pods": true, "replicasets": true, "controllerrevisions": true,
+	"endpoints": true, "endpointslices": true, "events": true,
+}
+
+// deleteDynamicBridgeResources removes every remaining namespaced resource
+// carrying the bridge selector, whatever its kind. The kind list comes from
+// server discovery rather than a hardcoded set, so a new kind appearing in a
+// source manifest is cleaned up without a code change here — matching Save,
+// which creates any kind via the dynamic client.
+//
+// Failures are logged and never abort the sweep: cleanup runs on error paths
+// where a partial delete is better than none, and the caller's credentials may
+// legitimately lack access to some kinds.
+func deleteDynamicBridgeResources(ctx context.Context, disco namespacedResourceDiscoverer, dynClient dynamic.Interface, namespace, deployName, sel string) {
+	if dynClient == nil || disco == nil {
+		return
+	}
+
+	// Partial discovery failure is common (an unavailable aggregated API
+	// server fails its own group only); use whatever groups did resolve.
+	lists, err := disco.ServerPreferredNamespacedResources()
+	if err != nil {
+		if len(lists) == 0 {
+			slog.Warn("Skipping dynamic bridge cleanup: resource discovery failed", "deployment", deployName, "error", err)
+			return
+		}
+		slog.Debug("Partial resource discovery during bridge cleanup", "deployment", deployName, "error", err)
+	}
+
+	listOpts := metav1.ListOptions{LabelSelector: sel}
+	delOpts := metav1.DeleteOptions{}
+
+	for _, list := range lists {
+		if list == nil {
+			continue
+		}
+		gv, err := schema.ParseGroupVersion(list.GroupVersion)
+		if err != nil {
+			continue
+		}
+		for _, r := range list.APIResources {
+			// Subresources (e.g. "deployments/scale") are not deletable.
+			if strings.Contains(r.Name, "/") {
+				continue
+			}
+			if typedDeleteKinds[r.Name] || garbageCollectedKinds[r.Name] {
+				continue
+			}
+			if !hasVerb(r.Verbs, "list") || !hasVerb(r.Verbs, "delete") {
+				continue
+			}
+
+			ri := dynClient.Resource(gv.WithResource(r.Name)).Namespace(namespace)
+
+			// List first: DeleteCollection on a kind with nothing to delete is
+			// wasted, and listing lets us report what was actually leaked.
+			found, err := ri.List(ctx, listOpts)
+			if err != nil {
+				// Forbidden/NotFound are expected for kinds this caller cannot
+				// see; only surface anything else.
+				if !errors.IsForbidden(err) && !errors.IsNotFound(err) && !errors.IsMethodNotSupported(err) {
+					slog.Debug("Failed to list resources during bridge cleanup", "resource", r.Name, "deployment", deployName, "error", err)
+				}
+				continue
+			}
+			if len(found.Items) == 0 {
+				continue
+			}
+
+			if hasVerb(r.Verbs, "deletecollection") {
+				if err := ri.DeleteCollection(ctx, delOpts, listOpts); err != nil && !errors.IsNotFound(err) {
+					slog.Warn("Failed to delete resources during bridge cleanup", "resource", r.Name, "deployment", deployName, "error", err)
+					continue
+				}
+				slog.Debug("Deleted bridge resources", "resource", r.Name, "count", len(found.Items), "deployment", deployName)
+				continue
+			}
+
+			for i := range found.Items {
+				name := found.Items[i].GetName()
+				if err := ri.Delete(ctx, name, delOpts); err != nil && !errors.IsNotFound(err) {
+					slog.Warn("Failed to delete resource during bridge cleanup", "resource", r.Name, "name", name, "deployment", deployName, "error", err)
+				}
+			}
+		}
+	}
+}
+
+func hasVerb(verbs metav1.Verbs, want string) bool {
+	for _, v := range verbs {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }

@@ -391,7 +391,7 @@ spec:
 	// Force: tear down existing bridge before creating.
 	ctx := context.Background()
 	if _, err := client.AppsV1().Deployments("default").Get(ctx, expectedName, metav1.GetOptions{}); err == nil {
-		_ = DeleteBridgeResources(ctx, client, "default", expectedName, testDeviceID)
+		_ = DeleteBridgeResources(ctx, client, nil, "default", expectedName, testDeviceID)
 	}
 
 	deployName, _, err := testCreateFromManifests(t, client, manifests, "default")
@@ -512,7 +512,7 @@ data:
 
 	// Caller is responsible for cleanup; verify it works.
 	deployName := testDeployName(sourceName)
-	_ = DeleteBridgeResources(context.Background(), client, "default", deployName, testDeviceID)
+	_ = DeleteBridgeResources(context.Background(), client, nil, "default", deployName, testDeviceID)
 
 	var cleanedUp bool
 	for _, action := range client.Actions() {
