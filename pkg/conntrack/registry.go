@@ -8,7 +8,7 @@ import (
 
 	"github.com/vercel/bridge/pkg/ippool"
 
-	"github.com/puzpuzpuz/xsync/v3"
+	"github.com/puzpuzpuz/xsync/v4"
 )
 
 const (
@@ -32,7 +32,7 @@ type Entry struct {
 // Registry tracks mappings between allocated proxy IPs and their real destinations.
 type Registry struct {
 	pool     *ippool.Pool
-	entries  *xsync.MapOf[string, *Entry] // keyed by proxy IP string
+	entries  *xsync.Map[string, *Entry] // keyed by proxy IP string
 	stopCh   chan struct{}
 	stopOnce sync.Once
 }
@@ -42,7 +42,7 @@ type Registry struct {
 func New(pool *ippool.Pool) *Registry {
 	r := &Registry{
 		pool:    pool,
-		entries: xsync.NewMapOf[string, *Entry](),
+		entries: xsync.NewMap[string, *Entry](),
 		stopCh:  make(chan struct{}),
 	}
 	go r.cleanupLoop()
@@ -139,7 +139,8 @@ func (r *Registry) cleanupUnused() {
 
 	// Release stale entries
 	for _, ip := range toRelease {
-		slog.Debug("Releasing unused DNS allocation",
+		slog.Debug(
+			"Releasing unused DNS allocation",
 			"proxy_ip", ip,
 			"reason", "timeout without connection",
 		)

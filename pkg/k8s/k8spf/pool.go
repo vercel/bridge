@@ -3,7 +3,7 @@ package k8spf
 import (
 	"fmt"
 
-	"github.com/puzpuzpuz/xsync/v3"
+	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/vercel/bridge/pkg/k8s/portforward"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -12,12 +12,12 @@ import (
 // dialerPool caches SPDY portforward.Dialer instances by target key so
 // multiple gRPC streams to the same pod share one SPDY connection.
 type dialerPool struct {
-	dialers *xsync.MapOf[string, *portforward.Dialer] // key: "pod.namespace:port"
+	dialers *xsync.Map[string, *portforward.Dialer] // key: "pod.namespace:port"
 }
 
 func newDialerPool() *dialerPool {
 	return &dialerPool{
-		dialers: xsync.NewMapOf[string, *portforward.Dialer](),
+		dialers: xsync.NewMap[string, *portforward.Dialer](),
 	}
 }
 

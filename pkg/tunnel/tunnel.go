@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/puzpuzpuz/xsync/v3"
+	"github.com/puzpuzpuz/xsync/v4"
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"github.com/vercel/bridge/pkg/mitm"
 	"github.com/vercel/bridge/pkg/plumbing"
@@ -53,7 +53,7 @@ func New(dialer plumbing.ContextDialer, stream Stream, opts ...Option) Tunnel {
 		dialer: dialer,
 		stream: stream,
 		sendCh: make(chan *bridgev1.TunnelNetworkMessage, 64),
-		conns:  xsync.NewMapOf[string, net.Conn](),
+		conns:  xsync.NewMap[string, net.Conn](),
 		done:   make(chan struct{}),
 	}
 	for _, o := range opts {
@@ -67,7 +67,7 @@ type tunnelImpl struct {
 	hijacker  mitm.Hijacker
 	stream    Stream
 	sendCh    chan *bridgev1.TunnelNetworkMessage
-	conns     *xsync.MapOf[string, net.Conn]
+	conns     *xsync.Map[string, net.Conn]
 	done      chan struct{}
 	ctx       context.Context
 	cancel    context.CancelFunc

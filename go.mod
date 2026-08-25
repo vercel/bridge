@@ -13,7 +13,7 @@ require (
 	github.com/hanwen/go-fuse/v2 v2.10.1
 	github.com/miekg/dns v1.1.72
 	github.com/prometheus/client_golang v1.23.2
-	github.com/puzpuzpuz/xsync/v3 v3.5.1
+	github.com/puzpuzpuz/xsync/v4 v4.5.0
 	github.com/segmentio/ksuid v1.0.4
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.40.0
