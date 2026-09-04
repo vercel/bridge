@@ -27,6 +27,26 @@ const readChunkSize = 1 << 20 // 1 MiB
 // long enough to avoid an RPC per stat from tools like `ls -la`.
 const cacheTTL = 5 * time.Second
 
+// rpcTimeout bounds a single RPC to the pod. It is the only thing that can end
+// one now that rpcContext drops the request's interrupt, so it has to cover a
+// full readChunkSize over a slow tunnel and still return to a caller whose pod
+// has died.
+const rpcTimeout = 60 * time.Second
+
+// rpcContext derives the context for one RPC to the pod from a FUSE request
+// context, dropping the request's interrupt. go-fuse cancels ctx when the
+// kernel sends FUSE_INTERRUPT, and the kernel sends it for any signal landing
+// on the caller mid-request, not just fatal ones: a profiler's SIGPROF arrives
+// every ~10ms, faster than a round-trip to the cluster completes. Honouring
+// the interrupt therefore never lets such a request finish. Either the RPC
+// aborts and the syscall fails, or, if we answer EINTR, the caller retries and
+// is interrupted again forever. Ignoring it only delays signal delivery by one
+// round-trip. Fatal signals are unaffected: the kernel abandons the request on
+// its side without waiting for our answer.
+func rpcContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), rpcTimeout)
+}
+
 // Mount mounts the FUSE filesystem at mountpoint, fronting the given remote
 // root path on the bridge server. The mountpoint directory must exist and be
 // empty. Mount blocks until the returned server is unmounted; callers should
@@ -97,6 +117,8 @@ var (
 
 // Getattr fetches attributes for the current node.
 func (n *node) Getattr(ctx context.Context, _ fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	ctx, cancel := rpcContext(ctx)
+	defer cancel()
 	resp, err := n.client.Stat(ctx, &bridgev1.StatRequest{Path: n.remotePath})
 	if err != nil {
 		return errnoFromGRPC(err)
@@ -114,6 +136,8 @@ func (n *node) Setattr(ctx context.Context, _ fs.FileHandle, _ *fuse.SetAttrIn, 
 
 // Lookup resolves a child name within this directory.
 func (n *node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	ctx, cancel := rpcContext(ctx)
+	defer cancel()
 	childPath := path.Join(n.remotePath, name)
 	resp, err := n.client.Stat(ctx, &bridgev1.StatRequest{Path: childPath})
 	if err != nil {
@@ -131,6 +155,8 @@ func (n *node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs
 
 // Readdir streams the directory entries.
 func (n *node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	ctx, cancel := rpcContext(ctx)
+	defer cancel()
 	resp, err := n.client.ReadDir(ctx, &bridgev1.ReadDirRequest{Path: n.remotePath})
 	if err != nil {
 		return nil, errnoFromGRPC(err)
@@ -168,6 +194,8 @@ func (n *node) Read(ctx context.Context, _ fs.FileHandle, dest []byte, off int64
 		want = readChunkSize
 	}
 
+	ctx, cancel := rpcContext(ctx)
+	defer cancel()
 	resp, err := n.client.ReadFile(ctx, &bridgev1.ReadFileRequest{
 		Path:   n.remotePath,
 		Offset: off,
@@ -181,6 +209,8 @@ func (n *node) Read(ctx context.Context, _ fs.FileHandle, dest []byte, off int64
 
 // Readlink resolves a symlink target.
 func (n *node) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
+	ctx, cancel := rpcContext(ctx)
+	defer cancel()
 	resp, err := n.client.ReadLink(ctx, &bridgev1.ReadLinkRequest{Path: n.remotePath})
 	if err != nil {
 		return nil, errnoFromGRPC(err)
@@ -233,6 +263,14 @@ func errnoFromGRPC(err error) syscall.Errno {
 		return syscall.EIO
 	}
 	switch st.Code() {
+	case codes.Canceled:
+		// The kernel sends FUSE_INTERRUPT when a signal lands on the calling
+		// process mid-request; go-fuse cancels the handler ctx, and grpc-go
+		// reports the aborted RPC as a Canceled *status*, not as a bare
+		// context.Canceled, so it never reaches the branch above. EINTR is what
+		// POSIX expects for an interrupted call and what libc/libuv/Python
+		// retry on; EIO reads as a broken file and is fatal to the caller.
+		return syscall.EINTR
 	case codes.NotFound:
 		return syscall.ENOENT
 	case codes.PermissionDenied:
