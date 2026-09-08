@@ -53,7 +53,7 @@ func New(dialer plumbing.ContextDialer, stream Stream, opts ...Option) Tunnel {
 		dialer: dialer,
 		stream: stream,
 		sendCh: make(chan *bridgev1.TunnelNetworkMessage, 64),
-		conns:  xsync.NewMapOf[string, net.Conn](),
+		conns:  xsync.NewMapOf[string, io.ReadWriteCloser](),
 		done:   make(chan struct{}),
 	}
 	for _, o := range opts {
@@ -67,7 +67,7 @@ type tunnelImpl struct {
 	hijacker  mitm.Hijacker
 	stream    Stream
 	sendCh    chan *bridgev1.TunnelNetworkMessage
-	conns     *xsync.MapOf[string, net.Conn]
+	conns     *xsync.MapOf[string, io.ReadWriteCloser]
 	done      chan struct{}
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -99,8 +99,8 @@ func (t *tunnelImpl) AddConn(conn net.Conn, destOverride string, hostname string
 	go t.readFromConn(conn, connID, src, dst, hostname)
 }
 
-// readFromConn reads from a net.Conn and forwards data to the stream via sendCh.
-func (t *tunnelImpl) readFromConn(conn net.Conn, connID string, src, dst *bridgev1.TunnelAddress, hostname string) {
+// readFromConn reads from a connection and forwards data to the stream via sendCh.
+func (t *tunnelImpl) readFromConn(conn io.ReadCloser, connID string, src, dst *bridgev1.TunnelAddress, hostname string) {
 	defer func() {
 		conn.Close()
 		t.conns.Delete(connID)
@@ -200,8 +200,8 @@ func (t *tunnelImpl) Start(ctx context.Context) {
 					continue
 				}
 
-				// Unknown connection ID → dial via the configured dialer.
-				go t.handleNewConn(msg)
+				// Unknown connection ID → this message opens it.
+				t.openConn(msg)
 
 			case err := <-recvErr:
 				if err != io.EOF {
@@ -218,15 +218,31 @@ func (t *tunnelImpl) Start(ctx context.Context) {
 	}()
 }
 
-func (t *tunnelImpl) handleNewConn(msg *bridgev1.TunnelNetworkMessage) {
-	dest := msg.GetDest()
-	if dest == nil {
-		slog.Info("Tunnel: ignoring message with no dest", "conn_id", msg.GetConnectionId())
+// openConn registers a pending connection for msg's ID before dialing. The
+// peer has no explicit open message: the first chunk of a connection is what
+// opens it, and the next chunks can arrive before the dial completes. Storing
+// the placeholder synchronously on the recv pump makes those chunks queue
+// behind the first one instead of each dialing a second connection under the
+// same ID and splitting the stream between them.
+func (t *tunnelImpl) openConn(msg *bridgev1.TunnelNetworkMessage) {
+	connID := msg.GetConnectionId()
+	if msg.GetDest() == nil {
+		slog.Info("Tunnel: ignoring message with no dest", "conn_id", connID)
 		return
 	}
 
+	pending := &pendingConn{}
+	t.conns.Store(connID, pending)
+	if data := msg.GetData(); len(data) > 0 {
+		_, _ = pending.Write(data)
+	}
+	go t.dialPending(msg, pending)
+}
+
+func (t *tunnelImpl) dialPending(msg *bridgev1.TunnelNetworkMessage, pending *pendingConn) {
 	connID := msg.GetConnectionId()
 	hostname := msg.GetHostname()
+	dest := msg.GetDest()
 
 	// Resolve the connection: hijacker gets first shot, then fall through to the dialer.
 	var conn net.Conn
@@ -246,6 +262,8 @@ func (t *tunnelImpl) handleNewConn(msg *bridgev1.TunnelNetworkMessage) {
 
 	if err != nil {
 		slog.Info("Tunnel: connect failed", "conn_id", connID, "hostname", hostname, "error", err)
+		t.deletePending(connID, pending)
+		pending.Close()
 		select {
 		case t.sendCh <- &bridgev1.TunnelNetworkMessage{
 			ConnectionId: connID,
@@ -256,20 +274,29 @@ func (t *tunnelImpl) handleNewConn(msg *bridgev1.TunnelNetworkMessage) {
 		return
 	}
 
-	t.conns.Store(connID, conn)
-	go t.readFromConn(conn, connID, msg.GetDest(), msg.GetSource(), hostname)
-
-	if data := msg.GetData(); len(data) > 0 {
-		if _, err := conn.Write(data); err != nil {
-			slog.Debug("Failed to write initial data", "connection_id", connID, "error", err)
-			conn.Close()
-			t.conns.Delete(connID)
-		}
+	if err := pending.resolve(conn); err != nil {
+		slog.Debug("Tunnel: dropping dialed connection", "connection_id", connID, "error", err)
+		t.deletePending(connID, pending)
+		return
 	}
+
+	go t.readFromConn(pending, connID, dest, msg.GetSource(), hostname)
+}
+
+// deletePending removes connID only while it still maps to pending, so a
+// connection the peer has since reopened under the same ID is left alone.
+func (t *tunnelImpl) deletePending(connID string, pending *pendingConn) {
+	t.conns.Compute(connID, func(cur io.ReadWriteCloser, loaded bool) (io.ReadWriteCloser, bool) {
+		if !loaded {
+			return nil, true
+		}
+		p, ok := cur.(*pendingConn)
+		return cur, ok && p == pending
+	})
 }
 
 func (t *tunnelImpl) closeAll() {
-	t.conns.Range(func(key string, conn net.Conn) bool {
+	t.conns.Range(func(key string, conn io.ReadWriteCloser) bool {
 		conn.Close()
 		t.conns.Delete(key)
 		return true
