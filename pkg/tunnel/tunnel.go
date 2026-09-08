@@ -11,6 +11,7 @@ import (
 
 	"github.com/puzpuzpuz/xsync/v3"
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
+	"github.com/vercel/bridge/pkg/ioutil"
 	"github.com/vercel/bridge/pkg/mitm"
 	"github.com/vercel/bridge/pkg/plumbing"
 )
@@ -53,7 +54,7 @@ func New(dialer plumbing.ContextDialer, stream Stream, opts ...Option) Tunnel {
 		dialer: dialer,
 		stream: stream,
 		sendCh: make(chan *bridgev1.TunnelNetworkMessage, 64),
-		conns:  xsync.NewMapOf[string, net.Conn](),
+		conns:  xsync.NewMapOf[string, io.ReadWriteCloser](),
 		done:   make(chan struct{}),
 	}
 	for _, o := range opts {
@@ -67,7 +68,7 @@ type tunnelImpl struct {
 	hijacker  mitm.Hijacker
 	stream    Stream
 	sendCh    chan *bridgev1.TunnelNetworkMessage
-	conns     *xsync.MapOf[string, net.Conn]
+	conns     *xsync.MapOf[string, io.ReadWriteCloser]
 	done      chan struct{}
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -99,8 +100,8 @@ func (t *tunnelImpl) AddConn(conn net.Conn, destOverride string, hostname string
 	go t.readFromConn(conn, connID, src, dst, hostname)
 }
 
-// readFromConn reads from a net.Conn and forwards data to the stream via sendCh.
-func (t *tunnelImpl) readFromConn(conn net.Conn, connID string, src, dst *bridgev1.TunnelAddress, hostname string) {
+// readFromConn reads from a connection and forwards data to the stream via sendCh.
+func (t *tunnelImpl) readFromConn(conn io.ReadCloser, connID string, src, dst *bridgev1.TunnelAddress, hostname string) {
 	defer func() {
 		conn.Close()
 		t.conns.Delete(connID)
@@ -200,8 +201,8 @@ func (t *tunnelImpl) Start(ctx context.Context) {
 					continue
 				}
 
-				// Unknown connection ID → dial via the configured dialer.
-				go t.handleNewConn(msg)
+				// Unknown connection ID → this message opens it.
+				t.openConn(msg)
 
 			case err := <-recvErr:
 				if err != io.EOF {
@@ -218,15 +219,31 @@ func (t *tunnelImpl) Start(ctx context.Context) {
 	}()
 }
 
-func (t *tunnelImpl) handleNewConn(msg *bridgev1.TunnelNetworkMessage) {
-	dest := msg.GetDest()
-	if dest == nil {
-		slog.Info("Tunnel: ignoring message with no dest", "conn_id", msg.GetConnectionId())
+// openConn registers a buffered connection for msg's ID before dialing. The
+// peer has no explicit open message: the first chunk of a connection is what
+// opens it, and the next chunks can arrive before the dial completes. Storing
+// the buffer synchronously on the recv pump makes those chunks queue behind
+// the first one instead of each dialing a second connection under the same ID
+// and splitting the stream between them.
+func (t *tunnelImpl) openConn(msg *bridgev1.TunnelNetworkMessage) {
+	connID := msg.GetConnectionId()
+	if msg.GetDest() == nil {
+		slog.Info("Tunnel: ignoring message with no dest", "conn_id", connID)
 		return
 	}
 
+	buffered := ioutil.NewBufferedReadWriteCloser()
+	t.conns.Store(connID, buffered)
+	if data := msg.GetData(); len(data) > 0 {
+		_, _ = buffered.Write(data)
+	}
+	go t.dial(msg, buffered)
+}
+
+func (t *tunnelImpl) dial(msg *bridgev1.TunnelNetworkMessage, buffered ioutil.BufferedReadWriteCloser) {
 	connID := msg.GetConnectionId()
 	hostname := msg.GetHostname()
+	dest := msg.GetDest()
 
 	// Resolve the connection: hijacker gets first shot, then fall through to the dialer.
 	var conn net.Conn
@@ -246,6 +263,8 @@ func (t *tunnelImpl) handleNewConn(msg *bridgev1.TunnelNetworkMessage) {
 
 	if err != nil {
 		slog.Info("Tunnel: connect failed", "conn_id", connID, "hostname", hostname, "error", err)
+		t.deleteIfSame(connID, buffered)
+		buffered.Close()
 		select {
 		case t.sendCh <- &bridgev1.TunnelNetworkMessage{
 			ConnectionId: connID,
@@ -256,20 +275,29 @@ func (t *tunnelImpl) handleNewConn(msg *bridgev1.TunnelNetworkMessage) {
 		return
 	}
 
-	t.conns.Store(connID, conn)
-	go t.readFromConn(conn, connID, msg.GetDest(), msg.GetSource(), hostname)
-
-	if data := msg.GetData(); len(data) > 0 {
-		if _, err := conn.Write(data); err != nil {
-			slog.Debug("Failed to write initial data", "connection_id", connID, "error", err)
-			conn.Close()
-			t.conns.Delete(connID)
-		}
+	if err := buffered.Set(conn); err != nil {
+		slog.Debug("Tunnel: dropping dialed connection", "connection_id", connID, "error", err)
+		t.deleteIfSame(connID, buffered)
+		return
 	}
+
+	go t.readFromConn(buffered, connID, dest, msg.GetSource(), hostname)
+}
+
+// deleteIfSame removes connID only while it still maps to conn, so a connection
+// the peer has since reopened under the same ID is left alone.
+func (t *tunnelImpl) deleteIfSame(connID string, conn ioutil.BufferedReadWriteCloser) {
+	t.conns.Compute(connID, func(cur io.ReadWriteCloser, loaded bool) (io.ReadWriteCloser, bool) {
+		if !loaded {
+			return nil, true
+		}
+		b, ok := cur.(ioutil.BufferedReadWriteCloser)
+		return cur, ok && b == conn
+	})
 }
 
 func (t *tunnelImpl) closeAll() {
-	t.conns.Range(func(key string, conn net.Conn) bool {
+	t.conns.Range(func(key string, conn io.ReadWriteCloser) bool {
 		conn.Close()
 		t.conns.Delete(key)
 		return true
