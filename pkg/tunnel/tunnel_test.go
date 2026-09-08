@@ -220,7 +220,7 @@ func TestPeerErrorDuringDialClosesTheDialedConnection(t *testing.T) {
 	stream.in <- dataMsg(connID, "hello")
 	waitFor(t, "first dial", func() bool { return dialer.dials.Load() == 1 })
 	stream.in <- &bridgev1.TunnelNetworkMessage{ConnectionId: connID, Error: "peer closed"}
-	waitFor(t, "the peer error to drop the pending connection", func() bool {
+	waitFor(t, "the peer error to drop the buffered connection", func() bool {
 		_, loaded := tun.(*tunnelImpl).conns.Load(connID)
 		return !loaded
 	})

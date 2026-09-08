@@ -11,6 +11,7 @@ import (
 
 	"github.com/puzpuzpuz/xsync/v3"
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
+	"github.com/vercel/bridge/pkg/ioutil"
 	"github.com/vercel/bridge/pkg/mitm"
 	"github.com/vercel/bridge/pkg/plumbing"
 )
@@ -218,12 +219,12 @@ func (t *tunnelImpl) Start(ctx context.Context) {
 	}()
 }
 
-// openConn registers a pending connection for msg's ID before dialing. The
+// openConn registers a buffered connection for msg's ID before dialing. The
 // peer has no explicit open message: the first chunk of a connection is what
 // opens it, and the next chunks can arrive before the dial completes. Storing
-// the placeholder synchronously on the recv pump makes those chunks queue
-// behind the first one instead of each dialing a second connection under the
-// same ID and splitting the stream between them.
+// the buffer synchronously on the recv pump makes those chunks queue behind
+// the first one instead of each dialing a second connection under the same ID
+// and splitting the stream between them.
 func (t *tunnelImpl) openConn(msg *bridgev1.TunnelNetworkMessage) {
 	connID := msg.GetConnectionId()
 	if msg.GetDest() == nil {
@@ -231,15 +232,15 @@ func (t *tunnelImpl) openConn(msg *bridgev1.TunnelNetworkMessage) {
 		return
 	}
 
-	pending := &pendingConn{}
-	t.conns.Store(connID, pending)
+	buffered := &ioutil.BufferedReadWriteCloser{}
+	t.conns.Store(connID, buffered)
 	if data := msg.GetData(); len(data) > 0 {
-		_, _ = pending.Write(data)
+		_, _ = buffered.Write(data)
 	}
-	go t.dialPending(msg, pending)
+	go t.dial(msg, buffered)
 }
 
-func (t *tunnelImpl) dialPending(msg *bridgev1.TunnelNetworkMessage, pending *pendingConn) {
+func (t *tunnelImpl) dial(msg *bridgev1.TunnelNetworkMessage, buffered *ioutil.BufferedReadWriteCloser) {
 	connID := msg.GetConnectionId()
 	hostname := msg.GetHostname()
 	dest := msg.GetDest()
@@ -262,8 +263,8 @@ func (t *tunnelImpl) dialPending(msg *bridgev1.TunnelNetworkMessage, pending *pe
 
 	if err != nil {
 		slog.Info("Tunnel: connect failed", "conn_id", connID, "hostname", hostname, "error", err)
-		t.deletePending(connID, pending)
-		pending.Close()
+		t.deleteIfSame(connID, buffered)
+		buffered.Close()
 		select {
 		case t.sendCh <- &bridgev1.TunnelNetworkMessage{
 			ConnectionId: connID,
@@ -274,24 +275,24 @@ func (t *tunnelImpl) dialPending(msg *bridgev1.TunnelNetworkMessage, pending *pe
 		return
 	}
 
-	if err := pending.resolve(conn); err != nil {
+	if err := buffered.Set(conn); err != nil {
 		slog.Debug("Tunnel: dropping dialed connection", "connection_id", connID, "error", err)
-		t.deletePending(connID, pending)
+		t.deleteIfSame(connID, buffered)
 		return
 	}
 
-	go t.readFromConn(pending, connID, dest, msg.GetSource(), hostname)
+	go t.readFromConn(buffered, connID, dest, msg.GetSource(), hostname)
 }
 
-// deletePending removes connID only while it still maps to pending, so a
-// connection the peer has since reopened under the same ID is left alone.
-func (t *tunnelImpl) deletePending(connID string, pending *pendingConn) {
+// deleteIfSame removes connID only while it still maps to conn, so a connection
+// the peer has since reopened under the same ID is left alone.
+func (t *tunnelImpl) deleteIfSame(connID string, conn *ioutil.BufferedReadWriteCloser) {
 	t.conns.Compute(connID, func(cur io.ReadWriteCloser, loaded bool) (io.ReadWriteCloser, bool) {
 		if !loaded {
 			return nil, true
 		}
-		p, ok := cur.(*pendingConn)
-		return cur, ok && p == pending
+		b, ok := cur.(*ioutil.BufferedReadWriteCloser)
+		return cur, ok && b == conn
 	})
 }
 
