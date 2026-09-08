@@ -232,7 +232,7 @@ func (t *tunnelImpl) openConn(msg *bridgev1.TunnelNetworkMessage) {
 		return
 	}
 
-	buffered := &ioutil.BufferedReadWriteCloser{}
+	buffered := ioutil.NewBufferedReadWriteCloser()
 	t.conns.Store(connID, buffered)
 	if data := msg.GetData(); len(data) > 0 {
 		_, _ = buffered.Write(data)
@@ -240,7 +240,7 @@ func (t *tunnelImpl) openConn(msg *bridgev1.TunnelNetworkMessage) {
 	go t.dial(msg, buffered)
 }
 
-func (t *tunnelImpl) dial(msg *bridgev1.TunnelNetworkMessage, buffered *ioutil.BufferedReadWriteCloser) {
+func (t *tunnelImpl) dial(msg *bridgev1.TunnelNetworkMessage, buffered ioutil.BufferedReadWriteCloser) {
 	connID := msg.GetConnectionId()
 	hostname := msg.GetHostname()
 	dest := msg.GetDest()
@@ -286,12 +286,12 @@ func (t *tunnelImpl) dial(msg *bridgev1.TunnelNetworkMessage, buffered *ioutil.B
 
 // deleteIfSame removes connID only while it still maps to conn, so a connection
 // the peer has since reopened under the same ID is left alone.
-func (t *tunnelImpl) deleteIfSame(connID string, conn *ioutil.BufferedReadWriteCloser) {
+func (t *tunnelImpl) deleteIfSame(connID string, conn ioutil.BufferedReadWriteCloser) {
 	t.conns.Compute(connID, func(cur io.ReadWriteCloser, loaded bool) (io.ReadWriteCloser, bool) {
 		if !loaded {
 			return nil, true
 		}
-		b, ok := cur.(*ioutil.BufferedReadWriteCloser)
+		b, ok := cur.(ioutil.BufferedReadWriteCloser)
 		return cur, ok && b == conn
 	})
 }

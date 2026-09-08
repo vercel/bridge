@@ -28,7 +28,7 @@ func (r *recordingRWC) Close() error {
 }
 
 func TestWritesBeforeSetAreFlushedInOrder(t *testing.T) {
-	var b BufferedReadWriteCloser
+	b := NewBufferedReadWriteCloser()
 	rwc := &recordingRWC{}
 
 	for _, chunk := range []string{"one ", "two ", "three"} {
@@ -65,7 +65,7 @@ func TestWritesBeforeSetAreFlushedInOrder(t *testing.T) {
 }
 
 func TestCloseBeforeSetClosesTheLateArrival(t *testing.T) {
-	var b BufferedReadWriteCloser
+	b := NewBufferedReadWriteCloser()
 	_, _ = b.Write([]byte("queued"))
 	if err := b.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -87,7 +87,7 @@ func TestCloseBeforeSetClosesTheLateArrival(t *testing.T) {
 }
 
 func TestFlushFailureClosesTheUnderlying(t *testing.T) {
-	var b BufferedReadWriteCloser
+	b := NewBufferedReadWriteCloser()
 	_, _ = b.Write([]byte("queued"))
 
 	rwc := &recordingRWC{writeErr: io.ErrShortWrite}
@@ -103,7 +103,7 @@ func TestFlushFailureClosesTheUnderlying(t *testing.T) {
 }
 
 func TestCloseAfterSetClosesTheUnderlying(t *testing.T) {
-	var b BufferedReadWriteCloser
+	b := NewBufferedReadWriteCloser()
 	rwc := &recordingRWC{}
 	if err := b.Set(rwc); err != nil {
 		t.Fatalf("Set: %v", err)

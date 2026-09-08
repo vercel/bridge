@@ -13,10 +13,23 @@ var (
 	ErrAlreadySet = errors.New("ioutil: underlying ReadWriteCloser already set")
 )
 
-// BufferedReadWriteCloser buffers writes until Set supplies the underlying
-// io.ReadWriteCloser, then flushes them in order and passes everything
-// through. The zero value is ready to use.
-type BufferedReadWriteCloser struct {
+// BufferedReadWriteCloser is an io.ReadWriteCloser that buffers writes until
+// Set supplies the underlying one, then flushes them in order and passes
+// everything through.
+type BufferedReadWriteCloser interface {
+	io.ReadWriteCloser
+
+	// Set attaches rwc and flushes the buffered writes to it. It closes rwc
+	// and returns ErrClosed if Close was already called, or the write error
+	// if the flush fails.
+	Set(rwc io.ReadWriteCloser) error
+}
+
+func NewBufferedReadWriteCloser() BufferedReadWriteCloser {
+	return &bufferedReadWriteCloser{}
+}
+
+type bufferedReadWriteCloser struct {
 	// mu guards the handoff in Set: a Write that arrives while Set is flushing
 	// the buffer must land after the flush, on the underlying rwc.
 	mu     sync.Mutex
@@ -25,12 +38,7 @@ type BufferedReadWriteCloser struct {
 	closed bool
 }
 
-var _ io.ReadWriteCloser = (*BufferedReadWriteCloser)(nil)
-
-// Set attaches rwc and flushes the buffered writes to it. It closes rwc and
-// returns ErrClosed if Close was already called, or the write error if the
-// flush fails.
-func (b *BufferedReadWriteCloser) Set(rwc io.ReadWriteCloser) error {
+func (b *bufferedReadWriteCloser) Set(rwc io.ReadWriteCloser) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
@@ -53,7 +61,7 @@ func (b *BufferedReadWriteCloser) Set(rwc io.ReadWriteCloser) error {
 	return nil
 }
 
-func (b *BufferedReadWriteCloser) Write(p []byte) (int, error) {
+func (b *bufferedReadWriteCloser) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -69,7 +77,7 @@ func (b *BufferedReadWriteCloser) Write(p []byte) (int, error) {
 	return rwc.Write(p)
 }
 
-func (b *BufferedReadWriteCloser) Read(p []byte) (int, error) {
+func (b *bufferedReadWriteCloser) Read(p []byte) (int, error) {
 	b.mu.Lock()
 	rwc, closed := b.rwc, b.closed
 	b.mu.Unlock()
@@ -82,7 +90,7 @@ func (b *BufferedReadWriteCloser) Read(p []byte) (int, error) {
 	return rwc.Read(p)
 }
 
-func (b *BufferedReadWriteCloser) Close() error {
+func (b *bufferedReadWriteCloser) Close() error {
 	b.mu.Lock()
 	rwc := b.rwc
 	b.closed = true
