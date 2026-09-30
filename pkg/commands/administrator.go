@@ -203,7 +203,8 @@ func (s *administratorServer) DeleteBridge(ctx context.Context, req *bridgev1.De
 // gRPC status error.
 func grpcError(err error) error {
 	var notFound *resources.DeploymentNotFoundError
-	if errors.As(err, &notFound) {
+	var workloadNotFound *resources.WorkloadNotFoundError
+	if errors.As(err, &notFound) || errors.As(err, &workloadNotFound) {
 		return status.Error(codes.NotFound, err.Error())
 	}
 	return status.Error(codes.Internal, err.Error())

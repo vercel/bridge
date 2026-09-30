@@ -50,11 +50,6 @@ Examples:
   # Create from a directory of Kubernetes manifests
   bridge create --source ./k8s/
 
-  # A CronJob works as a source too: the bridge runs its pod template (service
-  # account, env, volumes) without its schedule. Run the job with bridge exec.
-  bridge create my-cron-job
-  bridge exec my-cron-job -- node dist/index.js
-
   # Create then run a command with bridge exec
   bridge create my-api
   bridge exec my-api -- npm test

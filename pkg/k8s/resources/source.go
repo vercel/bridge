@@ -8,37 +8,37 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/dynamic"
 )
 
-// SourceFromNamespace fetches a source deployment from the cluster and returns
-// a Bundle containing just that deployment. Only the deployment spec is used —
-// not the live pod — so that webhook-injected env vars and volume mounts (e.g.
-// IRSA) are absent and get cleanly re-injected on the bridge pod. With no
-// Deployment of that name, a CronJob of that name is bridged as a Deployment
-// (see DeploymentFromCronJob).
-func SourceFromNamespace(ctx context.Context, client kubernetes.Interface, namespace, deployment string) (*Bundle, error) {
-	srcDeploy, err := client.AppsV1().Deployments(namespace).Get(ctx, deployment, metav1.GetOptions{})
-	if errors.IsNotFound(err) {
-		cronJob, cjErr := client.BatchV1().CronJobs(namespace).Get(ctx, deployment, metav1.GetOptions{})
-		if cjErr == nil {
-			srcDeploy, err = DeploymentFromCronJob(cronJob), nil
-		} else if !errors.IsNotFound(cjErr) {
-			return nil, fmt.Errorf("failed to get source cronjob %s/%s: %w", namespace, deployment, cjErr)
-		}
-	}
-	if err != nil {
+// SourceFromNamespace fetches the named workload from the cluster, trying each
+// of workloadKinds in order, and returns a Bundle holding it as a Deployment
+// (see DeploymentFromWorkload). Only the workload's pod template is used — not a
+// live pod — so that webhook-injected env vars and volume mounts (e.g. IRSA)
+// are absent and get cleanly re-injected on the bridge pod.
+func SourceFromNamespace(ctx context.Context, client dynamic.Interface, namespace, name string) (*Bundle, error) {
+	for _, kind := range workloadKinds {
+		obj, err := client.Resource(gvkToGVR(kind)).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 		if errors.IsNotFound(err) {
-			return nil, &DeploymentNotFoundError{Name: deployment, Namespace: namespace}
+			continue
 		}
-		return nil, fmt.Errorf("failed to get source deployment %s/%s: %w", namespace, deployment, err)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get source %s %s/%s: %w", kind.Kind, namespace, name, err)
+		}
+		deploy, err := DeploymentFromWorkload(obj)
+		if err != nil {
+			return nil, err
+		}
+		if deploy == nil {
+			return nil, fmt.Errorf("%s %s/%s has no pod template", kind.Kind, namespace, name)
+		}
+		return &Bundle{
+			Resources: []Resource{
+				{Object: deploy, GVK: appsv1.SchemeGroupVersion.WithKind("Deployment")},
+			},
+		}, nil
 	}
-
-	return &Bundle{
-		Resources: []Resource{
-			{Object: srcDeploy, GVK: appsv1.SchemeGroupVersion.WithKind("Deployment")},
-		},
-	}, nil
+	return nil, &WorkloadNotFoundError{Name: name, Namespace: namespace}
 }
 
 // SourceSimple builds a minimal Deployment with just the bridge proxy container.

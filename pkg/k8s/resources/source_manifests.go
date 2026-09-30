@@ -12,7 +12,6 @@ import (
 	"github.com/vercel/bridge/pkg/archive"
 
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -22,8 +21,8 @@ import (
 
 // SourceFromManifests unpacks a tar.gz archive of Kubernetes YAML files, parses
 // every document into typed or unstructured resources, and returns a Bundle
-// ready for the transform pipeline. Manifests with no Deployment but a CronJob
-// bridge the CronJob, as a Deployment (see DeploymentFromCronJob).
+// ready for the transform pipeline. Every workload, whatever its kind, becomes a
+// Deployment (see DeploymentFromWorkload), ordered by workloadKinds.
 func SourceFromManifests(manifests []byte) (*Bundle, error) {
 	fileMap, err := archive.Unpack(manifests)
 	if err != nil {
@@ -31,8 +30,11 @@ func SourceFromManifests(manifests []byte) (*Bundle, error) {
 	}
 
 	var resources []Resource
-	var cronJobs []*batchv1.CronJob
-	hasDeployment := false
+	type workload struct {
+		rank   int
+		deploy *appsv1.Deployment
+	}
+	var workloads []workload
 
 	decoder := scheme.Codecs.UniversalDeserializer()
 
@@ -41,6 +43,17 @@ func SourceFromManifests(manifests []byte) (*Bundle, error) {
 		for i, doc := range docs {
 			if len(bytes.TrimSpace(doc)) == 0 {
 				continue
+			}
+
+			if u, err := decodeUnstructured(doc); err == nil {
+				deploy, err := DeploymentFromWorkload(u)
+				if err != nil {
+					return nil, fmt.Errorf("%s: %w", name, err)
+				}
+				if deploy != nil {
+					workloads = append(workloads, workload{rank: workloadRank(u.GroupVersionKind()), deploy: deploy})
+					continue
+				}
 			}
 
 			obj, gvk, err := decoder.Decode(doc, nil, nil)
@@ -55,12 +68,7 @@ func SourceFromManifests(manifests []byte) (*Bundle, error) {
 				continue
 			}
 
-			switch o := obj.(type) {
-			case *appsv1.Deployment:
-				hasDeployment = true
-				resources = append(resources, Resource{Object: obj, GVK: *gvk})
-			case *batchv1.CronJob:
-				cronJobs = append(cronJobs, o)
+			switch obj.(type) {
 			case *corev1.Service, *corev1.ConfigMap, *corev1.Secret, *corev1.ServiceAccount:
 				resources = append(resources, Resource{Object: obj, GVK: *gvk})
 			default:
@@ -73,35 +81,14 @@ func SourceFromManifests(manifests []byte) (*Bundle, error) {
 		}
 	}
 
-	resources = append(resources, cronJobResources(cronJobs, hasDeployment)...)
+	slices.SortStableFunc(workloads, func(a, b workload) int { return a.rank - b.rank })
+	for _, w := range workloads {
+		resources = append(resources, Resource{Object: w.deploy, GVK: appsv1.SchemeGroupVersion.WithKind("Deployment")})
+	}
 
 	return &Bundle{
 		Resources: resources,
 	}, nil
-}
-
-// cronJobResources returns the bundle's CronJobs as resources. With no
-// Deployment to bridge, the first CronJob (by name) becomes the workload, as a
-// Deployment; the rest are kept as they are, like any other resource.
-func cronJobResources(cronJobs []*batchv1.CronJob, hasDeployment bool) []Resource {
-	slices.SortFunc(cronJobs, func(a, b *batchv1.CronJob) int {
-		return strings.Compare(a.Name, b.Name)
-	})
-	var out []Resource
-	for i, cj := range cronJobs {
-		if i == 0 && !hasDeployment {
-			if len(cronJobs) > 1 {
-				slog.Warn("Bridging the first of several CronJobs", "cronjob", cj.Name, "count", len(cronJobs))
-			}
-			out = append(out, Resource{
-				Object: DeploymentFromCronJob(cj),
-				GVK:    appsv1.SchemeGroupVersion.WithKind("Deployment"),
-			})
-			continue
-		}
-		out = append(out, Resource{Object: cj, GVK: batchv1.SchemeGroupVersion.WithKind("CronJob")})
-	}
-	return out
 }
 
 // splitYAMLDocuments splits multi-document YAML (separated by ---) into individual documents.

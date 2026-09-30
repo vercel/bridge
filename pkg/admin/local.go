@@ -117,7 +117,7 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 		bundle, err = resources.SourceFromManifests(req.SourceManifests)
 	} else if req.SourceDeployment != "" {
 		logger.Info("Creating bridge")
-		bundle, err = resources.SourceFromNamespace(ctx, l.client, targetNS, req.SourceDeployment)
+		bundle, err = resources.SourceFromNamespace(ctx, l.dynClient, targetNS, req.SourceDeployment)
 	} else {
 		logger.Info("Creating simple bridge")
 		bundle, err = resources.SourceSimple(targetNS, proxyImage)

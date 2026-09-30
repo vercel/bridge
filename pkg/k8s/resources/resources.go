@@ -32,6 +32,17 @@ const (
 	DefaultWorkloadKind = "Deployment"
 )
 
+// WorkloadNotFoundError is returned when no workload of any supported kind has
+// the source name.
+type WorkloadNotFoundError struct {
+	Name      string
+	Namespace string
+}
+
+func (e *WorkloadNotFoundError) Error() string {
+	return fmt.Sprintf("no workload found named '%s' in namespace '%s'", e.Name, e.Namespace)
+}
+
 // DeploymentNotFoundError is returned when the source deployment does not exist.
 type DeploymentNotFoundError struct {
 	Name      string
