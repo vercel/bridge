@@ -14,9 +14,19 @@ import (
 // SourceFromNamespace fetches a source deployment from the cluster and returns
 // a Bundle containing just that deployment. Only the deployment spec is used —
 // not the live pod — so that webhook-injected env vars and volume mounts (e.g.
-// IRSA) are absent and get cleanly re-injected on the bridge pod.
+// IRSA) are absent and get cleanly re-injected on the bridge pod. With no
+// Deployment of that name, a CronJob of that name is bridged as a Deployment
+// (see DeploymentFromCronJob).
 func SourceFromNamespace(ctx context.Context, client kubernetes.Interface, namespace, deployment string) (*Bundle, error) {
 	srcDeploy, err := client.AppsV1().Deployments(namespace).Get(ctx, deployment, metav1.GetOptions{})
+	if errors.IsNotFound(err) {
+		cronJob, cjErr := client.BatchV1().CronJobs(namespace).Get(ctx, deployment, metav1.GetOptions{})
+		if cjErr == nil {
+			srcDeploy, err = DeploymentFromCronJob(cronJob), nil
+		} else if !errors.IsNotFound(cjErr) {
+			return nil, fmt.Errorf("failed to get source cronjob %s/%s: %w", namespace, deployment, cjErr)
+		}
+	}
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return nil, &DeploymentNotFoundError{Name: deployment, Namespace: namespace}
