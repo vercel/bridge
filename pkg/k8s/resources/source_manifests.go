@@ -46,12 +46,12 @@ func SourceFromManifests(manifests []byte) (*Bundle, error) {
 			}
 
 			if u, err := decodeUnstructured(doc); err == nil {
-				deploy, err := DeploymentFromWorkload(u)
-				if err != nil {
-					return nil, fmt.Errorf("%s: %w", name, err)
-				}
-				if deploy != nil {
-					workloads = append(workloads, workload{rank: workloadRank(u.GroupVersionKind()), deploy: deploy})
+				if i := workloadKindIndex(u.GroupVersionKind()); i >= 0 {
+					deploy, err := DeploymentFromWorkload(workloadKinds[i], u)
+					if err != nil {
+						return nil, fmt.Errorf("%s: %w", name, err)
+					}
+					workloads = append(workloads, workload{rank: i, deploy: deploy})
 					continue
 				}
 			}

@@ -54,11 +54,12 @@ func workloadYAML(apiVersion, kind string) string {
 
 func TestDeploymentFromWorkload_EveryKind(t *testing.T) {
 	for _, kind := range workloadKinds {
-		t.Run(kind.Kind, func(t *testing.T) {
-			obj, err := decodeUnstructured([]byte(workloadYAML(kind.GroupVersion().String(), kind.Kind)))
+		gvk := kind.GVK()
+		t.Run(gvk.Kind, func(t *testing.T) {
+			obj, err := decodeUnstructured([]byte(workloadYAML(gvk.GroupVersion().String(), gvk.Kind)))
 			require.NoError(t, err)
 
-			deploy, err := DeploymentFromWorkload(obj)
+			deploy, err := DeploymentFromWorkload(kind, obj)
 			require.NoError(t, err)
 			require.NotNil(t, deploy)
 
@@ -81,12 +82,11 @@ func TestDeploymentFromWorkload_EveryKind(t *testing.T) {
 }
 
 func TestDeploymentFromWorkload_NoPodTemplate(t *testing.T) {
-	obj, err := decodeUnstructured([]byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: config\ndata:\n  a: b\n"))
+	obj, err := decodeUnstructured([]byte("apiVersion: batch/v1\nkind: CronJob\nmetadata:\n  name: my-cron\nspec:\n  schedule: \"0 * * * *\"\n"))
 	require.NoError(t, err)
 
-	deploy, err := DeploymentFromWorkload(obj)
-	require.NoError(t, err)
-	assert.Nil(t, deploy)
+	_, err = DeploymentFromWorkload(cronJobKind{}, obj)
+	assert.ErrorContains(t, err, "no pod template at spec.jobTemplate.spec.template")
 }
 
 func TestDeploymentFromWorkload_UnlabeledTemplate(t *testing.T) {
@@ -103,7 +103,7 @@ spec:
 `))
 	require.NoError(t, err)
 
-	deploy, err := DeploymentFromWorkload(obj)
+	deploy, err := DeploymentFromWorkload(jobKind{}, obj)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"app": "my-job"}, deploy.Spec.Template.Labels)
 	assert.Equal(t, map[string]string{"app": "my-job"}, deploy.Spec.Selector.MatchLabels)
@@ -132,7 +132,8 @@ func TestCreateFromManifests_CronJob(t *testing.T) {
 
 func TestSourceFromManifests_DeploymentIsTheSource(t *testing.T) {
 	manifests := packTestManifests(t, map[string]string{
-		"cron.yaml": workloadYAML("batch/v1", "CronJob"),
+		"cron.yaml":   workloadYAML("batch/v1", "CronJob"),
+		"config.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: config\ndata:\n  a: b\n",
 		"deploy.yaml": `apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -157,12 +158,17 @@ spec:
 	assert.Equal(t, "my-app", FindDeploymentName(bundle))
 
 	var deployments []string
+	var configMaps int
 	for _, r := range bundle.Resources {
-		if d, ok := r.Object.(*appsv1.Deployment); ok {
-			deployments = append(deployments, d.Name)
+		switch o := r.Object.(type) {
+		case *appsv1.Deployment:
+			deployments = append(deployments, o.Name)
+		case *corev1.ConfigMap:
+			configMaps++
 		}
 	}
 	assert.Equal(t, []string{"my-app", "my-workload"}, deployments)
+	assert.Equal(t, 1, configMaps, "a ConfigMap is kept as a ConfigMap")
 }
 
 func TestSourceFromNamespace(t *testing.T) {

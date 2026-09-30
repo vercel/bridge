@@ -18,19 +18,16 @@ import (
 // are absent and get cleanly re-injected on the bridge pod.
 func SourceFromNamespace(ctx context.Context, client dynamic.Interface, namespace, name string) (*Bundle, error) {
 	for _, kind := range workloadKinds {
-		obj, err := client.Resource(gvkToGVR(kind)).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		obj, err := client.Resource(gvkToGVR(kind.GVK())).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 		if errors.IsNotFound(err) {
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("failed to get source %s %s/%s: %w", kind.Kind, namespace, name, err)
+			return nil, fmt.Errorf("failed to get source %s %s/%s: %w", kind.GVK().Kind, namespace, name, err)
 		}
-		deploy, err := DeploymentFromWorkload(obj)
+		deploy, err := DeploymentFromWorkload(kind, obj)
 		if err != nil {
 			return nil, err
-		}
-		if deploy == nil {
-			return nil, fmt.Errorf("%s %s/%s has no pod template", kind.Kind, namespace, name)
 		}
 		return &Bundle{
 			Resources: []Resource{
