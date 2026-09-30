@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/vercel/bridge/pkg/archive"
@@ -20,7 +21,8 @@ import (
 
 // SourceFromManifests unpacks a tar.gz archive of Kubernetes YAML files, parses
 // every document into typed or unstructured resources, and returns a Bundle
-// ready for the transform pipeline.
+// ready for the transform pipeline. Every workload, whatever its kind, becomes a
+// Deployment (see DeploymentFromWorkload), ordered by workloadKinds.
 func SourceFromManifests(manifests []byte) (*Bundle, error) {
 	fileMap, err := archive.Unpack(manifests)
 	if err != nil {
@@ -28,6 +30,11 @@ func SourceFromManifests(manifests []byte) (*Bundle, error) {
 	}
 
 	var resources []Resource
+	type workload struct {
+		rank   int
+		deploy *appsv1.Deployment
+	}
+	var workloads []workload
 
 	decoder := scheme.Codecs.UniversalDeserializer()
 
@@ -36,6 +43,17 @@ func SourceFromManifests(manifests []byte) (*Bundle, error) {
 		for i, doc := range docs {
 			if len(bytes.TrimSpace(doc)) == 0 {
 				continue
+			}
+
+			if u, err := decodeUnstructured(doc); err == nil {
+				if i := workloadKindIndex(u.GroupVersionKind()); i >= 0 {
+					deploy, err := DeploymentFromWorkload(workloadKinds[i], u)
+					if err != nil {
+						return nil, fmt.Errorf("%s: %w", name, err)
+					}
+					workloads = append(workloads, workload{rank: i, deploy: deploy})
+					continue
+				}
 			}
 
 			obj, gvk, err := decoder.Decode(doc, nil, nil)
@@ -51,8 +69,6 @@ func SourceFromManifests(manifests []byte) (*Bundle, error) {
 			}
 
 			switch obj.(type) {
-			case *appsv1.Deployment:
-				resources = append(resources, Resource{Object: obj, GVK: *gvk})
 			case *corev1.Service, *corev1.ConfigMap, *corev1.Secret, *corev1.ServiceAccount:
 				resources = append(resources, Resource{Object: obj, GVK: *gvk})
 			default:
@@ -63,6 +79,11 @@ func SourceFromManifests(manifests []byte) (*Bundle, error) {
 				}
 			}
 		}
+	}
+
+	slices.SortStableFunc(workloads, func(a, b workload) int { return a.rank - b.rank })
+	for _, w := range workloads {
+		resources = append(resources, Resource{Object: w.deploy, GVK: appsv1.SchemeGroupVersion.WithKind("Deployment")})
 	}
 
 	return &Bundle{
