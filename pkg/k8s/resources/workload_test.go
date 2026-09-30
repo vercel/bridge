@@ -85,7 +85,7 @@ func TestDeploymentFromWorkload_NoPodTemplate(t *testing.T) {
 	obj, err := decodeUnstructured([]byte("apiVersion: batch/v1\nkind: CronJob\nmetadata:\n  name: my-cron\nspec:\n  schedule: \"0 * * * *\"\n"))
 	require.NoError(t, err)
 
-	_, err = DeploymentFromWorkload(cronJobKind{}, obj)
+	_, err = DeploymentFromWorkload(&cronJobKind{}, obj)
 	assert.ErrorContains(t, err, "no pod template at spec.jobTemplate.spec.template")
 }
 
@@ -103,7 +103,7 @@ spec:
 `))
 	require.NoError(t, err)
 
-	deploy, err := DeploymentFromWorkload(jobKind{}, obj)
+	deploy, err := DeploymentFromWorkload(&jobKind{}, obj)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"app": "my-job"}, deploy.Spec.Template.Labels)
 	assert.Equal(t, map[string]string{"app": "my-job"}, deploy.Spec.Selector.MatchLabels)

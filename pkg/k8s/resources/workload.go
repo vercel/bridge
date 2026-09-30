@@ -24,57 +24,57 @@ type WorkloadKind interface {
 
 type deploymentKind struct{}
 
-func (deploymentKind) GVK() schema.GroupVersionKind {
+func (*deploymentKind) GVK() schema.GroupVersionKind {
 	return appsv1.SchemeGroupVersion.WithKind("Deployment")
 }
-func (deploymentKind) PodTemplatePath() []string { return []string{"spec", "template"} }
+func (*deploymentKind) PodTemplatePath() []string { return []string{"spec", "template"} }
 
 type statefulSetKind struct{}
 
-func (statefulSetKind) GVK() schema.GroupVersionKind {
+func (*statefulSetKind) GVK() schema.GroupVersionKind {
 	return appsv1.SchemeGroupVersion.WithKind("StatefulSet")
 }
-func (statefulSetKind) PodTemplatePath() []string { return []string{"spec", "template"} }
+func (*statefulSetKind) PodTemplatePath() []string { return []string{"spec", "template"} }
 
 type daemonSetKind struct{}
 
-func (daemonSetKind) GVK() schema.GroupVersionKind {
+func (*daemonSetKind) GVK() schema.GroupVersionKind {
 	return appsv1.SchemeGroupVersion.WithKind("DaemonSet")
 }
-func (daemonSetKind) PodTemplatePath() []string { return []string{"spec", "template"} }
+func (*daemonSetKind) PodTemplatePath() []string { return []string{"spec", "template"} }
 
 type replicaSetKind struct{}
 
-func (replicaSetKind) GVK() schema.GroupVersionKind {
+func (*replicaSetKind) GVK() schema.GroupVersionKind {
 	return appsv1.SchemeGroupVersion.WithKind("ReplicaSet")
 }
-func (replicaSetKind) PodTemplatePath() []string { return []string{"spec", "template"} }
+func (*replicaSetKind) PodTemplatePath() []string { return []string{"spec", "template"} }
 
 type jobKind struct{}
 
-func (jobKind) GVK() schema.GroupVersionKind {
+func (*jobKind) GVK() schema.GroupVersionKind {
 	return batchv1.SchemeGroupVersion.WithKind("Job")
 }
-func (jobKind) PodTemplatePath() []string { return []string{"spec", "template"} }
+func (*jobKind) PodTemplatePath() []string { return []string{"spec", "template"} }
 
 type cronJobKind struct{}
 
-func (cronJobKind) GVK() schema.GroupVersionKind {
+func (*cronJobKind) GVK() schema.GroupVersionKind {
 	return batchv1.SchemeGroupVersion.WithKind("CronJob")
 }
-func (cronJobKind) PodTemplatePath() []string {
+func (*cronJobKind) PodTemplatePath() []string {
 	return []string{"spec", "jobTemplate", "spec", "template"}
 }
 
 // workloadKinds are the workload kinds a bridge can be created from, in the
 // order a name is looked up and a bundle's workloads are ordered.
 var workloadKinds = []WorkloadKind{
-	deploymentKind{},
-	statefulSetKind{},
-	daemonSetKind{},
-	replicaSetKind{},
-	jobKind{},
-	cronJobKind{},
+	&deploymentKind{},
+	&statefulSetKind{},
+	&daemonSetKind{},
+	&replicaSetKind{},
+	&jobKind{},
+	&cronJobKind{},
 }
 
 // workloadKindIndex returns gvk's position in workloadKinds, or -1 if it isn't a
