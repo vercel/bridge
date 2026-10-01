@@ -8,8 +8,37 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
+
+// scalingGroupKinds are source kinds that act on the source workload rather
+// than the bridge. An HPA's scaleTargetRef and a PDB's selector still name the
+// real Deployment and its pods after the bridge transforms, so a copy breaks
+// the real service: its HPA reports AmbiguousSelector and stops scaling, and
+// its pods, covered by more than one PDB, can't be evicted. A bridge is a
+// single pod with nothing to scale.
+var scalingGroupKinds = map[schema.GroupKind]bool{
+	{Group: "autoscaling", Kind: "HorizontalPodAutoscaler"}: true,
+	{Group: "policy", Kind: "PodDisruptionBudget"}:          true,
+	{Group: "keda.sh", Kind: "ScaledObject"}:                true,
+}
+
+// StripScalingResources returns a Transformer that drops autoscalers and
+// disruption budgets (scalingGroupKinds) from the bundle.
+func StripScalingResources() Transformer {
+	return TransformFunc(func(_ *TransformContext, b *Bundle) error {
+		kept := b.Resources[:0]
+		for _, r := range b.Resources {
+			if scalingGroupKinds[r.GVK.GroupKind()] {
+				continue
+			}
+			kept = append(kept, r)
+		}
+		b.Resources = kept
+		return nil
+	})
+}
 
 // SetNamespace returns a Transformer that sets .metadata.namespace on all resources.
 func SetNamespace(ns string) Transformer {
