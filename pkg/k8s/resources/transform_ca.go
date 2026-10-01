@@ -33,7 +33,14 @@ func InjectCA(ns string) Transformer {
 			return fmt.Errorf("generate CA: %w", err)
 		}
 
+		// One secret per bridge. Rename only suffixes the device ID, so a fixed
+		// name was shared by every bridge from a device: each create replaced the
+		// CA the others had mounted, concurrent creates raced to create it, and
+		// removing the bridge that last labeled it deleted it for all of them.
 		secretName := "bridge-ca"
+		if tc.BridgeName != "" {
+			secretName += "-" + tc.BridgeName
+		}
 
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
@@ -51,7 +58,7 @@ func InjectCA(ns string) Transformer {
 		})
 
 		// Mount the secret into the deployment. The volume references
-		// secretName "bridge-ca" which SuffixNames + RewriteRefs will update.
+		// secretName, which SuffixNames + RewriteRefs will update.
 		deploy, err := findApplicationDeployment(b, tc.SourceName)
 		if err != nil {
 			return &DeploymentNotFoundError{Name: tc.SourceName, Namespace: tc.SourceNamespace}
