@@ -194,3 +194,76 @@ func TestInjectProxyImage_OmitsMountRootsWhenNoVolumes(t *testing.T) {
 		assert.NotEqual(t, "--mount-roots", a, "should not pass --mount-roots when source has no VolumeMounts")
 	}
 }
+
+// TestStripScalingResources verifies that autoscalers and disruption budgets
+// from source manifests never reach the bridge: they would act on the source
+// workload, not the bridge.
+func TestStripScalingResources(t *testing.T) {
+	bundle, err := SourceFromManifests(packTestManifests(t, map[string]string{"manifests.yaml": `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  selector:
+    matchLabels:
+      app: app
+  template:
+    metadata:
+      labels:
+        app: app
+    spec:
+      containers:
+        - name: app
+          image: app:latest
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+spec:
+  selector:
+    app: app
+  ports:
+    - port: 80
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: app
+  minReplicas: 2
+  maxReplicas: 10
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: app-pdb
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: app
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: app
+spec:
+  scaleTargetRef:
+    name: app
+`}))
+	require.NoError(t, err)
+
+	require.Len(t, bundle.Resources, 5, "the source keeps all five")
+	require.NoError(t, StripScalingResources().Apply(&TransformContext{}, bundle))
+
+	var kinds []string
+	for _, r := range bundle.Resources {
+		kinds = append(kinds, r.GVK.Kind)
+	}
+	assert.ElementsMatch(t, []string{"Deployment", "Service"}, kinds)
+}

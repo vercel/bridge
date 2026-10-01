@@ -144,6 +144,7 @@ func (l *adminService) CreateBridge(ctx context.Context, req *bridgev1.CreateBri
 
 	// Transforms applied to all bridge deployments.
 	transforms := []resources.Transformer{
+		resources.StripScalingResources(),
 		resources.SetNamespace(targetNS),
 		resources.PruneAllMetadata(),
 		resources.StripOrphanedVolumes(),
