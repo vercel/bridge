@@ -16,6 +16,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
@@ -673,17 +674,66 @@ spec:
 	deploy, err := client.AppsV1().Deployments("default").Get(context.Background(), deployName, metav1.GetOptions{})
 	require.NoError(t, err)
 
-	// Labels referenced by fieldRef should be preserved.
-	assert.Equal(t, "v1", deploy.Labels["version"], "fieldRef-referenced label 'version' should be preserved")
-	assert.Equal(t, "us-east-1", deploy.Labels["region"], "fieldRef-referenced label 'region' should be preserved")
+	// The env vars that read labels get the labels' values inline.
+	env := deploy.Spec.Template.Spec.Containers[0].Env
+	assert.Equal(t, []corev1.EnvVar{
+		{Name: "APP_VERSION", Value: "v1"},
+		{Name: "REGION", Value: "us-east-1"},
+	}, env)
 
-	// Non-referenced source labels should be stripped.
-	assert.Empty(t, deploy.Labels["app"], "non-referenced label 'app' should be stripped")
+	// So no source label is kept, on the deployment or its pods.
+	for _, key := range []string{"app", "version", "region"} {
+		assert.Empty(t, deploy.Labels[key], "source label %q should be stripped", key)
+		assert.Empty(t, deploy.Spec.Template.Labels[key], "source pod label %q should be stripped", key)
+	}
+}
 
-	// Pod template labels should also preserve fieldRef-referenced labels.
-	podLabels := deploy.Spec.Template.Labels
-	assert.Equal(t, "v1", podLabels["version"])
-	assert.Equal(t, "us-east-1", podLabels["region"])
+// A Service that selects on a label its pods also read through the downward API,
+// as vercel/api's select on app.kubernetes.io/name and read SERVICE_NAME from
+// it, must not select the bridge pod.
+func TestStripUnreferencedLabels_ServiceDoesNotSelectBridge(t *testing.T) {
+	manifests := packTestManifests(t, map[string]string{
+		"deploy.yaml": `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  labels:
+    app.kubernetes.io/name: my-app
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: my-app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: my-app
+    spec:
+      containers:
+      - name: app
+        image: my-app:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: SERVICE_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.labels['app.kubernetes.io/name']
+`,
+	})
+
+	client := k8stesting.NewSimpleClientset()
+	deployName, _, err := testCreateFromManifests(t, client, manifests, "default")
+	require.NoError(t, err)
+
+	deploy, err := client.AppsV1().Deployments("default").Get(context.Background(), deployName, metav1.GetOptions{})
+	require.NoError(t, err)
+
+	selector := labels.SelectorFromSet(labels.Set{"app.kubernetes.io/name": "my-app"})
+	assert.False(t, selector.Matches(labels.Set(deploy.Spec.Template.Labels)),
+		"the real Service's selector matches the bridge pod: %v", deploy.Spec.Template.Labels)
+	assert.Contains(t, deploy.Spec.Template.Spec.Containers[0].Env,
+		corev1.EnvVar{Name: "SERVICE_NAME", Value: "my-app"})
 }
 
 func TestStripUnreferencedLabels_InitContainerFieldRef(t *testing.T) {
@@ -728,10 +778,12 @@ spec:
 	deploy, err := client.AppsV1().Deployments("default").Get(context.Background(), deployName, metav1.GetOptions{})
 	require.NoError(t, err)
 
-	// Label referenced by initContainer fieldRef should be preserved.
-	assert.Equal(t, "backend", deploy.Labels["tier"], "fieldRef label from initContainer should be preserved")
+	// The initContainer's env var gets the label's value inline.
+	assert.Equal(t, []corev1.EnvVar{{Name: "TIER", Value: "backend"}},
+		deploy.Spec.Template.Spec.InitContainers[0].Env)
 
-	// Non-referenced label should be stripped.
+	// So neither label is kept.
+	assert.Empty(t, deploy.Labels["tier"])
 	assert.Empty(t, deploy.Labels["app"])
 }
 
