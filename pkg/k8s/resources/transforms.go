@@ -127,11 +127,13 @@ func filterMounts(mounts []corev1.VolumeMount, validVolumes map[string]bool) []c
 }
 
 // StripUnreferencedLabels returns a Transformer that removes all labels from
-// Deployments (both object metadata and pod template metadata) except those
-// referenced by fieldRef expressions in the pod spec (e.g. downward API env
-// vars like metadata.labels['key']). This prevents existing Services from
-// selecting bridge pods via inherited source labels while preserving labels
-// required by the pod's runtime configuration.
+// Deployments (both object metadata and pod template metadata). This prevents
+// existing Services from selecting bridge pods via inherited source labels.
+// Downward API env vars that read a pod label (metadata.labels['key']) first
+// get that label's value inline, so the pod's runtime configuration is
+// unchanged. Keeping such a label instead would let a Service that selects on
+// it, as one that selects on app.kubernetes.io/name while its pods read their
+// name from that label, route the real service's traffic to the bridge.
 // Runs before InjectLabels — operates on original source labels.
 func StripUnreferencedLabels() Transformer {
 	return TransformFunc(func(_ *TransformContext, b *Bundle) error {
@@ -140,12 +142,35 @@ func StripUnreferencedLabels() Transformer {
 			if !ok {
 				continue
 			}
+			inlineLabelFieldRefs(&deploy.Spec.Template)
 			referenced := collectFieldRefLabels(&deploy.Spec.Template.Spec)
 			deploy.Labels = keepOnly(deploy.Labels, referenced)
 			deploy.Spec.Template.Labels = keepOnly(deploy.Spec.Template.Labels, referenced)
 		}
 		return nil
 	})
+}
+
+// inlineLabelFieldRefs replaces each env var that reads a pod label through
+// the downward API with that label's value, as the downward API would resolve
+// it: an absent label is the empty string.
+func inlineLabelFieldRefs(template *corev1.PodTemplateSpec) {
+	inline := func(containers []corev1.Container) {
+		for i := range containers {
+			for j := range containers[i].Env {
+				env := &containers[i].Env[j]
+				if env.ValueFrom == nil || env.ValueFrom.FieldRef == nil {
+					continue
+				}
+				if key, ok := parseLabelFieldPath(env.ValueFrom.FieldRef.FieldPath); ok {
+					env.Value = template.Labels[key]
+					env.ValueFrom = nil
+				}
+			}
+		}
+	}
+	inline(template.Spec.InitContainers)
+	inline(template.Spec.Containers)
 }
 
 // collectFieldRefLabels scans all containers in a pod spec for env vars that
