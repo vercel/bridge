@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -101,12 +100,12 @@ type Backend struct {
 	creds    credentials.TransportCredentials
 
 	// Set by Run, before any stream.
-	rpc     devtunnel.TunnelServiceClient
-	deliver func(tunnel.Frame)
-	ctx     context.Context
+	rpc    devtunnel.TunnelServiceClient
+	accept func(net.Conn, *tunnel.ConnInfo)
+	ctx    context.Context
 
-	// Each open conn's stream, by the tunnel's id for it.
-	routes *xsync.MapOf[string, route]
+	// Each open conn, by an id unique across streams.
+	conns *xsync.MapOf[string, *relayStream]
 
 	mu       sync.Mutex
 	token    string
@@ -127,23 +126,6 @@ type Backend struct {
 	bytesSent, bytesReceived                             atomic.Int64
 	nextEgress, nextStream                               atomic.Uint64
 }
-
-// route is where one of the tunnel's conns lives on the relay's protocol.
-type route struct {
-	s *stream
-	// The conn's id on s.
-	wire uint64
-	dir  direction
-}
-
-type direction int
-
-const (
-	// From the deployment to the app.
-	ingress direction = iota
-	// From the app out through the deployment.
-	egress
-)
 
 var _ tunnel.Backend = (*Backend)(nil)
 
@@ -174,7 +156,7 @@ func New(cfg Config) (*Backend, error) {
 		instance: instance,
 		target:   target,
 		creds:    creds,
-		routes:   xsync.NewMapOf[string, route](),
+		conns:    xsync.NewMapOf[string, *relayStream](),
 		token:    cfg.Token,
 		tokenSet: make(chan struct{}),
 		liveCh:   make(chan struct{}),
@@ -217,7 +199,7 @@ func relayTarget(relayURL string) (string, credentials.TransportCredentials, err
 
 // Run holds the tunnel until ctx ends, replacing its stream whenever it
 // drops. It returns an error only if the relay refuses the tunnel for good.
-func (b *Backend) Run(ctx context.Context, deliver func(tunnel.Frame)) error {
+func (b *Backend) Run(ctx context.Context, accept func(net.Conn, *tunnel.ConnInfo)) error {
 	relayDialer := b.cfg.RelayDialer
 	cc, err := grpc.NewClient(b.target,
 		grpc.WithTransportCredentials(b.creds),
@@ -237,8 +219,13 @@ func (b *Backend) Run(ctx context.Context, deliver func(tunnel.Frame)) error {
 	}
 	defer cc.Close()
 	b.rpc = devtunnel.NewTunnelServiceClient(cc)
-	b.deliver = deliver
+	b.accept = accept
 	b.ctx = ctx
+	// A stream the relay moved off may still be finishing.
+	defer b.conns.Range(func(_ string, rs *relayStream) bool {
+		rs.end()
+		return true
+	})
 
 	err = b.run()
 	if err != nil {
@@ -251,83 +238,31 @@ func (b *Backend) Run(ctx context.Context, deliver func(tunnel.Frame)) error {
 	return err
 }
 
-// ConnID numbers an outbound conn. Open gives it its id on the stream.
-func (b *Backend) ConnID(*tunnel.ConnInfo) string {
-	return "e" + strconv.FormatUint(b.nextEgress.Add(1), 10)
-}
-
 // Open sends an outbound conn out through the deployment, to its hostname if
 // the intercept's DNS gave it one, or else to the address it was headed for.
 // The deployment resolves the hostname as its own code would. It waits a
 // while for a stream to hold the tunnel.
-func (b *Backend) Open(ctx context.Context, id string, conn *tunnel.ConnInfo) error {
-	n, err := strconv.ParseUint(strings.TrimPrefix(id, "e"), 10, 64)
-	if err != nil {
-		return fmt.Errorf("not an outbound conn id: %q", id)
-	}
+func (b *Backend) Open(ctx context.Context, info *tunnel.ConnInfo) (net.Conn, error) {
 	s := b.awaitLive(ctx)
 	if s == nil {
-		return errors.New("no stream holds the tunnel")
+		return nil, errors.New("no stream holds the tunnel")
 	}
-	wire := clientConnIDFloor | n
-	if !s.track(id, route{s: s, wire: wire, dir: egress}) {
-		return errors.New("the tunnel's stream ended")
+	n := b.nextEgress.Add(1)
+	rs := s.newConn("e"+strconv.FormatUint(n, 10), clientConnIDFloor|n, egress, info.Dest)
+	if rs == nil {
+		return nil, errors.New("the tunnel's stream ended")
 	}
-	host := conn.Hostname
+	host := info.Hostname
 	if host == "" {
-		host = conn.Dest.Host
+		host = info.Dest.Host
 	}
 	s.send(&devtunnel.ConnectRequest{Frame: &devtunnel.ConnectRequest_Open{Open: &devtunnel.Open{
-		ConnId:   wire,
+		ConnId:   rs.wire,
 		Protocol: devtunnel.Protocol_PROTOCOL_TCP,
 		Host:     host,
-		Port:     uint32(conn.Dest.Port),
+		Port:     uint32(info.Dest.Port),
 	}}})
-	return nil
-}
-
-func (b *Backend) Send(f tunnel.Frame) {
-	r, ok := b.routes.Load(f.ConnID)
-	if !ok {
-		return
-	}
-	switch f.Kind {
-	case tunnel.FrameData:
-		b.bytesSent.Add(int64(len(f.Payload)))
-		r.s.send(&devtunnel.ConnectRequest{Frame: &devtunnel.ConnectRequest_Data{Data: &devtunnel.Data{ConnId: r.wire, Payload: f.Payload}}})
-	case tunnel.FrameCloseWrite:
-		r.s.send(&devtunnel.ConnectRequest{Frame: &devtunnel.ConnectRequest_Close{Close: &devtunnel.Close{ConnId: r.wire}}})
-	case tunnel.FrameReset:
-		r.s.send(resetFrame(r.wire, f.Reason))
-		b.untrack(f.ConnID, r.s)
-	case tunnel.FrameWindow:
-		r.s.send(&devtunnel.ConnectRequest{Frame: &devtunnel.ConnectRequest_Window{Window: &devtunnel.Window{ConnId: r.wire, Bytes: uint32(f.Bytes)}}})
-	}
-}
-
-func (b *Backend) Release(id string) { b.untrack(id, nil) }
-func (b *Backend) Window() int       { return connWindow }
-func (b *Backend) HalfClose() bool   { return true }
-
-// untrack forgets id's route if it's on s, or on any stream for nil. Reports
-// whether it did.
-func (b *Backend) untrack(id string, s *stream) bool {
-	var gone route
-	removed := false
-	b.routes.Compute(id, func(cur route, loaded bool) (route, bool) {
-		if !loaded {
-			return cur, true
-		}
-		if s != nil && cur.s != s {
-			return cur, false
-		}
-		gone, removed = cur, true
-		return cur, true
-	})
-	if removed {
-		b.counters(gone.dir, -1)
-	}
-	return removed
+	return rs.conn, nil
 }
 
 // counters tracks conns opening (delta 1) and ending (delta -1).

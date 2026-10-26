@@ -8,89 +8,80 @@ import (
 	"time"
 )
 
-// fakeBackend has the flow control and half-close a dev tunnel has.
-type fakeBackend struct {
-	window   int
-	frames   chan Frame
-	sent     chan Frame
-	released chan string
+// acceptingBackend hands the tunnel the conns a test gives it.
+type acceptingBackend struct {
+	conns chan net.Conn
+	dest  Addr
 }
 
-func newFakeBackend(window int) *fakeBackend {
-	return &fakeBackend{
-		window:   window,
-		frames:   make(chan Frame, 16),
-		sent:     make(chan Frame, 1024),
-		released: make(chan string, 16),
-	}
-}
-
-func (b *fakeBackend) Run(ctx context.Context, deliver func(Frame)) error {
+func (b *acceptingBackend) Run(ctx context.Context, accept func(net.Conn, *ConnInfo)) error {
 	for {
 		select {
-		case f := <-b.frames:
-			deliver(f)
+		case c := <-b.conns:
+			accept(c, &ConnInfo{Dest: b.dest})
 		case <-ctx.Done():
 			return nil
 		}
 	}
 }
 
-func (b *fakeBackend) ConnID(*ConnInfo) string                       { return "out" }
-func (b *fakeBackend) Open(context.Context, string, *ConnInfo) error { return nil }
-func (b *fakeBackend) Send(f Frame)                                  { b.sent <- f }
-func (b *fakeBackend) Release(id string)                             { b.released <- id }
-func (b *fakeBackend) Window() int                                   { return b.window }
-func (b *fakeBackend) HalfClose() bool                               { return true }
-
-// next returns the next frame the tunnel sent other than a window grant.
-func (b *fakeBackend) next(t *testing.T) Frame {
-	t.Helper()
-	for {
-		select {
-		case f := <-b.sent:
-			if f.Kind != FrameWindow {
-				return f
-			}
-		case <-time.After(testTimeout):
-			t.Fatal("the tunnel sent nothing")
-		}
-	}
+func (b *acceptingBackend) Open(context.Context, *ConnInfo) (net.Conn, error) {
+	return nil, net.ErrClosed
 }
 
-func startBackendTunnel(t *testing.T, b *fakeBackend) Tunnel {
+// tcpPair returns both ends of a TCP connection.
+func tcpPair(t *testing.T) (net.Conn, net.Conn) {
 	t.Helper()
-	tun := NewWithBackend(&net.Dialer{Timeout: time.Second}, b)
-	tun.Start(context.Background())
-	t.Cleanup(func() { tun.Close() })
-	return tun
-}
-
-func TestHalfCloseCrossesThePump(t *testing.T) {
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lis.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		c, _ := lis.Accept()
+		accepted <- c
+	}()
+	a, err := net.Dial("tcp", lis.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := <-accepted
+	t.Cleanup(func() {
+		a.Close()
+		b.Close()
+	})
+	return a, b
+}
+
+func TestHalfCloseCrossesThePump(t *testing.T) {
+	app, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
 	got := make(chan string, 1)
 	go func() {
-		nc, err := lis.Accept()
+		c, err := app.Accept()
 		if err != nil {
 			return
 		}
 		// Reads to the peer's half-close, then answers and closes.
-		req, _ := io.ReadAll(nc)
+		req, _ := io.ReadAll(c)
 		got <- string(req)
-		_, _ = nc.Write([]byte("bye"))
-		_ = nc.Close()
+		_, _ = c.Write([]byte("bye"))
+		_ = c.Close()
 	}()
-	b := newFakeBackend(1 << 20)
-	startBackendTunnel(t, b)
-	dest := splitAddr(lis.Addr().String())
 
-	b.frames <- Frame{Kind: FrameOpen, ConnID: "1", Conn: &ConnInfo{Dest: dest}}
-	b.frames <- Frame{Kind: FrameData, ConnID: "1", Payload: []byte("hi")}
-	b.frames <- Frame{Kind: FrameCloseWrite, ConnID: "1"}
+	b := &acceptingBackend{conns: make(chan net.Conn, 1), dest: splitAddr(app.Addr().String())}
+	tun := NewWithBackend(&net.Dialer{Timeout: time.Second}, b)
+	tun.Start(context.Background())
+	t.Cleanup(func() { tun.Close() })
+
+	peer, remote := tcpPair(t)
+	b.conns <- remote
+	_, _ = peer.Write([]byte("hi"))
+	_ = peer.(*net.TCPConn).CloseWrite()
 
 	select {
 	case req := <-got:
@@ -100,45 +91,12 @@ func TestHalfCloseCrossesThePump(t *testing.T) {
 	case <-time.After(testTimeout):
 		t.Fatal("the app never saw the peer's half-close")
 	}
-	if f := b.next(t); f.Kind != FrameData || string(f.Payload) != "bye" {
-		t.Fatalf("expected the app's answer, got %+v", f)
+	_ = peer.SetReadDeadline(time.Now().Add(testTimeout))
+	resp, err := io.ReadAll(peer)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if f := b.next(t); f.Kind != FrameCloseWrite {
-		t.Fatalf("expected the app's half-close, got %+v", f)
-	}
-	select {
-	case id := <-b.released:
-		if id != "1" {
-			t.Fatalf("released %q", id)
-		}
-	case <-time.After(testTimeout):
-		t.Fatal("the conn was never released")
-	}
-}
-
-func TestWritesWaitForWindow(t *testing.T) {
-	b := newFakeBackend(10)
-	tun := startBackendTunnel(t, b)
-	app, intercepted := net.Pipe()
-	defer app.Close()
-	tun.AddConn(intercepted, "10.0.0.1:443", "example.com")
-
-	go func() { _, _ = app.Write([]byte("0123456789abcdefghijklmno")) }()
-	sent := ""
-	for len(sent) < 10 {
-		sent += string(b.next(t).Payload)
-	}
-	select {
-	case f := <-b.sent:
-		t.Fatalf("sent past the window: %+v", f)
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	b.frames <- Frame{Kind: FrameWindow, ConnID: "out", Bytes: 15}
-	for len(sent) < 25 {
-		sent += string(b.next(t).Payload)
-	}
-	if sent != "0123456789abcdefghijklmno" {
-		t.Fatalf("sent %q", sent)
+	if string(resp) != "bye" {
+		t.Fatalf("the peer read %q", resp)
 	}
 }

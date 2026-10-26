@@ -30,12 +30,12 @@ const frameBytes = 64 << 10
 type fakeRelay struct {
 	devtunnel.UnimplementedTunnelServiceServer
 	url     string
-	streams chan *relayStream
+	streams chan *relayCall
 	// refuse ends a call before it reaches the test, unless it returns nil.
 	refuse func(md metadata.MD) error
 }
 
-type relayStream struct {
+type relayCall struct {
 	md   metadata.MD
 	call grpc.BidiStreamingServer[devtunnel.ConnectRequest, devtunnel.ConnectResponse]
 	recv chan *devtunnel.ConnectRequest
@@ -46,7 +46,7 @@ func startRelay(t *testing.T) *fakeRelay {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	r := &fakeRelay{url: "http://" + lis.Addr().String(), streams: make(chan *relayStream, 8)}
+	r := &fakeRelay{url: "http://" + lis.Addr().String(), streams: make(chan *relayCall, 8)}
 	srv := grpc.NewServer()
 	devtunnel.RegisterTunnelServiceServer(srv, r)
 	go func() { _ = srv.Serve(lis) }()
@@ -61,7 +61,7 @@ func (r *fakeRelay) Connect(call grpc.BidiStreamingServer[devtunnel.ConnectReque
 			return err
 		}
 	}
-	s := &relayStream{md: md, call: call, recv: make(chan *devtunnel.ConnectRequest, 256), end: make(chan error, 1)}
+	s := &relayCall{md: md, call: call, recv: make(chan *devtunnel.ConnectRequest, 256), end: make(chan error, 1)}
 	go func() {
 		defer close(s.recv)
 		for {
@@ -81,7 +81,7 @@ func (r *fakeRelay) Connect(call grpc.BidiStreamingServer[devtunnel.ConnectReque
 	}
 }
 
-func (r *fakeRelay) next(t *testing.T) *relayStream {
+func (r *fakeRelay) next(t *testing.T) *relayCall {
 	t.Helper()
 	select {
 	case s := <-r.streams:
@@ -92,18 +92,18 @@ func (r *fakeRelay) next(t *testing.T) *relayStream {
 	}
 }
 
-func (s *relayStream) send(t *testing.T, msg *devtunnel.ConnectResponse) {
+func (s *relayCall) send(t *testing.T, msg *devtunnel.ConnectResponse) {
 	t.Helper()
 	require.NoError(t, s.call.Send(msg))
 }
 
 // hold makes the stream the tunnel's, as the relay's first heartbeat does.
-func (s *relayStream) hold(t *testing.T) {
+func (s *relayCall) hold(t *testing.T) {
 	s.send(t, &devtunnel.ConnectResponse{Frame: &devtunnel.ConnectResponse_Heartbeat{Heartbeat: &devtunnel.Heartbeat{}}})
 }
 
 // expect returns the next frame from the client other than a heartbeat.
-func (s *relayStream) expect(t *testing.T) *devtunnel.ConnectRequest {
+func (s *relayCall) expect(t *testing.T) *devtunnel.ConnectRequest {
 	t.Helper()
 	timeout := time.After(testTimeout)
 	for {
@@ -121,7 +121,7 @@ func (s *relayStream) expect(t *testing.T) *devtunnel.ConnectRequest {
 }
 
 // expectData collects the client's Data on a conn until it has n bytes.
-func (s *relayStream) expectData(t *testing.T, id uint64, n int) []byte {
+func (s *relayCall) expectData(t *testing.T, id uint64, n int) []byte {
 	t.Helper()
 	var got []byte
 	for len(got) < n {

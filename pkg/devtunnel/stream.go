@@ -126,22 +126,22 @@ func (s *stream) handle(msg *devtunnel.ConnectResponse, moving func()) {
 	case *devtunnel.ConnectResponse_Open:
 		s.open(f.Open)
 	case *devtunnel.ConnectResponse_Data:
-		if id, ok := s.routed(f.Data.GetConnId()); ok {
+		if rs := s.conn(f.Data.GetConnId()); rs != nil {
 			s.b.bytesReceived.Add(int64(len(f.Data.GetPayload())))
-			s.b.deliver(tunnel.Frame{Kind: tunnel.FrameData, ConnID: id, Payload: f.Data.GetPayload()})
+			rs.push(f.Data.GetPayload())
 		}
 	case *devtunnel.ConnectResponse_Close:
-		if id, ok := s.routed(f.Close.GetConnId()); ok {
-			s.b.deliver(tunnel.Frame{Kind: tunnel.FrameCloseWrite, ConnID: id})
+		if rs := s.conn(f.Close.GetConnId()); rs != nil {
+			rs.peerClosed()
 		}
 	case *devtunnel.ConnectResponse_Reset_:
-		if id, ok := s.routed(f.Reset_.GetConnId()); ok && s.b.untrack(id, s) {
-			s.logger.Debug("Relay reset the connection", "conn_id", id, "reason", f.Reset_.GetReason())
-			s.b.deliver(tunnel.Frame{Kind: tunnel.FrameReset, ConnID: id, Reason: f.Reset_.GetReason()})
+		if rs := s.conn(f.Reset_.GetConnId()); rs != nil {
+			s.logger.Debug("Relay reset the connection", "conn_id", rs.id, "reason", f.Reset_.GetReason())
+			rs.end()
 		}
 	case *devtunnel.ConnectResponse_Window:
-		if id, ok := s.routed(f.Window.GetConnId()); ok {
-			s.b.deliver(tunnel.Frame{Kind: tunnel.FrameWindow, ConnID: id, Bytes: int(f.Window.GetBytes())})
+		if rs := s.conn(f.Window.GetConnId()); rs != nil {
+			rs.conn.Grant(int(f.Window.GetBytes()))
 		}
 	}
 }
@@ -155,19 +155,15 @@ func (s *stream) open(open *devtunnel.Open) {
 		s.send(resetFrame(wire, fmt.Sprintf("bridge serves only port %d", port)))
 		return
 	}
-	id := s.idFor(wire)
-	if !s.track(id, route{s: s, wire: wire, dir: ingress}) {
-		return
+	dest := tunnel.Addr{Host: "127.0.0.1", Port: port}
+	if rs := s.newConn(s.idFor(wire), wire, ingress, dest); rs != nil {
+		s.b.accept(rs.conn, &tunnel.ConnInfo{Dest: dest})
 	}
-	s.b.deliver(tunnel.Frame{
-		Kind:   tunnel.FrameOpen,
-		ConnID: id,
-		Conn:   &tunnel.ConnInfo{Dest: tunnel.Addr{Host: "127.0.0.1", Port: port}},
-	})
 }
 
-// idFor is the tunnel's id for the conn the relay calls wire on this stream.
-// Outbound conns keep the id the tunnel gave them.
+// idFor is the backend's id for the conn the relay calls wire on this stream.
+// The relay numbers each stream's conns from 1; outbound conns are numbered
+// across streams.
 func (s *stream) idFor(wire uint64) string {
 	if wire >= clientConnIDFloor {
 		return "e" + strconv.FormatUint(wire&^clientConnIDFloor, 10)
@@ -175,35 +171,21 @@ func (s *stream) idFor(wire uint64) string {
 	return s.prefix + strconv.FormatUint(wire, 10)
 }
 
-// routed returns the tunnel's id for wire, if it's a conn open on this stream.
-func (s *stream) routed(wire uint64) (string, bool) {
-	id := s.idFor(wire)
-	r, ok := s.b.routes.Load(id)
-	return id, ok && r.s == s
+// conn returns the conn the relay calls wire, if it's open on this stream.
+func (s *stream) conn(wire uint64) *relayStream {
+	rs, ok := s.b.conns.Load(s.idFor(wire))
+	if !ok || rs.s != s {
+		return nil
+	}
+	return rs
 }
 
-// track routes id to this stream, or reports false once the stream has ended.
-func (s *stream) track(id string, r route) bool {
-	if s.closed.Load() {
-		return false
-	}
-	// Counted before it's stored, so whichever untrack removes it uncounts it.
-	s.b.counters(r.dir, 1)
-	s.b.routes.Store(id, r)
-	// endConns may have swept the routes before the Store.
-	if s.closed.Load() {
-		s.b.untrack(id, s)
-		return false
-	}
-	return true
-}
-
-// endConns resets every conn on the stream, which the relay ended with it.
+// endConns ends every conn on the stream, which the relay ended with it.
 func (s *stream) endConns() {
 	s.closed.Store(true)
-	s.b.routes.Range(func(id string, r route) bool {
-		if r.s == s && s.b.untrack(id, s) {
-			s.b.deliver(tunnel.Frame{Kind: tunnel.FrameReset, ConnID: id, Reason: "the tunnel's stream ended"})
+	s.b.conns.Range(func(_ string, rs *relayStream) bool {
+		if rs.s == s {
+			rs.end()
 		}
 		return true
 	})
