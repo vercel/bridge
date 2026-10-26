@@ -144,7 +144,6 @@ func TestInterceptServer_ReportsAndFeedsTheDevTunnel(t *testing.T) {
 
 	tun, err := devtunnel.New(devtunnel.Config{RelayURL: "http://127.0.0.1:1", Port: 3000})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = tun.Close() })
 	srv.SetTunnel(tun)
 
 	resp, err = srv.GetStatus(ctx, &bridgev1.GetStatusRequest{})

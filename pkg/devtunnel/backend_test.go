@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	devtunnelv1 "github.com/vercel/bridge/api/go/vercel/api/dev_tunnel/v1"
+	"github.com/vercel/bridge/pkg/tunnel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -20,6 +21,9 @@ import (
 )
 
 const testTimeout = 5 * time.Second
+
+// More than one Data frame's worth.
+const frameBytes = 64 << 10
 
 // fakeRelay stands in for api-dev-tunnel, handing each Connect call to the
 // test.
@@ -147,17 +151,19 @@ func window(id uint64, n int) *devtunnelv1.ConnectResponse {
 	return &devtunnelv1.ConnectResponse{Frame: &devtunnelv1.ConnectResponse_Window{Window: &devtunnelv1.Window{ConnId: id, Bytes: uint32(n)}}}
 }
 
-func newClient(t *testing.T, r *fakeRelay, token string, port int, tune ...func(*timings)) *Client {
+// newTunnel runs a tunnel over a Backend for r.
+func newTunnel(t *testing.T, r *fakeRelay, token string, port int, tune ...func(*timings)) (*Backend, tunnel.Tunnel) {
 	t.Helper()
-	c, err := New(Config{RelayURL: r.url, Token: token, Instance: "test-instance", Port: port})
+	b, err := New(Config{RelayURL: r.url, Token: token, Instance: "test-instance", Port: port})
 	require.NoError(t, err)
-	c.timings = timings{heartbeat: 50 * time.Millisecond, silent: time.Second, liveWait: 2 * time.Second}
+	b.timings = timings{heartbeat: 50 * time.Millisecond, silent: time.Second, liveWait: 2 * time.Second}
 	for _, f := range tune {
-		f(&c.timings)
+		f(&b.timings)
 	}
-	c.Start(context.Background())
-	t.Cleanup(func() { _ = c.Close() })
-	return c
+	tun := tunnel.NewWithBackend(&net.Dialer{Timeout: time.Second}, b)
+	tun.Start(context.Background())
+	t.Cleanup(func() { _ = tun.Close() })
+	return b, tun
 }
 
 // echoApp echoes each connection, then half-closes it once the peer has.
@@ -189,7 +195,7 @@ func waitFor(t *testing.T, cond func() bool) {
 func TestIngressReachesTheApp(t *testing.T) {
 	r := startRelay(t)
 	port := echoApp(t)
-	c := newClient(t, r, "tok", port)
+	c, _ := newTunnel(t, r, "tok", port)
 
 	s := r.next(t)
 	assert.Equal(t, []string{"Bearer tok"}, s.md.Get("authorization"))
@@ -224,7 +230,7 @@ func TestIngressReachesTheApp(t *testing.T) {
 
 func TestIngressToAnotherPortIsReset(t *testing.T) {
 	r := startRelay(t)
-	newClient(t, r, "tok", 3000)
+	newTunnel(t, r, "tok", 3000)
 	s := r.next(t)
 	s.hold(t)
 
@@ -240,7 +246,7 @@ func TestIngressSendsNoMoreThanTheWindow(t *testing.T) {
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = lis.Close() })
-	body := bytes.Repeat([]byte("x"), connWindow+maxPayload)
+	body := bytes.Repeat([]byte("x"), connWindow+frameBytes)
 	go func() {
 		nc, err := lis.Accept()
 		if err == nil {
@@ -248,7 +254,7 @@ func TestIngressSendsNoMoreThanTheWindow(t *testing.T) {
 		}
 	}()
 	port := lis.Addr().(*net.TCPAddr).Port
-	newClient(t, r, "tok", port)
+	newTunnel(t, r, "tok", port)
 	s := r.next(t)
 	s.hold(t)
 	s.send(t, open(1, port))
@@ -262,19 +268,19 @@ func TestIngressSendsNoMoreThanTheWindow(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 
-	s.send(t, window(1, maxPayload))
-	assert.Len(t, s.expectData(t, 1, maxPayload), maxPayload)
+	s.send(t, window(1, frameBytes))
+	assert.Len(t, s.expectData(t, 1, frameBytes), frameBytes)
 }
 
 func TestEgressLeavesThroughTheDeployment(t *testing.T) {
 	r := startRelay(t)
-	c := newClient(t, r, "tok", 3000)
+	c, tun := newTunnel(t, r, "tok", 3000)
 	s := r.next(t)
 	s.hold(t)
 	waitFor(t, func() bool { return c.Status().GetState() == bridgev1.TunnelState_TUNNEL_STATE_LIVE })
 
 	app, intercepted := tcpPair(t)
-	c.AddConn(intercepted, "0.0.0.0:443", "example.com")
+	tun.AddConn(intercepted, "0.0.0.0:443", "example.com")
 	o := s.expect(t).GetOpen()
 	require.NotNil(t, o)
 	assert.GreaterOrEqual(t, o.GetConnId(), clientConnIDFloor)
@@ -304,11 +310,11 @@ func TestEgressLeavesThroughTheDeployment(t *testing.T) {
 
 func TestEgressWithNoLiveStreamIsDropped(t *testing.T) {
 	r := startRelay(t)
-	c := newClient(t, r, "tok", 3000, func(tm *timings) { tm.liveWait = 50 * time.Millisecond })
+	_, tun := newTunnel(t, r, "tok", 3000, func(tm *timings) { tm.liveWait = 50 * time.Millisecond })
 	r.next(t) // never holds the tunnel
 
 	app, intercepted := tcpPair(t)
-	c.AddConn(intercepted, "0.0.0.0:443", "example.com")
+	tun.AddConn(intercepted, "0.0.0.0:443", "example.com")
 	_ = app.SetReadDeadline(time.Now().Add(testTimeout))
 	_, err := app.Read(make([]byte, 1))
 	assert.ErrorIs(t, err, io.EOF)
@@ -317,7 +323,7 @@ func TestEgressWithNoLiveStreamIsDropped(t *testing.T) {
 func TestReconnectKeepsTheOldStreamsConns(t *testing.T) {
 	r := startRelay(t)
 	port := echoApp(t)
-	c := newClient(t, r, "tok", port)
+	c, _ := newTunnel(t, r, "tok", port)
 	first := r.next(t)
 	first.hold(t)
 	first.send(t, open(1, port))
@@ -344,7 +350,7 @@ func TestRefusedTokenWaitsForANewOne(t *testing.T) {
 		}
 		return nil
 	}
-	c := newClient(t, r, "old", 3000)
+	c, _ := newTunnel(t, r, "old", 3000)
 	waitFor(t, func() bool { return c.Status().GetState() == bridgev1.TunnelState_TUNNEL_STATE_NEEDS_TOKEN })
 
 	c.SetToken("new")
@@ -354,7 +360,7 @@ func TestRefusedTokenWaitsForANewOne(t *testing.T) {
 
 func TestNoTokenWaitsForOne(t *testing.T) {
 	r := startRelay(t)
-	c := newClient(t, r, "", 3000)
+	c, _ := newTunnel(t, r, "", 3000)
 	waitFor(t, func() bool { return c.Status().GetState() == bridgev1.TunnelState_TUNNEL_STATE_NEEDS_TOKEN })
 	select {
 	case <-r.streams:
@@ -371,20 +377,20 @@ func TestFatalRefusalStops(t *testing.T) {
 	r.refuse = func(metadata.MD) error {
 		return status.Error(codes.PermissionDenied, "not allowed")
 	}
-	c := newClient(t, r, "tok", 3000)
+	c, tun := newTunnel(t, r, "tok", 3000)
 
 	select {
-	case <-c.Done():
+	case <-tun.Done():
 	case <-time.After(testTimeout):
 		t.Fatal("kept retrying")
 	}
-	assert.ErrorContains(t, c.Err(), "not allowed")
+	assert.Contains(t, c.Status().GetLastError(), "not allowed")
 	assert.Equal(t, bridgev1.TunnelState_TUNNEL_STATE_FAILED, c.Status().GetState())
 }
 
 func TestSilentRelayIsReplaced(t *testing.T) {
 	r := startRelay(t)
-	c := newClient(t, r, "tok", 3000, func(tm *timings) { tm.silent = 200 * time.Millisecond })
+	c, _ := newTunnel(t, r, "tok", 3000, func(tm *timings) { tm.silent = 200 * time.Millisecond })
 	r.next(t) // never heard from again
 
 	r.next(t)

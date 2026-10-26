@@ -6,24 +6,25 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/puzpuzpuz/xsync/v3"
 	devtunnelv1 "github.com/vercel/bridge/api/go/vercel/api/dev_tunnel/v1"
+	"github.com/vercel/bridge/pkg/tunnel"
 	"google.golang.org/grpc/metadata"
 )
 
 var heartbeat = &devtunnelv1.ConnectRequest{Frame: &devtunnelv1.ConnectRequest_Heartbeat{Heartbeat: &devtunnelv1.Heartbeat{}}}
 
-// stream is one Connect call and the conns it carries. The relay ends every
-// conn with the stream.
+// stream is one Connect call. The relay ends every conn on it with it.
 type stream struct {
-	c      *Client
+	b      *Backend
 	logger *slog.Logger
+	// The relay numbers each stream's conns from 1, so the tunnel's id for one
+	// starts with this.
+	prefix string
 	ctx    context.Context
 	cancel context.CancelCauseFunc
 	out    outbox
@@ -31,20 +32,18 @@ type stream struct {
 	// Set once the relay routes the tunnel's conns to this stream.
 	held      atomic.Bool
 	lastHeard atomic.Int64
-
-	conns  *xsync.MapOf[uint64, *conn]
-	closed atomic.Bool
+	closed    atomic.Bool
 }
 
-func (c *Client) newStream() *stream {
-	ctx, cancel := context.WithCancelCause(c.ctx)
+func (b *Backend) newStream() *stream {
+	ctx, cancel := context.WithCancelCause(b.ctx)
 	return &stream{
-		c:      c,
-		logger: c.logger,
+		b:      b,
+		logger: b.logger,
+		prefix: strconv.FormatUint(b.nextStream.Add(1), 10) + ".",
 		ctx:    ctx,
 		cancel: cancel,
 		out:    outbox{wake: make(chan struct{}, 1)},
-		conns:  xsync.NewMapOf[uint64, *conn](),
 	}
 }
 
@@ -54,14 +53,14 @@ func (s *stream) run(token string, moving func()) error {
 	defer s.cancel(nil)
 	ctx := metadata.AppendToOutgoingContext(s.ctx,
 		"authorization", "Bearer "+token,
-		instanceHeader, s.c.instance,
+		instanceHeader, s.b.instance,
 	)
-	call, err := s.c.rpc.Connect(ctx)
+	call, err := s.b.rpc.Connect(ctx)
 	if err != nil {
 		return err
 	}
-	defer s.c.lost(s)
-	defer s.abandonAll()
+	defer s.b.lost(s)
+	defer s.endConns()
 
 	s.lastHeard.Store(time.Now().UnixNano())
 	// The call starts with its first message.
@@ -97,14 +96,14 @@ func (s *stream) run(token string, moving func()) error {
 }
 
 func (s *stream) heartbeats() {
-	ticker := time.NewTicker(s.c.timings.heartbeat)
+	ticker := time.NewTicker(s.b.timings.heartbeat)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
-			if time.Since(time.Unix(0, s.lastHeard.Load())) > s.c.timings.silent {
+			if time.Since(time.Unix(0, s.lastHeard.Load())) > s.b.timings.silent {
 				s.logger.Info("Relay went silent, reconnecting")
 				s.cancel(errSilent)
 				return
@@ -114,131 +113,104 @@ func (s *stream) heartbeats() {
 	}
 }
 
+// handle passes one of the relay's frames to the tunnel.
 func (s *stream) handle(msg *devtunnelv1.ConnectResponse, moving func()) {
 	switch f := msg.GetFrame().(type) {
 	case *devtunnelv1.ConnectResponse_Heartbeat:
 		if s.held.CompareAndSwap(false, true) {
-			s.c.holding(s)
+			s.b.holding(s)
 		}
 	case *devtunnelv1.ConnectResponse_Reconnect:
-		s.c.moving(s)
+		s.b.moving(s)
 		moving()
 	case *devtunnelv1.ConnectResponse_Open:
-		s.openIngress(f.Open)
+		s.open(f.Open)
 	case *devtunnelv1.ConnectResponse_Data:
-		if cn := s.conn(f.Data.GetConnId()); cn != nil {
-			s.c.bytesReceived.Add(int64(len(f.Data.GetPayload())))
-			cn.received(f.Data.GetPayload())
+		if id, ok := s.routed(f.Data.GetConnId()); ok {
+			s.b.bytesReceived.Add(int64(len(f.Data.GetPayload())))
+			s.b.deliver(tunnel.Frame{Kind: tunnel.FrameData, ConnID: id, Payload: f.Data.GetPayload()})
 		}
 	case *devtunnelv1.ConnectResponse_Close:
-		if cn := s.conn(f.Close.GetConnId()); cn != nil {
-			cn.closeReceived()
+		if id, ok := s.routed(f.Close.GetConnId()); ok {
+			s.b.deliver(tunnel.Frame{Kind: tunnel.FrameCloseWrite, ConnID: id})
 		}
 	case *devtunnelv1.ConnectResponse_Reset_:
-		if cn := s.conn(f.Reset_.GetConnId()); cn != nil {
-			cn.logger.Debug("Relay reset the connection", "reason", f.Reset_.GetReason())
-			cn.abandon()
+		if id, ok := s.routed(f.Reset_.GetConnId()); ok && s.b.untrack(id, s) {
+			s.logger.Debug("Relay reset the connection", "conn_id", id, "reason", f.Reset_.GetReason())
+			s.b.deliver(tunnel.Frame{Kind: tunnel.FrameReset, ConnID: id, Reason: f.Reset_.GetReason()})
 		}
 	case *devtunnelv1.ConnectResponse_Window:
-		if cn := s.conn(f.Window.GetConnId()); cn != nil {
-			cn.grant(int(f.Window.GetBytes()))
+		if id, ok := s.routed(f.Window.GetConnId()); ok {
+			s.b.deliver(tunnel.Frame{Kind: tunnel.FrameWindow, ConnID: id, Bytes: int(f.Window.GetBytes())})
 		}
 	}
 }
 
-// openIngress connects one of the deployment's conns to the app.
-func (s *stream) openIngress(open *devtunnelv1.Open) {
-	id := open.GetConnId()
-	port := s.c.cfg.Port
+// open hands one of the deployment's conns to the tunnel, which connects it
+// to the app.
+func (s *stream) open(open *devtunnelv1.Open) {
+	wire := open.GetConnId()
+	port := s.b.cfg.Port
 	if open.GetProtocol() != devtunnelv1.Protocol_PROTOCOL_TCP || int(open.GetPort()) != port {
-		s.send(resetFrame(id, fmt.Sprintf("bridge serves only port %d", port)))
+		s.send(resetFrame(wire, fmt.Sprintf("bridge serves only port %d", port)))
 		return
 	}
-	cn := s.newConn(id, ingress)
-	if cn == nil {
+	id := s.idFor(wire)
+	if !s.track(id, route{s: s, wire: wire, dir: ingress}) {
 		return
 	}
-	go func() {
-		nc, err := s.c.cfg.AppDialer.DialContext(s.ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-		if err != nil {
-			cn.logger.Debug("App refused the connection", "error", err)
-			cn.reset(err.Error())
-			return
-		}
-		cn.attach(nc)
-	}()
-}
-
-// newConn registers a conn, or returns nil once the stream has ended.
-func (s *stream) newConn(id uint64, dir direction) *conn {
-	if s.closed.Load() {
-		return nil
-	}
-	cn := &conn{
-		id:         id,
-		s:          s,
-		dir:        dir,
-		logger:     s.logger.With("conn_id", id, "direction", dir.String()),
-		sendWindow: connWindow,
-	}
-	cn.cond = sync.NewCond(&cn.mu)
-	// Counted before it's stored, so whichever of forget's callers removes it
-	// uncounts it.
-	s.c.counters(dir, 1)
-	s.conns.Store(id, cn)
-	// abandonAll may have swept the map before the Store.
-	if s.closed.Load() {
-		s.forget(cn)
-		return nil
-	}
-	return cn
-}
-
-func (s *stream) conn(id uint64) *conn {
-	cn, _ := s.conns.Load(id)
-	return cn
-}
-
-// forget removes cn, unless another conn has since taken its id.
-func (s *stream) forget(cn *conn) {
-	removed := false
-	s.conns.Compute(cn.id, func(cur *conn, loaded bool) (*conn, bool) {
-		if !loaded {
-			return nil, true
-		}
-		if cur != cn {
-			return cur, false
-		}
-		removed = true
-		return nil, true
+	s.b.deliver(tunnel.Frame{
+		Kind:   tunnel.FrameOpen,
+		ConnID: id,
+		Conn:   &tunnel.ConnInfo{Dest: tunnel.Addr{Host: "127.0.0.1", Port: port}},
 	})
-	if removed {
-		s.c.counters(cn.dir, -1)
-	}
 }
 
-func (s *stream) abandonAll() {
+// idFor is the tunnel's id for the conn the relay calls wire on this stream.
+// Outbound conns keep the id the tunnel gave them.
+func (s *stream) idFor(wire uint64) string {
+	if wire >= clientConnIDFloor {
+		return "e" + strconv.FormatUint(wire&^clientConnIDFloor, 10)
+	}
+	return s.prefix + strconv.FormatUint(wire, 10)
+}
+
+// routed returns the tunnel's id for wire, if it's a conn open on this stream.
+func (s *stream) routed(wire uint64) (string, bool) {
+	id := s.idFor(wire)
+	r, ok := s.b.routes.Load(id)
+	return id, ok && r.s == s
+}
+
+// track routes id to this stream, or reports false once the stream has ended.
+func (s *stream) track(id string, r route) bool {
+	if s.closed.Load() {
+		return false
+	}
+	// Counted before it's stored, so whichever untrack removes it uncounts it.
+	s.b.counters(r.dir, 1)
+	s.b.routes.Store(id, r)
+	// endConns may have swept the routes before the Store.
+	if s.closed.Load() {
+		s.b.untrack(id, s)
+		return false
+	}
+	return true
+}
+
+// endConns resets every conn on the stream, which the relay ended with it.
+func (s *stream) endConns() {
 	s.closed.Store(true)
-	s.conns.Range(func(_ uint64, cn *conn) bool {
-		cn.abandon()
+	s.b.routes.Range(func(id string, r route) bool {
+		if r.s == s && s.b.untrack(id, s) {
+			s.b.deliver(tunnel.Frame{Kind: tunnel.FrameReset, ConnID: id, Reason: "the tunnel's stream ended"})
+		}
 		return true
 	})
 }
 
 func (s *stream) send(frame *devtunnelv1.ConnectRequest) {
 	s.out.push(frame)
-}
-
-// counters tracks conns opening (delta 1) and ending (delta -1).
-func (c *Client) counters(dir direction, delta int64) {
-	open, total := &c.ingressConns, &c.ingressTotal
-	if dir == egress {
-		open, total = &c.egressConns, &c.egressTotal
-	}
-	open.Add(delta)
-	if delta > 0 {
-		total.Add(delta)
-	}
 }
 
 // outbox queues frames for the relay in order. Data is bounded by each conn's

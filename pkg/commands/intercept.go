@@ -188,7 +188,7 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		dnsResolver  hostResolver
 		metadata     *bridgev1.GetMetadataResponse
 		mountServers []*fuseServer
-		devTunnel    *devtunnel.Client
+		devTunnel    *devtunnel.Backend
 	)
 	if tunnelProtocol == tunnelProtocolDevTunnel {
 		if len(mountPaths) > 0 {
@@ -206,9 +206,9 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		if err != nil {
 			return err
 		}
-		devTunnel.Start(ctx)
-		defer devTunnel.Close()
-		tun = devTunnel
+		tun = tunnel.NewWithBackend(plumbing.NewStaticPortDialer(appPort, nil), devTunnel)
+		tun.Start(ctx)
+		defer tun.Close()
 		dnsResolver = deploymentResolver{}
 		logger.Info("Dev tunnel starting", "app_port", appPort)
 	} else {
