@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/vercel/bridge/pkg/plumbing"
 )
 
 const (
@@ -18,12 +20,13 @@ const (
 )
 
 // streamConn is one conn's side on the tunnel's transport, as a net.Conn: Read
-// takes what the peer sent, Write sends to it as the conn's window allows, and
-// CloseWrite half-closes it.
+// takes what the peer sent, Write sends to it, and CloseWrite half-closes it.
+// The tunnel uses it through meter, which holds writes to the conn's window.
 type streamConn struct {
-	t    *tunnelImpl
-	id   string
-	info *ConnInfo
+	t     *tunnelImpl
+	id    string
+	info  *ConnInfo
+	meter *plumbing.MeteredConn
 	// 0 when the backend has no flow control.
 	window    int
 	halfClose bool
@@ -38,10 +41,7 @@ type streamConn struct {
 	// The rest of the chunk Read is on; only Read touches it.
 	pending []byte
 
-	// What this side may still send the peer.
-	sendWindow atomic.Int64
-	winWake    chan struct{}
-	closeSent  atomic.Bool
+	closeSent atomic.Bool
 
 	local    atomic.Pointer[net.Conn]
 	done     chan struct{}
@@ -59,10 +59,14 @@ func (t *tunnelImpl) newConn(id string, info *ConnInfo) *streamConn {
 		halfClose: t.backend.HalfClose(),
 		inWake:    make(chan struct{}, 1),
 		inRoom:    make(chan struct{}, 1),
-		winWake:   make(chan struct{}, 1),
 		done:      make(chan struct{}),
 	}
-	c.sendWindow.Store(int64(c.window))
+	cfg := plumbing.MeteredConfig{Window: c.window}
+	if c.window > 0 {
+		// Gives the peer back what was read.
+		cfg.OnRead = func(n int) { c.send(Frame{Kind: FrameWindow, Bytes: n}) }
+	}
+	c.meter = plumbing.NewMeteredConn(c, cfg)
 	return c
 }
 
@@ -95,12 +99,8 @@ func (c *streamConn) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// consumed gives the peer back what Read took.
+// consumed makes room for what a peer without flow control sends next.
 func (c *streamConn) consumed(n int) {
-	if c.window > 0 {
-		c.send(Frame{Kind: FrameWindow, Bytes: n})
-		return
-	}
 	c.inMu.Lock()
 	c.inBytes -= n
 	c.inMu.Unlock()
@@ -110,37 +110,15 @@ func (c *streamConn) consumed(n int) {
 func (c *streamConn) Write(p []byte) (int, error) {
 	written := 0
 	for written < len(p) {
-		size := min(len(p)-written, maxFrame)
-		if c.window > 0 {
-			w, err := c.awaitWindow()
-			if err != nil {
-				return written, err
-			}
-			size = min(size, w)
-			c.sendWindow.Add(-int64(size))
-		} else if c.isDone() {
+		if c.isDone() {
 			return written, net.ErrClosed
 		}
+		size := min(len(p)-written, maxFrame)
 		// The backend may send it after Write returns.
 		c.send(Frame{Kind: FrameData, Payload: bytes.Clone(p[written : written+size])})
 		written += size
 	}
 	return written, nil
-}
-
-func (c *streamConn) awaitWindow() (int, error) {
-	for {
-		if c.isDone() {
-			return 0, net.ErrClosed
-		}
-		if w := c.sendWindow.Load(); w > 0 {
-			return int(w), nil
-		}
-		select {
-		case <-c.winWake:
-		case <-c.done:
-		}
-	}
 }
 
 // CloseWrite tells the peer this side has nothing more to send. Over a
@@ -155,6 +133,9 @@ func (c *streamConn) CloseWrite() error {
 	}
 	return nil
 }
+
+// Done is closed once the conn is over.
+func (c *streamConn) Done() <-chan struct{} { return c.done }
 
 // Close resets the conn.
 func (c *streamConn) Close() error {
@@ -203,11 +184,6 @@ func (c *streamConn) peerClosed() {
 	c.inEOF = true
 	c.inMu.Unlock()
 	wake(c.inWake)
-}
-
-func (c *streamConn) grant(n int) {
-	c.sendWindow.Add(int64(n))
-	wake(c.winWake)
 }
 
 // attach hands the conn its local end, which it closes when it's over.

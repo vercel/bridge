@@ -157,7 +157,7 @@ func (t *tunnelImpl) deliver(f Frame) {
 		}
 	case FrameWindow:
 		if ok {
-			c.grant(f.Bytes)
+			c.meter.Grant(f.Bytes)
 		}
 	}
 }
@@ -208,8 +208,8 @@ func (t *tunnelImpl) dial(f Frame) (net.Conn, error) {
 	return t.dialer.DialContext(t.ctx, "tcp", f.Conn.Dest.String())
 }
 
-// pump copies between local and c in both directions, each through a buffer
-// from the pool, until the conn is over.
+// pump copies between local and c, through its meter, in both directions,
+// each through a buffer from the pool, until the conn is over.
 func (t *tunnelImpl) pump(local net.Conn, c *streamConn) {
 	if !c.attach(local) {
 		return
@@ -225,14 +225,23 @@ func (t *tunnelImpl) pump(local net.Conn, c *streamConn) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		copyHalf(c, local, *toPeer, c)
+		copyHalf(c.meter, local, *toPeer, c)
 	}()
 	go func() {
 		defer wg.Done()
-		copyHalf(local, c, *fromPeer, c)
+		copyHalf(local, c.meter, *fromPeer, c)
 	}()
 	wg.Wait()
 	c.finish()
+
+	st := c.meter.Stats()
+	t.logger.Debug("Tunnel: connection closed",
+		"conn_id", c.id,
+		"bytes_sent", st.BytesWritten,
+		"bytes_received", st.BytesRead,
+		"window_wait", st.WriteWait,
+		"window_waits", st.WriteWaits,
+	)
 }
 
 // copyHalf copies src to dst until src ends, then half-closes dst. A failure
