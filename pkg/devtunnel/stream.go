@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/puzpuzpuz/xsync/v3"
 	devtunnelv1 "github.com/vercel/bridge/api/go/vercel/api/dev_tunnel/v1"
 	"google.golang.org/grpc/metadata"
 )
@@ -31,9 +32,8 @@ type stream struct {
 	held      atomic.Bool
 	lastHeard atomic.Int64
 
-	mu     sync.Mutex
-	conns  map[uint64]*conn
-	closed bool
+	conns  *xsync.MapOf[uint64, *conn]
+	closed atomic.Bool
 }
 
 func (c *Client) newStream() *stream {
@@ -44,7 +44,7 @@ func (c *Client) newStream() *stream {
 		ctx:    ctx,
 		cancel: cancel,
 		out:    outbox{wake: make(chan struct{}, 1)},
-		conns:  map[uint64]*conn{},
+		conns:  xsync.NewMapOf[uint64, *conn](),
 	}
 }
 
@@ -171,9 +171,7 @@ func (s *stream) openIngress(open *devtunnelv1.Open) {
 
 // newConn registers a conn, or returns nil once the stream has ended.
 func (s *stream) newConn(id uint64, dir direction) *conn {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed.Load() {
 		return nil
 	}
 	cn := &conn{
@@ -184,37 +182,47 @@ func (s *stream) newConn(id uint64, dir direction) *conn {
 		sendWindow: connWindow,
 	}
 	cn.cond = sync.NewCond(&cn.mu)
-	s.conns[id] = cn
+	// Counted before it's stored, so whichever of forget's callers removes it
+	// uncounts it.
 	s.c.counters(dir, 1)
+	s.conns.Store(id, cn)
+	// abandonAll may have swept the map before the Store.
+	if s.closed.Load() {
+		s.forget(cn)
+		return nil
+	}
 	return cn
 }
 
 func (s *stream) conn(id uint64) *conn {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.conns[id]
+	cn, _ := s.conns.Load(id)
+	return cn
 }
 
+// forget removes cn, unless another conn has since taken its id.
 func (s *stream) forget(cn *conn) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.conns[cn.id] == cn {
-		delete(s.conns, cn.id)
+	removed := false
+	s.conns.Compute(cn.id, func(cur *conn, loaded bool) (*conn, bool) {
+		if !loaded {
+			return nil, true
+		}
+		if cur != cn {
+			return cur, false
+		}
+		removed = true
+		return nil, true
+	})
+	if removed {
 		s.c.counters(cn.dir, -1)
 	}
 }
 
 func (s *stream) abandonAll() {
-	s.mu.Lock()
-	s.closed = true
-	conns := make([]*conn, 0, len(s.conns))
-	for _, cn := range s.conns {
-		conns = append(conns, cn)
-	}
-	s.mu.Unlock()
-	for _, cn := range conns {
+	s.closed.Store(true)
+	s.conns.Range(func(_ uint64, cn *conn) bool {
 		cn.abandon()
-	}
+		return true
+	})
 }
 
 func (s *stream) send(frame *devtunnelv1.ConnectRequest) {
