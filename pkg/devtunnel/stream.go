@@ -126,22 +126,22 @@ func (s *stream) handle(msg *devtunnel.ConnectResponse, moving func()) {
 	case *devtunnel.ConnectResponse_Open:
 		s.open(f.Open)
 	case *devtunnel.ConnectResponse_Data:
-		if rs := s.conn(f.Data.GetConnId()); rs != nil {
+		if c := s.conn(f.Data.GetConnId()); c != nil {
 			s.b.bytesReceived.Add(int64(len(f.Data.GetPayload())))
-			rs.push(f.Data.GetPayload())
+			c.stream.Deliver(s.ctx, f.Data.GetPayload())
 		}
 	case *devtunnel.ConnectResponse_Close:
-		if rs := s.conn(f.Close.GetConnId()); rs != nil {
-			rs.peerClosed()
+		if c := s.conn(f.Close.GetConnId()); c != nil {
+			c.stream.PeerClosed()
 		}
 	case *devtunnel.ConnectResponse_Reset_:
-		if rs := s.conn(f.Reset_.GetConnId()); rs != nil {
-			s.logger.Debug("Relay reset the connection", "conn_id", rs.id, "reason", f.Reset_.GetReason())
-			rs.end()
+		if c := s.conn(f.Reset_.GetConnId()); c != nil {
+			s.logger.Debug("Relay reset the connection", "conn_id", c.id, "reason", f.Reset_.GetReason())
+			c.stream.PeerReset()
 		}
 	case *devtunnel.ConnectResponse_Window:
-		if rs := s.conn(f.Window.GetConnId()); rs != nil {
-			rs.conn.Grant(int(f.Window.GetBytes()))
+		if c := s.conn(f.Window.GetConnId()); c != nil {
+			c.stream.Conn().Grant(int(f.Window.GetBytes()))
 		}
 	}
 }
@@ -156,8 +156,8 @@ func (s *stream) open(open *devtunnel.Open) {
 		return
 	}
 	dest := tunnel.Addr{Host: "127.0.0.1", Port: port}
-	if rs := s.newConn(s.idFor(wire), wire, ingress, dest); rs != nil {
-		s.b.accept(rs.conn, &tunnel.ConnInfo{Dest: dest})
+	if f := s.newConn(s.idFor(wire), wire, ingress, dest); f != nil {
+		s.b.accept(f.stream.Conn(), &tunnel.ConnInfo{Dest: dest})
 	}
 }
 
@@ -172,20 +172,20 @@ func (s *stream) idFor(wire uint64) string {
 }
 
 // conn returns the conn the relay calls wire, if it's open on this stream.
-func (s *stream) conn(wire uint64) *relayStream {
-	rs, ok := s.b.conns.Load(s.idFor(wire))
-	if !ok || rs.s != s {
+func (s *stream) conn(wire uint64) *relayFrames {
+	f, ok := s.b.conns.Load(s.idFor(wire))
+	if !ok || f.s != s {
 		return nil
 	}
-	return rs
+	return f
 }
 
 // endConns ends every conn on the stream, which the relay ended with it.
 func (s *stream) endConns() {
 	s.closed.Store(true)
-	s.b.conns.Range(func(_ string, rs *relayStream) bool {
-		if rs.s == s {
-			rs.end()
+	s.b.conns.Range(func(_ string, f *relayFrames) bool {
+		if f.s == s {
+			f.stream.PeerReset()
 		}
 		return true
 	})

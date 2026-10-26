@@ -105,7 +105,7 @@ type Backend struct {
 	ctx    context.Context
 
 	// Each open conn, by an id unique across streams.
-	conns *xsync.MapOf[string, *relayStream]
+	conns *xsync.MapOf[string, *relayFrames]
 
 	mu       sync.Mutex
 	token    string
@@ -156,7 +156,7 @@ func New(cfg Config) (*Backend, error) {
 		instance: instance,
 		target:   target,
 		creds:    creds,
-		conns:    xsync.NewMapOf[string, *relayStream](),
+		conns:    xsync.NewMapOf[string, *relayFrames](),
 		token:    cfg.Token,
 		tokenSet: make(chan struct{}),
 		liveCh:   make(chan struct{}),
@@ -222,8 +222,8 @@ func (b *Backend) Run(ctx context.Context, accept func(net.Conn, *tunnel.ConnInf
 	b.accept = accept
 	b.ctx = ctx
 	// A stream the relay moved off may still be finishing.
-	defer b.conns.Range(func(_ string, rs *relayStream) bool {
-		rs.end()
+	defer b.conns.Range(func(_ string, f *relayFrames) bool {
+		f.stream.PeerReset()
 		return true
 	})
 
@@ -248,8 +248,8 @@ func (b *Backend) Open(ctx context.Context, info *tunnel.ConnInfo) (net.Conn, er
 		return nil, errors.New("no stream holds the tunnel")
 	}
 	n := b.nextEgress.Add(1)
-	rs := s.newConn("e"+strconv.FormatUint(n, 10), clientConnIDFloor|n, egress, info.Dest)
-	if rs == nil {
+	f := s.newConn("e"+strconv.FormatUint(n, 10), clientConnIDFloor|n, egress, info.Dest)
+	if f == nil {
 		return nil, errors.New("the tunnel's stream ended")
 	}
 	host := info.Hostname
@@ -257,12 +257,12 @@ func (b *Backend) Open(ctx context.Context, info *tunnel.ConnInfo) (net.Conn, er
 		host = info.Dest.Host
 	}
 	s.send(&devtunnel.ConnectRequest{Frame: &devtunnel.ConnectRequest_Open{Open: &devtunnel.Open{
-		ConnId:   rs.wire,
+		ConnId:   f.wire,
 		Protocol: devtunnel.Protocol_PROTOCOL_TCP,
 		Host:     host,
 		Port:     uint32(info.Dest.Port),
 	}}})
-	return rs.conn, nil
+	return f.stream.Conn(), nil
 }
 
 // counters tracks conns opening (delta 1) and ending (delta -1).

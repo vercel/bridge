@@ -1,12 +1,11 @@
 package tunnel
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
-	"sync"
 
 	"github.com/puzpuzpuz/xsync/v3"
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
@@ -33,7 +32,7 @@ func NewStreamBackend(stream Stream) Backend {
 		stream: stream,
 		sendCh: make(chan *bridgev1.TunnelNetworkMessage, 64),
 		stop:   make(chan struct{}),
-		conns:  xsync.NewMapOf[string, *messageStream](),
+		conns:  xsync.NewMapOf[string, *messageFrames](),
 	}
 }
 
@@ -42,13 +41,13 @@ type streamBackend struct {
 	sendCh chan *bridgev1.TunnelNetworkMessage
 	// Closed once Run returns, so a Send waiting for room gives up.
 	stop  chan struct{}
-	conns *xsync.MapOf[string, *messageStream]
+	conns *xsync.MapOf[string, *messageFrames]
 }
 
 func (b *streamBackend) Run(ctx context.Context, accept func(net.Conn, *ConnInfo)) error {
 	defer close(b.stop)
-	defer b.conns.Range(func(_ string, s *messageStream) bool {
-		s.end()
+	defer b.conns.Range(func(_ string, f *messageFrames) bool {
+		f.stream.PeerReset()
 		return true
 	})
 
@@ -107,10 +106,10 @@ func (b *streamBackend) Run(ctx context.Context, accept func(net.Conn, *ConnInfo
 // the dial queue on it instead of each opening another.
 func (b *streamBackend) handle(ctx context.Context, msg *bridgev1.TunnelNetworkMessage, accept func(net.Conn, *ConnInfo)) {
 	id := msg.GetConnectionId()
-	s, ok := b.conns.Load(id)
+	f, ok := b.conns.Load(id)
 	if msg.GetError() != "" {
 		if ok {
-			s.end()
+			f.stream.PeerReset()
 		}
 		return
 	}
@@ -126,29 +125,28 @@ func (b *streamBackend) handle(ctx context.Context, msg *bridgev1.TunnelNetworkM
 			Hostname: msg.GetHostname(),
 		}
 		// This side sends from where the peer's conn was headed, back to it.
-		s = b.newStream(id, &ConnInfo{Source: info.Dest, Dest: info.Source, Hostname: info.Hostname})
-		b.conns.Store(id, s)
-		accept(s.conn(), info)
+		f = b.newConn(id, &ConnInfo{Source: info.Dest, Dest: info.Source, Hostname: info.Hostname})
+		accept(f.stream.Conn(), info)
 	}
-	s.push(ctx, msg.GetData())
+	f.stream.Deliver(ctx, msg.GetData())
 }
 
 func (b *streamBackend) Open(_ context.Context, info *ConnInfo) (net.Conn, error) {
 	id := plumbing.ConnectionID(info.Source.Host, info.Source.Port, info.Dest.Host, info.Dest.Port)
-	s := b.newStream(id, info)
-	b.conns.Store(id, s)
 	// Its first Data opens it.
-	return s.conn(), nil
+	return b.newConn(id, info).stream.Conn(), nil
 }
 
-func (b *streamBackend) newStream(id string, info *ConnInfo) *messageStream {
-	return &messageStream{
-		b:    b,
-		id:   id,
-		info: info,
-		in:   make(chan []byte, queuedMessages),
-		done: make(chan struct{}),
-	}
+// newConn registers a conn that sends as info says.
+func (b *streamBackend) newConn(id string, info *ConnInfo) *messageFrames {
+	f := &messageFrames{b: b, id: id, info: info}
+	f.stream = plumbing.NewMuxStream(f, plumbing.MuxConfig{
+		Queue:  queuedMessages,
+		Local:  addr(info.Source.String()),
+		Remote: addr(info.Dest.String()),
+	})
+	b.conns.Store(id, f)
+	return f
 }
 
 func (b *streamBackend) send(msg *bridgev1.TunnelNetworkMessage) error {
@@ -160,93 +158,42 @@ func (b *streamBackend) send(msg *bridgev1.TunnelNetworkMessage) error {
 	}
 }
 
-// messageStream is one conn's messages on the stream, as a plumbing.Stream.
-type messageStream struct {
+// messageFrames writes one conn's messages: every one addresses the conn, and
+// an error ends it.
+type messageFrames struct {
 	b  *streamBackend
 	id string
 	// As this side sends it.
-	info *ConnInfo
-	in   chan []byte
-	done chan struct{}
-	once sync.Once
+	info   *ConnInfo
+	stream *plumbing.MuxStream
 }
 
-var _ plumbing.Stream = (*messageStream)(nil)
-
-func (s *messageStream) conn() net.Conn {
-	return plumbing.NewMeteredConn(plumbing.NewStreamConn(s, addr(s.info.Source.String()), addr(s.info.Dest.String())), 0)
-}
-
-// push queues payload for Recv, waiting while the conn has a full queue.
-func (s *messageStream) push(ctx context.Context, payload []byte) {
-	if len(payload) == 0 {
-		return
-	}
-	select {
-	case s.in <- payload:
-	case <-s.done:
-	case <-ctx.Done():
-	}
-}
-
-func (s *messageStream) Recv() ([]byte, error) {
-	// A conn the peer ended drops what it hadn't read.
-	select {
-	case <-s.done:
-		return nil, net.ErrClosed
-	default:
-	}
-	select {
-	case p := <-s.in:
-		return p, nil
-	case <-s.done:
-		return nil, net.ErrClosed
-	}
-}
-
-func (s *messageStream) Send(p []byte) error {
-	select {
-	case <-s.done:
-		return net.ErrClosed
-	default:
-	}
-	return s.b.send(&bridgev1.TunnelNetworkMessage{
-		ConnectionId: s.id,
-		Source:       tunnelAddress(s.info.Source),
-		Dest:         tunnelAddress(s.info.Dest),
-		Hostname:     s.info.Hostname,
-		Data:         bytes.Clone(p),
+func (f *messageFrames) Data(payload []byte) error {
+	return f.b.send(&bridgev1.TunnelNetworkMessage{
+		ConnectionId: f.id,
+		Source:       tunnelAddress(f.info.Source),
+		Dest:         tunnelAddress(f.info.Dest),
+		Hostname:     f.info.Hostname,
+		Data:         payload,
 	})
 }
 
-// CloseSend ends the conn: the stream can't carry a half-close.
-func (s *messageStream) CloseSend() error {
-	s.end()
-	return nil
+// CloseWrite: the stream can't carry a half-close.
+func (f *messageFrames) CloseWrite() error { return errors.ErrUnsupported }
+
+func (f *messageFrames) Reset(reason string) error {
+	return f.b.send(&bridgev1.TunnelNetworkMessage{ConnectionId: f.id, Error: reason})
 }
 
-// Close ends the conn and tells the peer.
-func (s *messageStream) Close() error {
-	select {
-	case <-s.done:
-		return nil
-	default:
-	}
-	s.end()
-	return s.b.send(&bridgev1.TunnelNetworkMessage{ConnectionId: s.id, Error: "connection closed"})
-}
+// Window: the stream has no flow control; the queue holds the peer back.
+func (f *messageFrames) Window(int) error { return nil }
 
-func (s *messageStream) Done() <-chan struct{} { return s.done }
-
-// end forgets the conn, unless another has since taken its id.
-func (s *messageStream) end() {
-	s.once.Do(func() {
-		close(s.done)
-		s.b.conns.Compute(s.id, func(cur *messageStream, loaded bool) (*messageStream, bool) {
-			if !loaded {
-				return nil, true
-			}
-			return cur, cur == s
-		})
+// Release forgets the conn, unless another has since taken its id.
+func (f *messageFrames) Release() {
+	f.b.conns.Compute(f.id, func(cur *messageFrames, loaded bool) (*messageFrames, bool) {
+		if !loaded {
+			return nil, true
+		}
+		return cur, cur == f
 	})
 }
