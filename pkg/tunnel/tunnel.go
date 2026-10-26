@@ -58,7 +58,7 @@ func NewWithBackend(dialer plumbing.ContextDialer, backend Backend, opts ...Opti
 	t := &tunnelImpl{
 		dialer:  dialer,
 		backend: backend,
-		conns:   xsync.NewMapOf[string, *streamConn](),
+		conns:   xsync.NewMapOf[string, *connStream](),
 		done:    make(chan struct{}),
 		logger:  slog.Default(),
 	}
@@ -77,7 +77,7 @@ type tunnelImpl struct {
 	dialer    plumbing.ContextDialer
 	hijacker  mitm.Hijacker
 	backend   Backend
-	conns     *xsync.MapOf[string, *streamConn]
+	conns     *xsync.MapOf[string, *connStream]
 	bufs      sync.Pool
 	logger    *slog.Logger
 	done      chan struct{}
@@ -102,7 +102,7 @@ func (t *tunnelImpl) Start(ctx context.Context) {
 func (t *tunnelImpl) Close() error {
 	t.closeOnce.Do(func() {
 		t.cancel()
-		t.conns.Range(func(_ string, c *streamConn) bool {
+		t.conns.Range(func(_ string, c *connStream) bool {
 			c.finish()
 			return true
 		})
@@ -157,7 +157,7 @@ func (t *tunnelImpl) deliver(f Frame) {
 		}
 	case FrameWindow:
 		if ok {
-			c.meter.Grant(f.Bytes)
+			c.conn.Grant(f.Bytes)
 		}
 	}
 }
@@ -208,9 +208,9 @@ func (t *tunnelImpl) dial(f Frame) (net.Conn, error) {
 	return t.dialer.DialContext(t.ctx, "tcp", f.Conn.Dest.String())
 }
 
-// pump copies between local and c, through its meter, in both directions,
-// each through a buffer from the pool, until the conn is over.
-func (t *tunnelImpl) pump(local net.Conn, c *streamConn) {
+// pump copies between local and c.conn in both directions, each through a
+// buffer from the pool, until the conn is over.
+func (t *tunnelImpl) pump(local net.Conn, c *connStream) {
 	if !c.attach(local) {
 		return
 	}
@@ -225,16 +225,16 @@ func (t *tunnelImpl) pump(local net.Conn, c *streamConn) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		copyHalf(c.meter, local, *toPeer, c)
+		copyHalf(c.conn, local, *toPeer, c)
 	}()
 	go func() {
 		defer wg.Done()
-		copyHalf(local, c.meter, *fromPeer, c)
+		copyHalf(local, c.conn, *fromPeer, c)
 	}()
 	wg.Wait()
 	c.finish()
 
-	st := c.meter.Stats()
+	st := c.conn.Stats()
 	t.logger.Debug("Tunnel: connection closed",
 		"conn_id", c.id,
 		"bytes_sent", st.BytesWritten,
@@ -246,7 +246,7 @@ func (t *tunnelImpl) pump(local net.Conn, c *streamConn) {
 
 // copyHalf copies src to dst until src ends, then half-closes dst. A failure
 // either way abandons the conn.
-func copyHalf(dst net.Conn, src net.Conn, buf []byte, c *streamConn) {
+func copyHalf(dst net.Conn, src net.Conn, buf []byte, c *connStream) {
 	// Hides ReadFrom and WriteTo, which would copy through buffers of their own.
 	_, err := io.CopyBuffer(struct{ io.Writer }{dst}, struct{ io.Reader }{src}, buf)
 	if err != nil {
@@ -259,8 +259,8 @@ func copyHalf(dst net.Conn, src net.Conn, buf []byte, c *streamConn) {
 }
 
 // forget removes c, unless another conn has since taken its id.
-func (t *tunnelImpl) forget(c *streamConn) {
-	t.conns.Compute(c.id, func(cur *streamConn, loaded bool) (*streamConn, bool) {
+func (t *tunnelImpl) forget(c *connStream) {
+	t.conns.Compute(c.id, func(cur *connStream, loaded bool) (*connStream, bool) {
 		if !loaded {
 			return nil, true
 		}

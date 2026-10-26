@@ -22,7 +22,7 @@ import (
 	"github.com/puzpuzpuz/xsync/v3"
 	"github.com/segmentio/ksuid"
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
-	devtunnelv1 "github.com/vercel/bridge/api/go/vercel/api/dev_tunnel/v1"
+	"github.com/vercel/bridge/api/go/vercel/api/dev_tunnel/v1"
 	"github.com/vercel/bridge/pkg/plumbing"
 	"github.com/vercel/bridge/pkg/tunnel"
 	"google.golang.org/grpc"
@@ -101,7 +101,7 @@ type Backend struct {
 	creds    credentials.TransportCredentials
 
 	// Set by Run, before any stream.
-	rpc     devtunnelv1.TunnelServiceClient
+	rpc     devtunnel.TunnelServiceClient
 	deliver func(tunnel.Frame)
 	ctx     context.Context
 
@@ -236,7 +236,7 @@ func (b *Backend) Run(ctx context.Context, deliver func(tunnel.Frame)) error {
 		return fmt.Errorf("creating relay client: %w", err)
 	}
 	defer cc.Close()
-	b.rpc = devtunnelv1.NewTunnelServiceClient(cc)
+	b.rpc = devtunnel.NewTunnelServiceClient(cc)
 	b.deliver = deliver
 	b.ctx = ctx
 
@@ -277,9 +277,9 @@ func (b *Backend) Open(ctx context.Context, id string, conn *tunnel.ConnInfo) er
 	if host == "" {
 		host = conn.Dest.Host
 	}
-	s.send(&devtunnelv1.ConnectRequest{Frame: &devtunnelv1.ConnectRequest_Open{Open: &devtunnelv1.Open{
+	s.send(&devtunnel.ConnectRequest{Frame: &devtunnel.ConnectRequest_Open{Open: &devtunnel.Open{
 		ConnId:   wire,
-		Protocol: devtunnelv1.Protocol_PROTOCOL_TCP,
+		Protocol: devtunnel.Protocol_PROTOCOL_TCP,
 		Host:     host,
 		Port:     uint32(conn.Dest.Port),
 	}}})
@@ -294,14 +294,14 @@ func (b *Backend) Send(f tunnel.Frame) {
 	switch f.Kind {
 	case tunnel.FrameData:
 		b.bytesSent.Add(int64(len(f.Payload)))
-		r.s.send(&devtunnelv1.ConnectRequest{Frame: &devtunnelv1.ConnectRequest_Data{Data: &devtunnelv1.Data{ConnId: r.wire, Payload: f.Payload}}})
+		r.s.send(&devtunnel.ConnectRequest{Frame: &devtunnel.ConnectRequest_Data{Data: &devtunnel.Data{ConnId: r.wire, Payload: f.Payload}}})
 	case tunnel.FrameCloseWrite:
-		r.s.send(&devtunnelv1.ConnectRequest{Frame: &devtunnelv1.ConnectRequest_Close{Close: &devtunnelv1.Close{ConnId: r.wire}}})
+		r.s.send(&devtunnel.ConnectRequest{Frame: &devtunnel.ConnectRequest_Close{Close: &devtunnel.Close{ConnId: r.wire}}})
 	case tunnel.FrameReset:
 		r.s.send(resetFrame(r.wire, f.Reason))
 		b.untrack(f.ConnID, r.s)
 	case tunnel.FrameWindow:
-		r.s.send(&devtunnelv1.ConnectRequest{Frame: &devtunnelv1.ConnectRequest_Window{Window: &devtunnelv1.Window{ConnId: r.wire, Bytes: uint32(f.Bytes)}}})
+		r.s.send(&devtunnel.ConnectRequest{Frame: &devtunnel.ConnectRequest_Window{Window: &devtunnel.Window{ConnId: r.wire, Bytes: uint32(f.Bytes)}}})
 	}
 }
 

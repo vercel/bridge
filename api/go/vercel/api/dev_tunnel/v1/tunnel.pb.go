@@ -7,7 +7,7 @@
 // 	protoc        (unknown)
 // source: vercel/api/dev_tunnel/v1/tunnel.proto
 
-package dev_tunnelv1
+package devtunnel
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -1052,8 +1052,8 @@ const file_vercel_api_dev_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\fPROTOCOL_TCP\x10\x012\xce\x01\n" +
 	"\rTunnelService\x12b\n" +
 	"\aConnect\x12(.vercel.api.dev_tunnel.v1.ConnectRequest\x1a).vercel.api.dev_tunnel.v1.ConnectResponse(\x010\x01\x12Y\n" +
-	"\x04Dial\x12%.vercel.api.dev_tunnel.v1.DialRequest\x1a&.vercel.api.dev_tunnel.v1.DialResponse(\x010\x01B\xf1\x01\n" +
-	"\x1ccom.vercel.api.dev_tunnel.v1B\vTunnelProtoP\x01ZEgithub.com/vercel/bridge/api/go/vercel/api/dev_tunnel/v1;dev_tunnelv1\xa2\x02\x03VAD\xaa\x02\x17Vercel.Api.DevTunnel.V1\xca\x02\x17Vercel\\Api\\DevTunnel\\V1\xe2\x02#Vercel\\Api\\DevTunnel\\V1\\GPBMetadata\xea\x02\x1aVercel::Api::DevTunnel::V1b\x06proto3"
+	"\x04Dial\x12%.vercel.api.dev_tunnel.v1.DialRequest\x1a&.vercel.api.dev_tunnel.v1.DialResponse(\x010\x01B\xee\x01\n" +
+	"\x1ccom.vercel.api.dev_tunnel.v1B\vTunnelProtoP\x01ZBgithub.com/vercel/bridge/api/go/vercel/api/dev_tunnel/v1;devtunnel\xa2\x02\x03VAD\xaa\x02\x17Vercel.Api.DevTunnel.V1\xca\x02\x17Vercel\\Api\\DevTunnel\\V1\xe2\x02#Vercel\\Api\\DevTunnel\\V1\\GPBMetadata\xea\x02\x1aVercel::Api::DevTunnel::V1b\x06proto3"
 
 var (
 	file_vercel_api_dev_tunnel_v1_tunnel_proto_rawDescOnce sync.Once

@@ -11,12 +11,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	devtunnelv1 "github.com/vercel/bridge/api/go/vercel/api/dev_tunnel/v1"
+	"github.com/vercel/bridge/api/go/vercel/api/dev_tunnel/v1"
 	"github.com/vercel/bridge/pkg/tunnel"
 	"google.golang.org/grpc/metadata"
 )
 
-var heartbeat = &devtunnelv1.ConnectRequest{Frame: &devtunnelv1.ConnectRequest_Heartbeat{Heartbeat: &devtunnelv1.Heartbeat{}}}
+var heartbeat = &devtunnel.ConnectRequest{Frame: &devtunnel.ConnectRequest_Heartbeat{Heartbeat: &devtunnel.Heartbeat{}}}
 
 // stream is one Connect call. The relay ends every conn on it with it.
 type stream struct {
@@ -114,32 +114,32 @@ func (s *stream) heartbeats() {
 }
 
 // handle passes one of the relay's frames to the tunnel.
-func (s *stream) handle(msg *devtunnelv1.ConnectResponse, moving func()) {
+func (s *stream) handle(msg *devtunnel.ConnectResponse, moving func()) {
 	switch f := msg.GetFrame().(type) {
-	case *devtunnelv1.ConnectResponse_Heartbeat:
+	case *devtunnel.ConnectResponse_Heartbeat:
 		if s.held.CompareAndSwap(false, true) {
 			s.b.holding(s)
 		}
-	case *devtunnelv1.ConnectResponse_Reconnect:
+	case *devtunnel.ConnectResponse_Reconnect:
 		s.b.moving(s)
 		moving()
-	case *devtunnelv1.ConnectResponse_Open:
+	case *devtunnel.ConnectResponse_Open:
 		s.open(f.Open)
-	case *devtunnelv1.ConnectResponse_Data:
+	case *devtunnel.ConnectResponse_Data:
 		if id, ok := s.routed(f.Data.GetConnId()); ok {
 			s.b.bytesReceived.Add(int64(len(f.Data.GetPayload())))
 			s.b.deliver(tunnel.Frame{Kind: tunnel.FrameData, ConnID: id, Payload: f.Data.GetPayload()})
 		}
-	case *devtunnelv1.ConnectResponse_Close:
+	case *devtunnel.ConnectResponse_Close:
 		if id, ok := s.routed(f.Close.GetConnId()); ok {
 			s.b.deliver(tunnel.Frame{Kind: tunnel.FrameCloseWrite, ConnID: id})
 		}
-	case *devtunnelv1.ConnectResponse_Reset_:
+	case *devtunnel.ConnectResponse_Reset_:
 		if id, ok := s.routed(f.Reset_.GetConnId()); ok && s.b.untrack(id, s) {
 			s.logger.Debug("Relay reset the connection", "conn_id", id, "reason", f.Reset_.GetReason())
 			s.b.deliver(tunnel.Frame{Kind: tunnel.FrameReset, ConnID: id, Reason: f.Reset_.GetReason()})
 		}
-	case *devtunnelv1.ConnectResponse_Window:
+	case *devtunnel.ConnectResponse_Window:
 		if id, ok := s.routed(f.Window.GetConnId()); ok {
 			s.b.deliver(tunnel.Frame{Kind: tunnel.FrameWindow, ConnID: id, Bytes: int(f.Window.GetBytes())})
 		}
@@ -148,10 +148,10 @@ func (s *stream) handle(msg *devtunnelv1.ConnectResponse, moving func()) {
 
 // open hands one of the deployment's conns to the tunnel, which connects it
 // to the app.
-func (s *stream) open(open *devtunnelv1.Open) {
+func (s *stream) open(open *devtunnel.Open) {
 	wire := open.GetConnId()
 	port := s.b.cfg.Port
-	if open.GetProtocol() != devtunnelv1.Protocol_PROTOCOL_TCP || int(open.GetPort()) != port {
+	if open.GetProtocol() != devtunnel.Protocol_PROTOCOL_TCP || int(open.GetPort()) != port {
 		s.send(resetFrame(wire, fmt.Sprintf("bridge serves only port %d", port)))
 		return
 	}
@@ -209,7 +209,7 @@ func (s *stream) endConns() {
 	})
 }
 
-func (s *stream) send(frame *devtunnelv1.ConnectRequest) {
+func (s *stream) send(frame *devtunnel.ConnectRequest) {
 	s.out.push(frame)
 }
 
@@ -217,11 +217,11 @@ func (s *stream) send(frame *devtunnelv1.ConnectRequest) {
 // window; the rest is small.
 type outbox struct {
 	mu     sync.Mutex
-	frames []*devtunnelv1.ConnectRequest
+	frames []*devtunnel.ConnectRequest
 	wake   chan struct{}
 }
 
-func (o *outbox) push(frame *devtunnelv1.ConnectRequest) {
+func (o *outbox) push(frame *devtunnel.ConnectRequest) {
 	o.mu.Lock()
 	o.frames = append(o.frames, frame)
 	o.mu.Unlock()
@@ -231,7 +231,7 @@ func (o *outbox) push(frame *devtunnelv1.ConnectRequest) {
 	}
 }
 
-func (o *outbox) pop(ctx context.Context) (*devtunnelv1.ConnectRequest, bool) {
+func (o *outbox) pop(ctx context.Context) (*devtunnel.ConnectRequest, bool) {
 	for {
 		o.mu.Lock()
 		if len(o.frames) > 0 {
@@ -250,6 +250,6 @@ func (o *outbox) pop(ctx context.Context) (*devtunnelv1.ConnectRequest, bool) {
 	}
 }
 
-func resetFrame(id uint64, reason string) *devtunnelv1.ConnectRequest {
-	return &devtunnelv1.ConnectRequest{Frame: &devtunnelv1.ConnectRequest_Reset_{Reset_: &devtunnelv1.Reset{ConnId: id, Reason: reason}}}
+func resetFrame(id uint64, reason string) *devtunnel.ConnectRequest {
+	return &devtunnel.ConnectRequest{Frame: &devtunnel.ConnectRequest_Reset_{Reset_: &devtunnel.Reset{ConnId: id, Reason: reason}}}
 }

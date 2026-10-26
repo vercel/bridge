@@ -6,7 +6,6 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/vercel/bridge/pkg/plumbing"
 )
@@ -19,39 +18,36 @@ const (
 	maxQueued = 256 << 10
 )
 
-// streamConn is one conn's side on the tunnel's transport, as a net.Conn: Read
-// takes what the peer sent, Write sends to it, and CloseWrite half-closes it.
-// The tunnel uses it through meter, which holds writes to the conn's window.
-type streamConn struct {
-	t     *tunnelImpl
-	id    string
-	info  *ConnInfo
-	meter plumbing.MeteredConn
+// connStream is one conn's frames on the tunnel's transport, as a
+// plumbing.Stream. The tunnel uses it as conn: a net.Conn over it, metered
+// to the conn's window.
+type connStream struct {
+	t    *tunnelImpl
+	id   string
+	info *ConnInfo
+	conn plumbing.MeteredConn
 	// 0 when the backend has no flow control.
 	window    int
 	halfClose bool
 
-	// From the peer, not yet read.
+	// From the peer, not yet received.
 	inMu    sync.Mutex
 	in      [][]byte
 	inBytes int
 	inEOF   bool
 	inWake  chan struct{}
 	inRoom  chan struct{}
-	// The rest of the chunk Read is on; only Read touches it.
-	pending []byte
 
 	closeSent atomic.Bool
-
-	local    atomic.Pointer[net.Conn]
-	done     chan struct{}
-	doneOnce sync.Once
+	local     atomic.Pointer[net.Conn]
+	done      chan struct{}
+	doneOnce  sync.Once
 }
 
-var _ net.Conn = (*streamConn)(nil)
+var _ plumbing.Stream = (*connStream)(nil)
 
-func (t *tunnelImpl) newConn(id string, info *ConnInfo) *streamConn {
-	c := &streamConn{
+func (t *tunnelImpl) newConn(id string, info *ConnInfo) *connStream {
+	c := &connStream{
 		t:         t,
 		id:        id,
 		info:      info,
@@ -61,42 +57,42 @@ func (t *tunnelImpl) newConn(id string, info *ConnInfo) *streamConn {
 		inRoom:    make(chan struct{}, 1),
 		done:      make(chan struct{}),
 	}
-	c.meter = plumbing.NewMeteredConn(c, c.window)
+	c.conn = plumbing.NewMeteredConn(
+		plumbing.NewStreamConn(c, addr(info.Source.String()), addr(info.Dest.String())),
+		c.window,
+	)
 	return c
 }
 
-func (c *streamConn) Read(p []byte) (int, error) {
-	for len(c.pending) == 0 {
+func (c *connStream) Recv() ([]byte, error) {
+	for {
 		if c.isDone() {
-			return 0, net.ErrClosed
+			return nil, net.ErrClosed
 		}
 		c.inMu.Lock()
 		if len(c.in) > 0 {
-			c.pending = c.in[0]
+			chunk := c.in[0]
 			c.in[0] = nil
 			c.in = c.in[1:]
 			c.inMu.Unlock()
-			break
+			c.consumed(len(chunk))
+			return chunk, nil
 		}
 		eof := c.inEOF
 		c.inMu.Unlock()
 		if eof {
-			return 0, io.EOF
+			return nil, io.EOF
 		}
 		select {
 		case <-c.inWake:
 		case <-c.done:
 		}
 	}
-	n := copy(p, c.pending)
-	c.pending = c.pending[n:]
-	c.consumed(n)
-	return n, nil
 }
 
-// consumed gives back what Read took: as window to a peer with flow control,
+// consumed gives back what Recv took: as window to a peer with flow control,
 // and as room in the queue to one without.
-func (c *streamConn) consumed(n int) {
+func (c *connStream) consumed(n int) {
 	if c.window > 0 {
 		c.send(Frame{Kind: FrameWindow, Bytes: n})
 		return
@@ -107,23 +103,22 @@ func (c *streamConn) consumed(n int) {
 	wake(c.inRoom)
 }
 
-func (c *streamConn) Write(p []byte) (int, error) {
-	written := 0
-	for written < len(p) {
+func (c *connStream) Send(p []byte) error {
+	for len(p) > 0 {
 		if c.isDone() {
-			return written, net.ErrClosed
+			return net.ErrClosed
 		}
-		size := min(len(p)-written, maxFrame)
-		// The backend may send it after Write returns.
-		c.send(Frame{Kind: FrameData, Payload: bytes.Clone(p[written : written+size])})
-		written += size
+		size := min(len(p), maxFrame)
+		// The backend may send it after Send returns.
+		c.send(Frame{Kind: FrameData, Payload: bytes.Clone(p[:size])})
+		p = p[size:]
 	}
-	return written, nil
+	return nil
 }
 
-// CloseWrite tells the peer this side has nothing more to send. Over a
+// CloseSend tells the peer this side has nothing more to send. Over a
 // transport without half-close, it ends the conn.
-func (c *streamConn) CloseWrite() error {
+func (c *connStream) CloseSend() error {
 	if !c.halfClose {
 		c.finish()
 		return nil
@@ -134,23 +129,17 @@ func (c *streamConn) CloseWrite() error {
 	return nil
 }
 
-// Done is closed once the conn is over.
-func (c *streamConn) Done() <-chan struct{} { return c.done }
-
 // Close resets the conn.
-func (c *streamConn) Close() error {
+func (c *connStream) Close() error {
 	c.reset("closed")
 	return nil
 }
 
-func (c *streamConn) LocalAddr() net.Addr              { return addr(c.info.Source.String()) }
-func (c *streamConn) RemoteAddr() net.Addr             { return addr(c.info.Dest.String()) }
-func (c *streamConn) SetDeadline(time.Time) error      { return nil }
-func (c *streamConn) SetReadDeadline(time.Time) error  { return nil }
-func (c *streamConn) SetWriteDeadline(time.Time) error { return nil }
+// Done is closed once the conn is over.
+func (c *connStream) Done() <-chan struct{} { return c.done }
 
 // deliver queues payload from the peer.
-func (c *streamConn) deliver(p []byte) {
+func (c *connStream) deliver(p []byte) {
 	if len(p) == 0 {
 		return
 	}
@@ -177,9 +166,9 @@ func (c *streamConn) deliver(p []byte) {
 	}
 }
 
-// peerClosed: the peer has nothing more to send. Read returns io.EOF once it
+// peerClosed: the peer has nothing more to send. Recv returns io.EOF once it
 // has returned the rest.
-func (c *streamConn) peerClosed() {
+func (c *connStream) peerClosed() {
 	c.inMu.Lock()
 	c.inEOF = true
 	c.inMu.Unlock()
@@ -188,7 +177,7 @@ func (c *streamConn) peerClosed() {
 
 // attach hands the conn its local end, which it closes when it's over.
 // Reports false if the conn is already over.
-func (c *streamConn) attach(local net.Conn) bool {
+func (c *connStream) attach(local net.Conn) bool {
 	c.local.Store(&local)
 	if c.isDone() {
 		_ = local.Close()
@@ -198,12 +187,12 @@ func (c *streamConn) attach(local net.Conn) bool {
 }
 
 // reset ends the conn and tells the peer why.
-func (c *streamConn) reset(reason string) { c.end(reason, true) }
+func (c *connStream) reset(reason string) { c.end(reason, true) }
 
 // finish ends the conn without telling the peer: it's done, or already knows.
-func (c *streamConn) finish() { c.end("", false) }
+func (c *connStream) finish() { c.end("", false) }
 
-func (c *streamConn) end(reason string, tell bool) {
+func (c *connStream) end(reason string, tell bool) {
 	c.doneOnce.Do(func() {
 		if tell {
 			c.send(Frame{Kind: FrameReset, Reason: reason})
@@ -217,7 +206,7 @@ func (c *streamConn) end(reason string, tell bool) {
 	})
 }
 
-func (c *streamConn) isDone() bool {
+func (c *connStream) isDone() bool {
 	select {
 	case <-c.done:
 		return true
@@ -226,7 +215,7 @@ func (c *streamConn) isDone() bool {
 	}
 }
 
-func (c *streamConn) send(f Frame) {
+func (c *connStream) send(f Frame) {
 	f.ConnID = c.id
 	f.Conn = c.info
 	c.t.backend.Send(f)

@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
-	devtunnelv1 "github.com/vercel/bridge/api/go/vercel/api/dev_tunnel/v1"
+	"github.com/vercel/bridge/api/go/vercel/api/dev_tunnel/v1"
 	"github.com/vercel/bridge/pkg/tunnel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -28,7 +28,7 @@ const frameBytes = 64 << 10
 // fakeRelay stands in for api-dev-tunnel, handing each Connect call to the
 // test.
 type fakeRelay struct {
-	devtunnelv1.UnimplementedTunnelServiceServer
+	devtunnel.UnimplementedTunnelServiceServer
 	url     string
 	streams chan *relayStream
 	// refuse ends a call before it reaches the test, unless it returns nil.
@@ -37,8 +37,8 @@ type fakeRelay struct {
 
 type relayStream struct {
 	md   metadata.MD
-	call grpc.BidiStreamingServer[devtunnelv1.ConnectRequest, devtunnelv1.ConnectResponse]
-	recv chan *devtunnelv1.ConnectRequest
+	call grpc.BidiStreamingServer[devtunnel.ConnectRequest, devtunnel.ConnectResponse]
+	recv chan *devtunnel.ConnectRequest
 	end  chan error
 }
 
@@ -48,20 +48,20 @@ func startRelay(t *testing.T) *fakeRelay {
 	require.NoError(t, err)
 	r := &fakeRelay{url: "http://" + lis.Addr().String(), streams: make(chan *relayStream, 8)}
 	srv := grpc.NewServer()
-	devtunnelv1.RegisterTunnelServiceServer(srv, r)
+	devtunnel.RegisterTunnelServiceServer(srv, r)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 	return r
 }
 
-func (r *fakeRelay) Connect(call grpc.BidiStreamingServer[devtunnelv1.ConnectRequest, devtunnelv1.ConnectResponse]) error {
+func (r *fakeRelay) Connect(call grpc.BidiStreamingServer[devtunnel.ConnectRequest, devtunnel.ConnectResponse]) error {
 	md, _ := metadata.FromIncomingContext(call.Context())
 	if r.refuse != nil {
 		if err := r.refuse(md); err != nil {
 			return err
 		}
 	}
-	s := &relayStream{md: md, call: call, recv: make(chan *devtunnelv1.ConnectRequest, 256), end: make(chan error, 1)}
+	s := &relayStream{md: md, call: call, recv: make(chan *devtunnel.ConnectRequest, 256), end: make(chan error, 1)}
 	go func() {
 		defer close(s.recv)
 		for {
@@ -92,18 +92,18 @@ func (r *fakeRelay) next(t *testing.T) *relayStream {
 	}
 }
 
-func (s *relayStream) send(t *testing.T, msg *devtunnelv1.ConnectResponse) {
+func (s *relayStream) send(t *testing.T, msg *devtunnel.ConnectResponse) {
 	t.Helper()
 	require.NoError(t, s.call.Send(msg))
 }
 
 // hold makes the stream the tunnel's, as the relay's first heartbeat does.
 func (s *relayStream) hold(t *testing.T) {
-	s.send(t, &devtunnelv1.ConnectResponse{Frame: &devtunnelv1.ConnectResponse_Heartbeat{Heartbeat: &devtunnelv1.Heartbeat{}}})
+	s.send(t, &devtunnel.ConnectResponse{Frame: &devtunnel.ConnectResponse_Heartbeat{Heartbeat: &devtunnel.Heartbeat{}}})
 }
 
 // expect returns the next frame from the client other than a heartbeat.
-func (s *relayStream) expect(t *testing.T) *devtunnelv1.ConnectRequest {
+func (s *relayStream) expect(t *testing.T) *devtunnel.ConnectRequest {
 	t.Helper()
 	timeout := time.After(testTimeout)
 	for {
@@ -133,22 +133,22 @@ func (s *relayStream) expectData(t *testing.T, id uint64, n int) []byte {
 	return got
 }
 
-func open(id uint64, port int) *devtunnelv1.ConnectResponse {
-	return &devtunnelv1.ConnectResponse{Frame: &devtunnelv1.ConnectResponse_Open{Open: &devtunnelv1.Open{
-		ConnId: id, Protocol: devtunnelv1.Protocol_PROTOCOL_TCP, Port: uint32(port),
+func open(id uint64, port int) *devtunnel.ConnectResponse {
+	return &devtunnel.ConnectResponse{Frame: &devtunnel.ConnectResponse_Open{Open: &devtunnel.Open{
+		ConnId: id, Protocol: devtunnel.Protocol_PROTOCOL_TCP, Port: uint32(port),
 	}}}
 }
 
-func data(id uint64, payload string) *devtunnelv1.ConnectResponse {
-	return &devtunnelv1.ConnectResponse{Frame: &devtunnelv1.ConnectResponse_Data{Data: &devtunnelv1.Data{ConnId: id, Payload: []byte(payload)}}}
+func data(id uint64, payload string) *devtunnel.ConnectResponse {
+	return &devtunnel.ConnectResponse{Frame: &devtunnel.ConnectResponse_Data{Data: &devtunnel.Data{ConnId: id, Payload: []byte(payload)}}}
 }
 
-func closeConn(id uint64) *devtunnelv1.ConnectResponse {
-	return &devtunnelv1.ConnectResponse{Frame: &devtunnelv1.ConnectResponse_Close{Close: &devtunnelv1.Close{ConnId: id}}}
+func closeConn(id uint64) *devtunnel.ConnectResponse {
+	return &devtunnel.ConnectResponse{Frame: &devtunnel.ConnectResponse_Close{Close: &devtunnel.Close{ConnId: id}}}
 }
 
-func window(id uint64, n int) *devtunnelv1.ConnectResponse {
-	return &devtunnelv1.ConnectResponse{Frame: &devtunnelv1.ConnectResponse_Window{Window: &devtunnelv1.Window{ConnId: id, Bytes: uint32(n)}}}
+func window(id uint64, n int) *devtunnel.ConnectResponse {
+	return &devtunnel.ConnectResponse{Frame: &devtunnel.ConnectResponse_Window{Window: &devtunnel.Window{ConnId: id, Bytes: uint32(n)}}}
 }
 
 // newTunnel runs a tunnel over a Backend for r.
@@ -286,7 +286,7 @@ func TestEgressLeavesThroughTheDeployment(t *testing.T) {
 	assert.GreaterOrEqual(t, o.GetConnId(), clientConnIDFloor)
 	assert.Equal(t, "example.com", o.GetHost())
 	assert.Equal(t, uint32(443), o.GetPort())
-	assert.Equal(t, devtunnelv1.Protocol_PROTOCOL_TCP, o.GetProtocol())
+	assert.Equal(t, devtunnel.Protocol_PROTOCOL_TCP, o.GetProtocol())
 	id := o.GetConnId()
 
 	_, err := app.Write([]byte("GET"))
@@ -300,7 +300,7 @@ func TestEgressLeavesThroughTheDeployment(t *testing.T) {
 	assert.Equal(t, "200", string(buf))
 
 	// The deployment couldn't reach it, or it went away.
-	s.send(t, &devtunnelv1.ConnectResponse{Frame: &devtunnelv1.ConnectResponse_Reset_{Reset_: &devtunnelv1.Reset{ConnId: id, Reason: "refused"}}})
+	s.send(t, &devtunnel.ConnectResponse{Frame: &devtunnel.ConnectResponse_Reset_{Reset_: &devtunnel.Reset{ConnId: id, Reason: "refused"}}})
 	_ = app.SetReadDeadline(time.Now().Add(testTimeout))
 	_, err = app.Read(buf)
 	assert.Error(t, err)
@@ -330,7 +330,7 @@ func TestReconnectKeepsTheOldStreamsConns(t *testing.T) {
 	first.send(t, data(1, "a"))
 	assert.Equal(t, "a", string(first.expectData(t, 1, 1)))
 
-	first.send(t, &devtunnelv1.ConnectResponse{Frame: &devtunnelv1.ConnectResponse_Reconnect{Reconnect: &devtunnelv1.Reconnect{}}})
+	first.send(t, &devtunnel.ConnectResponse{Frame: &devtunnel.ConnectResponse_Reconnect{Reconnect: &devtunnel.Reconnect{}}})
 	second := r.next(t)
 	assert.Equal(t, []string{"test-instance"}, second.md.Get(instanceHeader))
 	second.hold(t)

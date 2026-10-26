@@ -7,7 +7,7 @@
 // - protoc             (unknown)
 // source: vercel/api/dev_tunnel/v1/tunnel.proto
 
-package dev_tunnelv1
+package devtunnel
 
 import (
 	context "context"
