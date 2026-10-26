@@ -1,0 +1,144 @@
+// Vendored from vercel/api, services/api-dev-tunnel/proto/tunnel/v1/tunnel.proto.
+// Edit it there and copy it here.
+
+syntax = "proto3";
+
+package vercel.api.dev_tunnel.v1;
+
+// Relays TCP connections between the tunnel's deployment and the developer's
+// machine. Payloads are opaque bytes; nothing here interprets them.
+service TunnelService {
+  // The stream `vc dev --tunnel` holds open, carrying every conn the
+  // deployment dials and every conn the client opens through the deployment.
+  // Authenticated with the client token
+  // (`authorization: Bearer`), which the next create-session replaces: a CLI
+  // refused with UNAUTHENTICATED on a reconnect asks for a new one.
+  //
+  // One client per tunnel: another stream fails with ALREADY_EXISTS, unless it
+  // carries the same `x-vercel-dev-tunnel-instance` (1 to 64 letters, digits
+  // or dashes, one per CLI process). Then it replaces the old stream, which
+  // ends with ABORTED, so a CLI can reconnect while its old stream is still
+  // open on the service. The CLI sends a Heartbeat at least every 30s; a
+  // stream silent for three ends with DEADLINE_EXCEEDED, and one ending with
+  // UNAVAILABLE means reconnect. A CLI that stops reading the stream while
+  // the service has frames for it has it end with RESOURCE_EXHAUSTED.
+  //
+  // A pod shutting down sends Reconnect and refuses new streams with
+  // UNAVAILABLE. Once the CLI's new stream holds the tunnel elsewhere, the old
+  // one gets no new conns and ends with ABORTED when its open ones are done.
+  rpc Connect(stream ConnectRequest) returns (stream ConnectResponse);
+
+  // One conn from the deployment: a TCP connection to a port on the
+  // developer's machine. The first message is the target; the rest carry
+  // payload. Ending the request stream half-closes the conn, and `end` says the
+  // developer's side has; the call ends once both have, and fails if either
+  // side resets. With no client connected, it waits up to 5s for one, then
+  // fails with UNAVAILABLE. A tunnel carries at most 256 conns at once; more
+  // wait up to 30s for one to end, then fail with RESOURCE_EXHAUSTED, as do
+  // any past 256 waiting. Authenticated with the server token
+  // (`authorization: Bearer`).
+  rpc Dial(stream DialRequest) returns (stream DialResponse);
+}
+
+enum Protocol {
+  PROTOCOL_UNSPECIFIED = 0;
+  PROTOCOL_TCP = 1;
+}
+
+// CLI to service.
+message ConnectRequest {
+  oneof frame {
+    Data data = 1;
+    Close close = 2;
+    Reset reset = 3;
+    Heartbeat heartbeat = 4;
+    Window window = 5;
+    Open open = 6;
+  }
+}
+
+// Service to CLI.
+message ConnectResponse {
+  oneof frame {
+    Open open = 1;
+    Data data = 2;
+    Close close = 3;
+    Reset reset = 4;
+    Heartbeat heartbeat = 5;
+    Window window = 6;
+    Reconnect reconnect = 7;
+  }
+}
+
+// A new conn. From the service, the CLI connects to `port` on the developer's
+// machine, or resets the conn if it doesn't serve that port. From the client,
+// the deployment connects to `host` and `port`, resolving `host` as its own
+// code would, and the service resets the conn if it can't. The service numbers
+// its conns from 1; a client numbers its own from 2^63, so the two never meet.
+message Open {
+  uint64 conn_id = 1;
+  Protocol protocol = 2;
+  uint32 port = 3;
+  // A hostname or IP address. Only a client's Open has one.
+  string host = 4;
+}
+
+// No more than the conn's window allows (see Window).
+message Data {
+  uint64 conn_id = 1;
+  bytes payload = 2;
+}
+
+// The sender has nothing more to send (TCP half-close). A conn is over once
+// both sides have closed, or either has reset.
+message Close {
+  uint64 conn_id = 1;
+}
+
+// Abandons the conn in both directions, e.g. connection refused.
+message Reset {
+  uint64 conn_id = 1;
+  string reason = 2;
+}
+
+// Lets the peer send `bytes` more of a conn's Data, as the sender of this
+// consumes what it received. Each side starts each conn able to send 256 KiB.
+// A client that sends past its window, or grants back more than it was sent,
+// has the conn reset.
+message Window {
+  uint64 conn_id = 1;
+  uint32 bytes = 2;
+}
+
+// Sent both ways every 30s, inside the ALB's idle timeout. The service drops a
+// client it hasn't heard from in three. The service also sends one as soon as
+// a Connect stream holds the tunnel, so the CLI knows it's live.
+message Heartbeat {}
+
+// This pod is shutting down. The CLI opens a new stream now, and keeps this one
+// until the service ends it: it still carries the conns already open on it.
+message Reconnect {}
+
+message DialRequest {
+  oneof frame {
+    // First message only.
+    DialTarget target = 1;
+    bytes payload = 2;
+  }
+}
+
+message DialTarget {
+  Protocol protocol = 1;
+  uint32 port = 2;
+}
+
+message DialResponse {
+  oneof frame {
+    bytes payload = 1;
+    // The developer's side has nothing more to send. Sent once; more payload
+    // may still go the other way.
+    DialEnd end = 2;
+  }
+}
+
+message DialEnd {}

@@ -4,17 +4,20 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"os/user"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/urfave/cli/v3"
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"github.com/vercel/bridge/pkg/conntrack"
+	"github.com/vercel/bridge/pkg/devtunnel"
 	bridgedns "github.com/vercel/bridge/pkg/dns"
 	"github.com/vercel/bridge/pkg/fsmount"
 	"github.com/vercel/bridge/pkg/grpcutil"
@@ -24,6 +27,12 @@ import (
 	"github.com/vercel/bridge/pkg/plumbing"
 	"github.com/vercel/bridge/pkg/probe"
 	"github.com/vercel/bridge/pkg/tunnel"
+	"google.golang.org/grpc"
+)
+
+const (
+	tunnelProtocolBridge    = "bridge"
+	tunnelProtocolDevTunnel = "dev-tunnel"
 )
 
 func Intercept() *cli.Command {
@@ -34,7 +43,7 @@ func Intercept() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "server-addr",
-				Usage:    "Address of the bridge proxy server (e.g. localhost:9090 or k8spf:///pod.ns:9090)",
+				Usage:    "Address of the bridge proxy server (e.g. localhost:9090 or k8spf:///pod.ns:9090), or the relay's URL with --tunnel-protocol=dev-tunnel",
 				Sources:  cli.EnvVars("BRIDGE_SERVER_ADDR"),
 				Required: true,
 			},
@@ -75,6 +84,22 @@ func Intercept() *cli.Command {
 				Value:   ":8080",
 				Sources: cli.EnvVars(meta.EnvInterceptorAddr),
 			},
+			&cli.StringFlag{
+				Name:    "tunnel-protocol",
+				Usage:   `What --server-addr speaks: "bridge" for a bridge proxy server, or "dev-tunnel" for api-dev-tunnel, the relay ` + "`vc dev --tunnel`" + ` uses`,
+				Value:   tunnelProtocolBridge,
+				Sources: cli.EnvVars("BRIDGE_TUNNEL_PROTOCOL"),
+			},
+			&cli.StringFlag{
+				Name:    "tunnel-token",
+				Usage:   "The dev tunnel's client token, from create-session. Without one the intercept waits for InterceptorService.SetTunnelToken",
+				Sources: cli.EnvVars("BRIDGE_TUNNEL_TOKEN"),
+			},
+			&cli.StringFlag{
+				Name:    "tunnel-instance",
+				Usage:   "The dev tunnel client's instance, 1 to 64 letters, digits or dashes. A restarted intercept with the same one takes the tunnel back at once",
+				Sources: cli.EnvVars("BRIDGE_TUNNEL_INSTANCE"),
+			},
 		},
 		Action: runIntercept,
 	}
@@ -93,7 +118,11 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	proxyPort := c.Int("proxy-port")
 	appPort := c.Int("app-port")
 	dnsPort := c.Int("dns-port")
-	logger := slog.With("server_addr", serverAddr)
+	tunnelProtocol := c.String("tunnel-protocol")
+	logger := slog.With("server_addr", serverAddr, "tunnel_protocol", tunnelProtocol)
+	if tunnelProtocol != tunnelProtocolBridge && tunnelProtocol != tunnelProtocolDevTunnel {
+		return fmt.Errorf("unknown --tunnel-protocol %q: use %q or %q", tunnelProtocol, tunnelProtocolBridge, tunnelProtocolDevTunnel)
+	}
 
 	// Parse forward-domains, handling comma-separated values from env vars
 	var forwardDomains []string
@@ -151,58 +180,48 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		logger.Info("No forward domains configured, DNS interception disabled")
 	}
 
-	// Connect to the bridge proxy server via gRPC
-	builder := k8spf.NewBuilder(k8spf.BuilderConfig{})
-	conn, err := grpcutil.NewClient(serverAddr, builder.DialOptions()...)
-	if err != nil {
-		return fmt.Errorf("failed to connect to bridge proxy: %w", err)
-	}
-	defer conn.Close()
-	client := bridgev1.NewBridgeProxyServiceClient(conn)
+	// Read before /etc/resolv.conf points at the intercept's own DNS.
+	originalNS := readOriginalNameserver()
 
-	// Fetch metadata from the proxy pod (env vars, CA cert/key).
-	metadata, err := client.GetMetadata(ctx, &bridgev1.GetMetadataRequest{})
-	if err != nil {
-		slog.Warn("Failed to get metadata from proxy", "error", err)
-	}
-
-	// Install the bridge CA certificate into the system trust store so that
-	// TLS connections to mocked services are trusted by the application.
-	if metadata != nil && len(metadata.CaCert) > 0 {
-		if err := installCACert(ctx, metadata.CaCert); err != nil {
-			slog.Warn("Failed to install CA certificate", "error", err)
-		} else {
-			slog.Info("Installed bridge CA certificate")
+	var (
+		tun          tunnel.Tunnel
+		dnsResolver  hostResolver
+		metadata     *bridgev1.GetMetadataResponse
+		mountServers []*fuseServer
+		devTunnel    *devtunnel.Client
+	)
+	if tunnelProtocol == tunnelProtocolDevTunnel {
+		if len(mountPaths) > 0 {
+			logger.Warn("Ignoring mount paths: a dev tunnel has no file system to mount", "paths", mountPaths)
 		}
+		var err error
+		devTunnel, err = devtunnel.New(devtunnel.Config{
+			RelayURL:    serverAddr,
+			Token:       c.String("tunnel-token"),
+			Instance:    c.String("tunnel-instance"),
+			Port:        appPort,
+			RelayDialer: relayDialer(originalNS),
+			Logger:      logger,
+		})
+		if err != nil {
+			return err
+		}
+		devTunnel.Start(ctx)
+		defer devTunnel.Close()
+		tun = devTunnel
+		dnsResolver = deploymentResolver{}
+		logger.Info("Dev tunnel starting", "app_port", appPort)
+	} else {
+		bridge, err := connectBridge(ctx, serverAddr, appPort, mountPaths)
+		if err != nil {
+			return err
+		}
+		defer bridge.conn.Close()
+		tun = bridge.tunnel
+		dnsResolver = &grpcDNSResolver{client: bridge.client}
+		metadata = bridge.metadata
+		mountServers = bridge.mounts
 	}
-
-	// If no explicit mount paths were provided, use whatever the server
-	// advertises via GetMetadata.
-	if len(mountPaths) == 0 && metadata != nil {
-		mountPaths = append(mountPaths, metadata.GetMountRoots()...)
-	}
-
-	// Set up FUSE mounts for the proxy pod's volume paths. Each mount uses
-	// the same gRPC connection that hosts the proxy service, so it doesn't
-	// require the tunnel. Failures are non-fatal: log and continue so the
-	// developer still gets network interception.
-	var mountServers []*fuseServer
-	if len(mountPaths) > 0 {
-		fsClient := bridgev1.NewBridgeFileSystemServiceClient(conn)
-		mountServers = startMounts(ctx, fsClient, mountPaths)
-	}
-
-	// Open the shared tunnel stream. If app-port is set, ingress traffic from
-	// the server's --listen-ports will be forwarded to that local port.
-	stream, err := client.TunnelNetwork(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to open tunnel stream: %w", err)
-	}
-
-	dialer := plumbing.NewStaticPortDialer(appPort, nil)
-	tun := tunnel.New(dialer, stream)
-	tun.Start(ctx)
-	slog.Info("Tunnel connected", "app_port", appPort)
 
 	// Create connection tracking registry
 	pool, err := ippool.New(proxyCIDR)
@@ -215,9 +234,7 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	var dns *DNSComponent
 	var originalResolvConf []byte
 	if len(forwardDomains) > 0 {
-		// Read the original nameserver before we modify /etc/resolv.conf
-		originalNS := readOriginalNameserver()
-		exchangeClient := bridgedns.NewTunnelExchangeClient(forwardDomains, &grpcDNSResolver{client: client}, originalNS)
+		exchangeClient := bridgedns.NewTunnelExchangeClient(forwardDomains, dnsResolver, originalNS)
 		dns, err = StartDNS(DNSConfig{
 			ListenPort: dnsPort,
 			Client:     exchangeClient,
@@ -289,6 +306,9 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		return err
 	}
 	defer interceptSrv.Stop()
+	if devTunnel != nil {
+		interceptSrv.SetTunnel(devTunnel)
+	}
 
 	// Spin up probe monitors using the source deployment's probes. Each
 	// monitor runs in its own goroutine and is cancelled when ctx is done.
@@ -327,6 +347,74 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	}
 
 	return nil
+}
+
+// bridgeConn is the intercept's connection to a bridge proxy server.
+type bridgeConn struct {
+	conn     *grpc.ClientConn
+	client   bridgev1.BridgeProxyServiceClient
+	metadata *bridgev1.GetMetadataResponse
+	mounts   []*fuseServer
+	tunnel   tunnel.Tunnel
+}
+
+// connectBridge connects to a bridge proxy server, installs its CA, mounts
+// its paths and opens the tunnel stream to it.
+func connectBridge(ctx context.Context, serverAddr string, appPort int, mountPaths []string) (*bridgeConn, error) {
+	// Connect to the bridge proxy server via gRPC
+	builder := k8spf.NewBuilder(k8spf.BuilderConfig{})
+	conn, err := grpcutil.NewClient(serverAddr, builder.DialOptions()...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to bridge proxy: %w", err)
+	}
+	client := bridgev1.NewBridgeProxyServiceClient(conn)
+
+	// Fetch metadata from the proxy pod (env vars, CA cert/key).
+	metadata, err := client.GetMetadata(ctx, &bridgev1.GetMetadataRequest{})
+	if err != nil {
+		slog.Warn("Failed to get metadata from proxy", "error", err)
+	}
+
+	// Install the bridge CA certificate into the system trust store so that
+	// TLS connections to mocked services are trusted by the application.
+	if metadata != nil && len(metadata.CaCert) > 0 {
+		if err := installCACert(ctx, metadata.CaCert); err != nil {
+			slog.Warn("Failed to install CA certificate", "error", err)
+		} else {
+			slog.Info("Installed bridge CA certificate")
+		}
+	}
+
+	// If no explicit mount paths were provided, use whatever the server
+	// advertises via GetMetadata.
+	if len(mountPaths) == 0 && metadata != nil {
+		mountPaths = append(mountPaths, metadata.GetMountRoots()...)
+	}
+
+	// Set up FUSE mounts for the proxy pod's volume paths. Each mount uses
+	// the same gRPC connection that hosts the proxy service, so it doesn't
+	// require the tunnel. Failures are non-fatal: log and continue so the
+	// developer still gets network interception.
+	var mountServers []*fuseServer
+	if len(mountPaths) > 0 {
+		fsClient := bridgev1.NewBridgeFileSystemServiceClient(conn)
+		mountServers = startMounts(ctx, fsClient, mountPaths)
+	}
+
+	// Open the shared tunnel stream. If app-port is set, ingress traffic from
+	// the server's --listen-ports will be forwarded to that local port.
+	stream, err := client.TunnelNetwork(ctx)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("failed to open tunnel stream: %w", err)
+	}
+
+	dialer := plumbing.NewStaticPortDialer(appPort, nil)
+	tun := tunnel.New(dialer, stream)
+	tun.Start(ctx)
+	slog.Info("Tunnel connected", "app_port", appPort)
+
+	return &bridgeConn{conn: conn, client: client, metadata: metadata, mounts: mountServers, tunnel: tun}, nil
 }
 
 // installCACert writes the PEM-encoded CA certificate to the system trust
@@ -432,6 +520,36 @@ func restoreResolvConf(original []byte) {
 	}
 }
 
+// hostResolver resolves the hostnames the intercept's DNS forwards.
+type hostResolver interface {
+	ResolveDNS(ctx context.Context, hostname string) (*bridgedns.DNSResolveResult, error)
+}
+
+// deploymentResolver answers for every forwarded hostname without resolving
+// it: the deployment resolves it when it opens the conn, as its own code
+// would. The address is a placeholder the conn never uses.
+type deploymentResolver struct{}
+
+func (deploymentResolver) ResolveDNS(context.Context, string) (*bridgedns.DNSResolveResult, error) {
+	return &bridgedns.DNSResolveResult{Addresses: []string{"0.0.0.0"}}, nil
+}
+
+// relayDialer reaches the relay without the intercept's own DNS, which would
+// send the relay's hostname down the tunnel when every domain is forwarded.
+// It asks nameserver over TCP, which the UDP :53 redirect leaves alone.
+func relayDialer(nameserver string) *net.Dialer {
+	return &net.Dialer{
+		Timeout: 10 * time.Second,
+		Resolver: &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "tcp", nameserver)
+			},
+		},
+	}
+}
+
 // grpcDNSResolver wraps a BridgeProxyServiceClient to satisfy the DNS resolver
 // interface used by TunnelExchangeClient.
 type grpcDNSResolver struct {
@@ -516,4 +634,3 @@ func startMounts(ctx context.Context, client bridgev1.BridgeFileSystemServiceCli
 	}
 	return servers
 }
-

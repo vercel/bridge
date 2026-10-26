@@ -19,6 +19,12 @@ service InterceptorService {
   // immediate check passed. Useful as a "is the app healthy right now?"
   // primitive that ignores any stale state from a previous dev session.
   rpc Probe(ProbeRequest) returns (ProbeResponse);
+
+  // SetTunnelToken gives an intercept on a dev tunnel
+  // (--tunnel-protocol=dev-tunnel) its client token, from create-session. One
+  // started without a token, or whose token the relay refused
+  // (TUNNEL_STATE_NEEDS_TOKEN), connects with it.
+  rpc SetTunnelToken(SetTunnelTokenRequest) returns (SetTunnelTokenResponse);
 }
 
 message GetStatusRequest {}
@@ -39,7 +45,62 @@ message GetStatusResponse {
   // Startup probe result against the local app. Unset if no startup
   // probe was configured on the source.
   ProbeStatus startup = 4;
+
+  // The dev tunnel's stream to its relay. Unset unless
+  // --tunnel-protocol=dev-tunnel.
+  TunnelStatus tunnel = 5;
 }
+
+// TunnelStatus is the state of a dev tunnel's stream to api-dev-tunnel, and
+// the conns it carries.
+message TunnelStatus {
+  TunnelState state = 1;
+
+  // Why the last stream ended, or the relay refused one. Empty before any
+  // has.
+  string last_error = 2 [json_name = "last_error"];
+
+  // Unix seconds since a stream has held the tunnel. Zero unless LIVE.
+  int64 live_since_unix_seconds = 3 [json_name = "live_since_unix_seconds"];
+
+  // Streams opened after the first.
+  int64 reconnects = 4;
+
+  // Conns open now from the deployment to the app (ingress), and from the
+  // app out through the deployment (egress).
+  int64 ingress_conns = 5 [json_name = "ingress_conns"];
+  int64 egress_conns = 6 [json_name = "egress_conns"];
+
+  // Conns opened since the intercept started.
+  int64 ingress_conns_total = 7 [json_name = "ingress_conns_total"];
+  int64 egress_conns_total = 8 [json_name = "egress_conns_total"];
+
+  // Payload bytes sent to and received from the relay.
+  int64 bytes_sent = 9 [json_name = "bytes_sent"];
+  int64 bytes_received = 10 [json_name = "bytes_received"];
+}
+
+enum TunnelState {
+  TUNNEL_STATE_UNSPECIFIED = 0;
+  // No stream holds the tunnel yet, or the last one ended and the next is
+  // opening.
+  TUNNEL_STATE_CONNECTING = 1;
+  // A stream holds the tunnel: the deployment's conns reach the app.
+  TUNNEL_STATE_LIVE = 2;
+  // The relay refused the client token, or there is none yet. Waiting for
+  // SetTunnelToken.
+  TUNNEL_STATE_NEEDS_TOKEN = 3;
+  // Another client holds the tunnel. Retrying until it lets go.
+  TUNNEL_STATE_TAKEN = 4;
+  // The relay refused the tunnel for good; last_error says why.
+  TUNNEL_STATE_FAILED = 5;
+}
+
+message SetTunnelTokenRequest {
+  string token = 1;
+}
+
+message SetTunnelTokenResponse {}
 
 // ProbeStatus reflects the current health view from a single configured
 // probe — what the source deployment's probe would have reported if it had

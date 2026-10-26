@@ -10,10 +10,13 @@ import (
 	"time"
 
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
+	"github.com/vercel/bridge/pkg/devtunnel"
 	"github.com/vercel/bridge/pkg/grpcutil"
 	"github.com/vercel/bridge/pkg/probe"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 )
 
 // interceptServer exposes a gRPC server for the intercept process with a
@@ -32,6 +35,7 @@ type interceptServer struct {
 
 	ready    atomic.Bool
 	monitors atomic.Pointer[monitorSet]
+	tunnel   atomic.Pointer[devtunnel.Client]
 }
 
 // monitorSet is the immutable bundle stored in interceptServer.monitors.
@@ -74,6 +78,12 @@ func (s *interceptServer) SetMonitors(liveness, readiness, startup probe.Monitor
 	})
 }
 
+// SetTunnel publishes the dev tunnel GetStatus reports on and SetTunnelToken
+// hands tokens to.
+func (s *interceptServer) SetTunnel(t *devtunnel.Client) {
+	s.tunnel.Store(t)
+}
+
 // Stop gracefully stops the gRPC server.
 func (s *interceptServer) Stop() {
 	s.server.GracefulStop()
@@ -107,7 +117,23 @@ func (s *interceptServer) GetStatus(_ context.Context, _ *bridgev1.GetStatusRequ
 			resp.Startup = ms.startup.Status()
 		}
 	}
+	if t := s.tunnel.Load(); t != nil {
+		resp.Tunnel = t.Status()
+	}
 	return resp, nil
+}
+
+// SetTunnelToken hands the dev tunnel a client token.
+func (s *interceptServer) SetTunnelToken(_ context.Context, req *bridgev1.SetTunnelTokenRequest) (*bridgev1.SetTunnelTokenResponse, error) {
+	t := s.tunnel.Load()
+	if t == nil {
+		return nil, status.Error(codes.FailedPrecondition, "this intercept isn't on a dev tunnel")
+	}
+	if req.GetToken() == "" {
+		return nil, status.Error(codes.InvalidArgument, "token is empty")
+	}
+	t.SetToken(req.GetToken())
+	return &bridgev1.SetTunnelTokenResponse{}, nil
 }
 
 // Probe runs each configured probe synchronously and returns the per-probe
