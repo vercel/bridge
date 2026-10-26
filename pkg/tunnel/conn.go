@@ -26,7 +26,7 @@ type streamConn struct {
 	t     *tunnelImpl
 	id    string
 	info  *ConnInfo
-	meter *plumbing.MeteredConn
+	meter plumbing.MeteredConn
 	// 0 when the backend has no flow control.
 	window    int
 	halfClose bool
@@ -61,12 +61,7 @@ func (t *tunnelImpl) newConn(id string, info *ConnInfo) *streamConn {
 		inRoom:    make(chan struct{}, 1),
 		done:      make(chan struct{}),
 	}
-	cfg := plumbing.MeteredConfig{Window: c.window}
-	if c.window > 0 {
-		// Gives the peer back what was read.
-		cfg.OnRead = func(n int) { c.send(Frame{Kind: FrameWindow, Bytes: n}) }
-	}
-	c.meter = plumbing.NewMeteredConn(c, cfg)
+	c.meter = plumbing.NewMeteredConn(c, c.window)
 	return c
 }
 
@@ -99,8 +94,13 @@ func (c *streamConn) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// consumed makes room for what a peer without flow control sends next.
+// consumed gives back what Read took: as window to a peer with flow control,
+// and as room in the queue to one without.
 func (c *streamConn) consumed(n int) {
+	if c.window > 0 {
+		c.send(Frame{Kind: FrameWindow, Bytes: n})
+		return
+	}
 	c.inMu.Lock()
 	c.inBytes -= n
 	c.inMu.Unlock()

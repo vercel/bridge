@@ -8,14 +8,23 @@ import (
 	"time"
 )
 
-// MeteredConn wraps a net.Conn and counts what passes through it. Given a
-// window, Write sends no more than the peer has granted with Grant, and Read
-// reports what it returns to OnRead so the caller can grant it back: the flow
-// control a conn multiplexed with others needs, since the transport's own
-// can only slow all of them.
-type MeteredConn struct {
+// MeteredConn is a net.Conn that counts what passes through it. Given a
+// window, Write sends no more than the peer has granted with Grant: the flow
+// control a conn multiplexed with others needs, since the transport's own can
+// only slow all of them.
+type MeteredConn interface {
 	net.Conn
-	cfg MeteredConfig
+	// Grant lets Write send n more bytes.
+	Grant(n int)
+	// CloseWrite half-closes the wrapped conn, if it can.
+	CloseWrite() error
+	// Stats reports what has passed through so far.
+	Stats() *MeteredStats
+}
+
+type meteredConn struct {
+	net.Conn
+	window int
 
 	credit    atomic.Int64
 	wake      chan struct{}
@@ -29,14 +38,6 @@ type MeteredConn struct {
 	writeWait, writeWaits   atomic.Int64
 }
 
-// MeteredConfig configures a MeteredConn.
-type MeteredConfig struct {
-	// Window is what Write may send before Grant gives more; 0 for no limit.
-	Window int
-	// OnRead is called with what each Read returned.
-	OnRead func(n int)
-}
-
 // MeteredStats is what has passed through a MeteredConn.
 type MeteredStats struct {
 	BytesRead    int64
@@ -48,35 +49,30 @@ type MeteredStats struct {
 	WriteWaits int64
 }
 
-var _ net.Conn = (*MeteredConn)(nil)
-
-func NewMeteredConn(conn net.Conn, cfg MeteredConfig) *MeteredConn {
-	m := &MeteredConn{
+// NewMeteredConn wraps conn. Write may send window bytes before Grant gives
+// more; 0 for no limit.
+func NewMeteredConn(conn net.Conn, window int) MeteredConn {
+	m := &meteredConn{
 		Conn:   conn,
-		cfg:    cfg,
+		window: window,
 		wake:   make(chan struct{}, 1),
 		closed: make(chan struct{}),
 	}
-	m.credit.Store(int64(cfg.Window))
+	m.credit.Store(int64(window))
 	if d, ok := conn.(interface{ Done() <-chan struct{} }); ok {
 		m.innerDone = d.Done()
 	}
 	return m
 }
 
-func (m *MeteredConn) Read(p []byte) (int, error) {
+func (m *meteredConn) Read(p []byte) (int, error) {
 	n, err := m.Conn.Read(p)
-	if n > 0 {
-		m.bytesRead.Add(int64(n))
-		if m.cfg.OnRead != nil {
-			m.cfg.OnRead(n)
-		}
-	}
+	m.bytesRead.Add(int64(n))
 	return n, err
 }
 
-func (m *MeteredConn) Write(p []byte) (int, error) {
-	if m.cfg.Window <= 0 {
+func (m *meteredConn) Write(p []byte) (int, error) {
+	if m.window <= 0 {
 		n, err := m.Conn.Write(p)
 		m.bytesWritten.Add(int64(n))
 		return n, err
@@ -99,8 +95,7 @@ func (m *MeteredConn) Write(p []byte) (int, error) {
 	return written, nil
 }
 
-// Grant lets Write send n more bytes.
-func (m *MeteredConn) Grant(n int) {
+func (m *meteredConn) Grant(n int) {
 	m.credit.Add(int64(n))
 	select {
 	case m.wake <- struct{}{}:
@@ -108,33 +103,32 @@ func (m *MeteredConn) Grant(n int) {
 	}
 }
 
-// CloseWrite half-closes the wrapped conn, if it can.
-func (m *MeteredConn) CloseWrite() error {
+func (m *meteredConn) CloseWrite() error {
 	if cw, ok := m.Conn.(interface{ CloseWrite() error }); ok {
 		return cw.CloseWrite()
 	}
 	return errors.ErrUnsupported
 }
 
-func (m *MeteredConn) Close() error {
+func (m *meteredConn) Close() error {
 	m.closeOnce.Do(func() { close(m.closed) })
 	return m.Conn.Close()
 }
 
-func (m *MeteredConn) Stats() MeteredStats {
-	st := MeteredStats{
+func (m *meteredConn) Stats() *MeteredStats {
+	st := &MeteredStats{
 		BytesRead:    m.bytesRead.Load(),
 		BytesWritten: m.bytesWritten.Load(),
 		WriteWait:    time.Duration(m.writeWait.Load()),
 		WriteWaits:   m.writeWaits.Load(),
 	}
-	if m.cfg.Window > 0 {
+	if m.window > 0 {
 		st.Credit = m.credit.Load()
 	}
 	return st
 }
 
-func (m *MeteredConn) awaitCredit() (int64, error) {
+func (m *meteredConn) awaitCredit() (int64, error) {
 	var start time.Time
 	defer func() {
 		if !start.IsZero() {

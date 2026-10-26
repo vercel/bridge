@@ -45,7 +45,7 @@ func newRecordingConn(r string) *recordingConn {
 }
 
 // writeAsync starts a Write and returns its result.
-func writeAsync(m *MeteredConn, p string) <-chan error {
+func writeAsync(m MeteredConn, p string) <-chan error {
 	errc := make(chan error, 1)
 	go func() {
 		_, err := m.Write([]byte(p))
@@ -56,23 +56,20 @@ func writeAsync(m *MeteredConn, p string) <-chan error {
 
 func TestMeteredConnCountsWithoutAWindow(t *testing.T) {
 	inner := newRecordingConn("hello")
-	var reads []int
-	m := NewMeteredConn(inner, MeteredConfig{OnRead: func(n int) { reads = append(reads, n) }})
+	m := NewMeteredConn(inner, 0)
 
 	_, err := m.Write([]byte("abc"))
 	require.NoError(t, err)
-	buf := make([]byte, 16)
-	n, err := m.Read(buf)
+	_, err = m.Read(make([]byte, 16))
 	require.NoError(t, err)
 
 	assert.Equal(t, "abc", inner.written())
-	assert.Equal(t, []int{n}, reads)
-	assert.Equal(t, MeteredStats{BytesRead: 5, BytesWritten: 3}, m.Stats())
+	assert.Equal(t, &MeteredStats{BytesRead: 5, BytesWritten: 3}, m.Stats())
 }
 
 func TestMeteredConnHoldsWritesToTheWindow(t *testing.T) {
 	inner := newRecordingConn("")
-	m := NewMeteredConn(inner, MeteredConfig{Window: 4})
+	m := NewMeteredConn(inner, 4)
 
 	errc := writeAsync(m, "abcdefgh")
 	require.Eventually(t, func() bool { return inner.written() == "abcd" }, time.Second, time.Millisecond)
@@ -92,14 +89,14 @@ func TestMeteredConnHoldsWritesToTheWindow(t *testing.T) {
 }
 
 func TestMeteredConnWriteWaitingEndsWithTheConn(t *testing.T) {
-	m := NewMeteredConn(newRecordingConn(""), MeteredConfig{Window: 1})
+	m := NewMeteredConn(newRecordingConn(""), 1)
 	errc := writeAsync(m, "ab")
 	time.Sleep(10 * time.Millisecond)
 	require.NoError(t, m.Close())
 	assert.ErrorIs(t, <-errc, net.ErrClosed)
 
 	inner := newRecordingConn("")
-	m = NewMeteredConn(inner, MeteredConfig{Window: 1})
+	m = NewMeteredConn(inner, 1)
 	errc = writeAsync(m, "ab")
 	time.Sleep(10 * time.Millisecond)
 	close(inner.done)
@@ -107,7 +104,7 @@ func TestMeteredConnWriteWaitingEndsWithTheConn(t *testing.T) {
 }
 
 func TestMeteredConnCloseWrite(t *testing.T) {
-	assert.True(t, errors.Is(NewMeteredConn(newRecordingConn(""), MeteredConfig{}).CloseWrite(), errors.ErrUnsupported))
+	assert.True(t, errors.Is(NewMeteredConn(newRecordingConn(""), 0).CloseWrite(), errors.ErrUnsupported))
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -122,7 +119,7 @@ func TestMeteredConnCloseWrite(t *testing.T) {
 	nc, err := net.Dial("tcp", lis.Addr().String())
 	require.NoError(t, err)
 	defer nc.Close()
-	m := NewMeteredConn(nc, MeteredConfig{})
+	m := NewMeteredConn(nc, 0)
 	require.NoError(t, m.CloseWrite())
 	// The peer saw EOF and closed its side.
 	_, err = nc.Read(make([]byte, 1))
