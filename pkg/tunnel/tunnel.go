@@ -187,8 +187,7 @@ func (t *tunnelImpl) pump(local, remote net.Conn) {
 			"remote", remote.RemoteAddr().String(),
 			"bytes_sent", st.BytesWritten,
 			"bytes_received", st.BytesRead,
-			"window_wait", st.WriteWait,
-			"window_waits", st.WriteWaits,
+			"write_time", st.WriteTime,
 		)
 	}
 }

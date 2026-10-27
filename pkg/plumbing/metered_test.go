@@ -16,10 +16,9 @@ import (
 // recordingConn keeps what's written to it and reads from r.
 type recordingConn struct {
 	net.Conn
-	r    io.Reader
-	mu   sync.Mutex
-	w    bytes.Buffer
-	done chan struct{}
+	r  io.Reader
+	mu sync.Mutex
+	w  bytes.Buffer
 }
 
 func (c *recordingConn) Read(p []byte) (int, error) { return c.r.Read(p) }
@@ -38,25 +37,13 @@ func (c *recordingConn) written() string {
 
 func (c *recordingConn) Close() error { return nil }
 
-func (c *recordingConn) Done() <-chan struct{} { return c.done }
-
 func newRecordingConn(r string) *recordingConn {
-	return &recordingConn{r: bytes.NewReader([]byte(r)), done: make(chan struct{})}
+	return &recordingConn{r: bytes.NewReader([]byte(r))}
 }
 
-// writeAsync starts a Write and returns its result.
-func writeAsync(m MeteredConn, p string) <-chan error {
-	errc := make(chan error, 1)
-	go func() {
-		_, err := m.Write([]byte(p))
-		errc <- err
-	}()
-	return errc
-}
-
-func TestMeteredConnCountsWithoutAWindow(t *testing.T) {
+func TestMeteredConnCounts(t *testing.T) {
 	inner := newRecordingConn("hello")
-	m := NewMeteredConn(inner, 0)
+	m := NewMeteredConn(inner)
 
 	_, err := m.Write([]byte("abc"))
 	require.NoError(t, err)
@@ -64,47 +51,14 @@ func TestMeteredConnCountsWithoutAWindow(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "abc", inner.written())
-	assert.Equal(t, &MeteredStats{BytesRead: 5, BytesWritten: 3}, m.Stats())
-}
-
-func TestMeteredConnHoldsWritesToTheWindow(t *testing.T) {
-	inner := newRecordingConn("")
-	m := NewMeteredConn(inner, 4)
-
-	errc := writeAsync(m, "abcdefgh")
-	require.Eventually(t, func() bool { return inner.written() == "abcd" }, time.Second, time.Millisecond)
-	select {
-	case <-errc:
-		t.Fatal("wrote past the window")
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	m.Grant(4)
-	require.NoError(t, <-errc)
-	assert.Equal(t, "abcdefgh", inner.written())
 	st := m.Stats()
-	assert.Equal(t, int64(0), st.Credit)
-	assert.Equal(t, int64(1), st.WriteWaits)
-	assert.Greater(t, st.WriteWait, time.Duration(0))
-}
-
-func TestMeteredConnWriteWaitingEndsWithTheConn(t *testing.T) {
-	m := NewMeteredConn(newRecordingConn(""), 1)
-	errc := writeAsync(m, "ab")
-	time.Sleep(10 * time.Millisecond)
-	require.NoError(t, m.Close())
-	assert.ErrorIs(t, <-errc, net.ErrClosed)
-
-	inner := newRecordingConn("")
-	m = NewMeteredConn(inner, 1)
-	errc = writeAsync(m, "ab")
-	time.Sleep(10 * time.Millisecond)
-	close(inner.done)
-	assert.ErrorIs(t, <-errc, net.ErrClosed)
+	assert.Equal(t, int64(5), st.BytesRead)
+	assert.Equal(t, int64(3), st.BytesWritten)
+	assert.Greater(t, st.WriteTime, time.Duration(0))
 }
 
 func TestMeteredConnCloseWrite(t *testing.T) {
-	assert.True(t, errors.Is(NewMeteredConn(newRecordingConn(""), 0).CloseWrite(), errors.ErrUnsupported))
+	assert.True(t, errors.Is(NewMeteredConn(newRecordingConn("")).CloseWrite(), errors.ErrUnsupported))
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -119,7 +73,7 @@ func TestMeteredConnCloseWrite(t *testing.T) {
 	nc, err := net.Dial("tcp", lis.Addr().String())
 	require.NoError(t, err)
 	defer nc.Close()
-	m := NewMeteredConn(nc, 0)
+	m := NewMeteredConn(nc)
 	require.NoError(t, m.CloseWrite())
 	// The peer saw EOF and closed its side.
 	_, err = nc.Read(make([]byte, 1))

@@ -20,9 +20,6 @@ type Frames interface {
 	CloseWrite() error
 	// Reset abandons the conn on the peer, for reason.
 	Reset(reason string) error
-	// Window grants the peer n more bytes, what Recv returned. A no-op
-	// without flow control.
-	Window(n int) error
 	// Release forgets the conn once it's over.
 	Release()
 }
@@ -32,17 +29,14 @@ type MuxConfig struct {
 	// MaxFrame caps each Data's payload; 0 for no cap.
 	MaxFrame int
 	// Queue is how many payloads from the peer may wait unread before Deliver
-	// waits; 0 for no limit, for a transport whose window bounds them.
-	Queue int
-	// Window is what the conn may send before the peer grants more; 0 for no
-	// limit.
-	Window        int
+	// waits; 0 for no limit.
+	Queue         int
 	Local, Remote net.Addr
 }
 
 // MuxStream is one conn's Stream on a multiplexed transport: Recv returns what
 // the transport Delivers for it, and Send, CloseSend and Close write its
-// frames. Conn is a net.Conn over it, metered to its window.
+// frames. Conn is a metered net.Conn over it.
 type MuxStream struct {
 	frames Frames
 	cfg    MuxConfig
@@ -70,11 +64,11 @@ func NewMuxStream(frames Frames, cfg MuxConfig) *MuxStream {
 		room:   make(chan struct{}, 1),
 		done:   make(chan struct{}),
 	}
-	s.conn = NewMeteredConn(NewStreamConn(s, cfg.Local, cfg.Remote), cfg.Window)
+	s.conn = NewMeteredConn(NewStreamConn(s, cfg.Local, cfg.Remote))
 	return s
 }
 
-// Conn is the net.Conn over the stream. Grant it the peer's window.
+// Conn is the net.Conn over the stream.
 func (s *MuxStream) Conn() MeteredConn { return s.conn }
 
 // Deliver queues payload from the peer, waiting while a bounded queue is
@@ -131,9 +125,6 @@ func (s *MuxStream) Recv() ([]byte, error) {
 			s.in = s.in[1:]
 			s.mu.Unlock()
 			signal(s.room)
-			if err := s.frames.Window(len(payload)); err != nil {
-				return nil, err
-			}
 			return payload, nil
 		}
 		eof := s.eof

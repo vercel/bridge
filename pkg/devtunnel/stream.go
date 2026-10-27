@@ -67,13 +67,16 @@ func (s *stream) run(token string, moving func()) error {
 	s.send(heartbeat)
 	go func() {
 		for {
-			frame, ok := s.out.pop(s.ctx)
+			entry, ok := s.out.pop(s.ctx)
 			if !ok {
 				return
 			}
 			// A failed send ends the call, which Recv reports.
-			if err := call.Send(frame); err != nil {
+			if err := call.Send(entry.frame); err != nil {
 				return
+			}
+			if entry.sent != nil {
+				entry.sent()
 			}
 		}
 	}()
@@ -139,10 +142,6 @@ func (s *stream) handle(msg *devtunnel.ConnectResponse, moving func()) {
 			s.logger.Debug("Relay reset the connection", "conn_id", c.id, "reason", f.Reset_.GetReason())
 			c.stream.PeerReset()
 		}
-	case *devtunnel.ConnectResponse_Window:
-		if c := s.conn(f.Window.GetConnId()); c != nil {
-			c.stream.Conn().Grant(int(f.Window.GetBytes()))
-		}
 	}
 }
 
@@ -192,20 +191,30 @@ func (s *stream) endConns() {
 }
 
 func (s *stream) send(frame *devtunnel.ConnectRequest) {
-	s.out.push(frame)
+	s.out.push(outboxEntry{frame: frame})
 }
 
-// outbox queues frames for the relay in order. Data is bounded by each conn's
-// window; the rest is small.
+// sendThen queues frame, calling sent once it's on the stream.
+func (s *stream) sendThen(frame *devtunnel.ConnectRequest, sent func()) {
+	s.out.push(outboxEntry{frame: frame, sent: sent})
+}
+
+// outbox queues frames for the relay in order. Each conn has at most
+// maxUnsentBytes of Data in it; the rest is small.
 type outbox struct {
-	mu     sync.Mutex
-	frames []*devtunnel.ConnectRequest
-	wake   chan struct{}
+	mu      sync.Mutex
+	entries []outboxEntry
+	wake    chan struct{}
 }
 
-func (o *outbox) push(frame *devtunnel.ConnectRequest) {
+type outboxEntry struct {
+	frame *devtunnel.ConnectRequest
+	sent  func()
+}
+
+func (o *outbox) push(e outboxEntry) {
 	o.mu.Lock()
-	o.frames = append(o.frames, frame)
+	o.entries = append(o.entries, e)
 	o.mu.Unlock()
 	select {
 	case o.wake <- struct{}{}:
@@ -213,21 +222,21 @@ func (o *outbox) push(frame *devtunnel.ConnectRequest) {
 	}
 }
 
-func (o *outbox) pop(ctx context.Context) (*devtunnel.ConnectRequest, bool) {
+func (o *outbox) pop(ctx context.Context) (outboxEntry, bool) {
 	for {
 		o.mu.Lock()
-		if len(o.frames) > 0 {
-			frame := o.frames[0]
-			o.frames[0] = nil
-			o.frames = o.frames[1:]
+		if len(o.entries) > 0 {
+			e := o.entries[0]
+			o.entries[0] = outboxEntry{}
+			o.entries = o.entries[1:]
 			o.mu.Unlock()
-			return frame, true
+			return e, true
 		}
 		o.mu.Unlock()
 		select {
 		case <-o.wake:
 		case <-ctx.Done():
-			return nil, false
+			return outboxEntry{}, false
 		}
 	}
 }
