@@ -35,7 +35,7 @@ type interceptServer struct {
 
 	ready    atomic.Bool
 	monitors atomic.Pointer[monitorSet]
-	tunnel   atomic.Pointer[devtunnel.Backend]
+	tunnel   atomic.Pointer[devtunnel.Stream]
 }
 
 // monitorSet is the immutable bundle stored in interceptServer.monitors.
@@ -80,7 +80,7 @@ func (s *interceptServer) SetMonitors(liveness, readiness, startup probe.Monitor
 
 // SetTunnel publishes the dev tunnel GetStatus reports on and SetTunnelToken
 // hands tokens to.
-func (s *interceptServer) SetTunnel(t *devtunnel.Backend) {
+func (s *interceptServer) SetTunnel(t *devtunnel.Stream) {
 	s.tunnel.Store(t)
 }
 

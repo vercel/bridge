@@ -151,19 +151,24 @@ func window(id uint64, n int) *devtunnel.ConnectResponse {
 	return &devtunnel.ConnectResponse{Frame: &devtunnel.ConnectResponse_Window{Window: &devtunnel.Window{ConnId: id, Bytes: uint32(n)}}}
 }
 
-// newTunnel runs a tunnel over a Backend for r.
-func newTunnel(t *testing.T, r *fakeRelay, token string, port int, tune ...func(*timings)) (*Backend, tunnel.Tunnel) {
+// newTunnel runs a tunnel over a Stream for r.
+func newTunnel(t *testing.T, r *fakeRelay, token string, port int, tune ...func(*timings)) (*Stream, tunnel.Tunnel) {
 	t.Helper()
-	b, err := New(Config{RelayURL: r.url, Token: token, Instance: "test-instance", Port: port})
+	d, err := New(Config{RelayURL: r.url, Token: token, Instance: "test-instance", Port: port})
 	require.NoError(t, err)
-	b.timings = timings{heartbeat: 50 * time.Millisecond, silent: time.Second, liveWait: 2 * time.Second}
+	d.timings = timings{heartbeat: 50 * time.Millisecond, silent: time.Second, liveWait: 2 * time.Second}
 	for _, f := range tune {
-		f(&b.timings)
+		f(&d.timings)
 	}
-	tun := tunnel.NewWithBackend(&net.Dialer{Timeout: time.Second}, b)
-	tun.Start(context.Background())
-	t.Cleanup(func() { _ = tun.Close() })
-	return b, tun
+	ctx, cancel := context.WithCancel(context.Background())
+	d.Start(ctx)
+	tun := tunnel.New(&net.Dialer{Timeout: time.Second}, d)
+	tun.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		_ = tun.Close()
+	})
+	return d, tun
 }
 
 // echoApp echoes each connection, then half-closes it once the peer has.

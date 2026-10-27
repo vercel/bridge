@@ -27,6 +27,7 @@ import (
 	"github.com/vercel/bridge/pkg/plumbing"
 	"github.com/vercel/bridge/pkg/probe"
 	"github.com/vercel/bridge/pkg/tunnel"
+	"github.com/vercel/bridge/pkg/tunnel/bridgestream"
 	"google.golang.org/grpc"
 )
 
@@ -188,7 +189,7 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		dnsResolver  hostResolver
 		metadata     *bridgev1.GetMetadataResponse
 		mountServers []*fuseServer
-		devTunnel    *devtunnel.Backend
+		devTunnel    *devtunnel.Stream
 	)
 	if tunnelProtocol == tunnelProtocolDevTunnel {
 		if len(mountPaths) > 0 {
@@ -206,7 +207,10 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 		if err != nil {
 			return err
 		}
-		tun = tunnel.NewWithBackend(plumbing.NewStaticPortDialer(appPort, nil), devTunnel)
+		devTunnelCtx, stopDevTunnel := context.WithCancel(ctx)
+		defer stopDevTunnel()
+		devTunnel.Start(devTunnelCtx)
+		tun = tunnel.New(plumbing.NewStaticPortDialer(appPort, nil), devTunnel)
 		tun.Start(ctx)
 		defer tun.Close()
 		dnsResolver = deploymentResolver{}
@@ -410,7 +414,7 @@ func connectBridge(ctx context.Context, serverAddr string, appPort int, mountPat
 	}
 
 	dialer := plumbing.NewStaticPortDialer(appPort, nil)
-	tun := tunnel.New(dialer, stream)
+	tun := tunnel.New(dialer, bridgestream.New(stream))
 	tun.Start(ctx)
 	slog.Info("Tunnel connected", "app_port", appPort)
 

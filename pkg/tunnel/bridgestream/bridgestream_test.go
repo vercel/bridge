@@ -1,4 +1,4 @@
-package tunnel
+package bridgestream
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
+	"github.com/vercel/bridge/pkg/tunnel"
 )
 
 const testTimeout = 5 * time.Second
@@ -148,17 +149,18 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-func startTunnel(t *testing.T, dialer *blockingDialer) (*fakeStream, Tunnel) {
+func startTunnel(t *testing.T, dialer *blockingDialer) (*fakeStream, *adapter) {
 	t.Helper()
 	stream := newFakeStream()
-	tun := New(dialer, stream)
+	a := New(stream).(*adapter)
+	tun := tunnel.New(dialer, a)
 	ctx, cancel := context.WithCancel(context.Background())
 	tun.Start(ctx)
 	t.Cleanup(func() {
 		cancel()
 		tun.Close()
 	})
-	return stream, tun
+	return stream, a
 }
 
 func TestChunksArrivingDuringDialShareOneConnection(t *testing.T) {
@@ -214,14 +216,14 @@ func TestDialFailureReportsErrorAndForgetsConnection(t *testing.T) {
 
 func TestPeerErrorDuringDialClosesTheDialedConnection(t *testing.T) {
 	dialer := newBlockingDialer()
-	stream, tun := startTunnel(t, dialer)
+	stream, a := startTunnel(t, dialer)
 	const connID = "172.17.0.3:55988->172.20.143.45:80"
 
 	stream.in <- dataMsg(connID, "hello")
 	waitFor(t, "first dial", func() bool { return dialer.dials.Load() == 1 })
 	stream.in <- &bridgev1.TunnelNetworkMessage{ConnectionId: connID, Error: "peer closed"}
 	waitFor(t, "the peer error to drop the buffered connection", func() bool {
-		_, loaded := tun.(*tunnelImpl).backend.(*streamBackend).conns.Load(connID)
+		_, loaded := a.conns.Load(connID)
 		return !loaded
 	})
 
