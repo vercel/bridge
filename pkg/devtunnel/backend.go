@@ -33,6 +33,8 @@ import (
 )
 
 const (
+	// What each side of a conn may send before the other grants more.
+	connWindow = 256 << 10
 	// A client numbers its conns from here; the relay numbers its own from 1.
 	clientConnIDFloor = uint64(1) << 63
 

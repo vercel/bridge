@@ -83,6 +83,7 @@ message Open {
   string host = 4;
 }
 
+// No more than the conn's window allows (see Window).
 message Data {
   uint64 conn_id = 1;
   bytes payload = 2;
@@ -100,11 +101,10 @@ message Reset {
   string reason = 2;
 }
 
-// The deployment has read `bytes` more of the Data the client sent on a conn.
-// A client may pace its sends on these, as `vc dev` has: each conn starting
-// able to send 256 KiB, and waiting for the service to grant more. Pacing is
-// the client's; the service holds it to no window, sends Data as fast as the
-// stream takes it, and ignores a client's Window.
+// Lets the peer send `bytes` more of a conn's Data, as the sender of this
+// consumes what it received. Each side starts each conn able to send 256 KiB.
+// A client that sends past its window, or grants back more than it was sent,
+// has the conn reset.
 message Window {
   uint64 conn_id = 1;
   uint32 bytes = 2;

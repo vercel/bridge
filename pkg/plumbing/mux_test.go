@@ -17,6 +17,7 @@ import (
 type recordingFrames struct {
 	mu        sync.Mutex
 	data      []string
+	windows   []int
 	closes    int
 	resets    []string
 	releases  int
@@ -47,13 +48,20 @@ func (f *recordingFrames) Reset(reason string) error {
 	return nil
 }
 
+func (f *recordingFrames) Window(n int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.windows = append(f.windows, n)
+	return nil
+}
+
 func (f *recordingFrames) Release() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.releases++
 }
 
-func TestMuxStreamReceivesInOrder(t *testing.T) {
+func TestMuxStreamReceivesInOrderAndGrantsWhatItReturns(t *testing.T) {
 	f := &recordingFrames{halfClose: true}
 	s := NewMuxStream(f, MuxConfig{})
 	ctx := context.Background()
@@ -64,6 +72,7 @@ func TestMuxStreamReceivesInOrder(t *testing.T) {
 	got, err := io.ReadAll(s.Conn())
 	require.NoError(t, err)
 	assert.Equal(t, "abcde", string(got))
+	assert.Equal(t, []int{2, 3}, f.windows)
 }
 
 func TestMuxStreamBoundedQueueWaitsForRecv(t *testing.T) {

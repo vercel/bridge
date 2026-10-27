@@ -185,6 +185,9 @@ func (f *messageFrames) Reset(reason string) error {
 	return f.b.send(&bridgev1.TunnelNetworkMessage{ConnectionId: f.id, Error: reason})
 }
 
+// Window: the stream has no flow control; the queue holds the peer back.
+func (f *messageFrames) Window(int) error { return nil }
+
 // Release forgets the conn, unless another has since taken its id.
 func (f *messageFrames) Release() {
 	f.b.conns.Compute(f.id, func(cur *messageFrames, loaded bool) (*messageFrames, bool) {

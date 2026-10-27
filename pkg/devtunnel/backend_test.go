@@ -33,8 +33,6 @@ type fakeRelay struct {
 	streams chan *relayCall
 	// refuse ends a call before it reaches the test, unless it returns nil.
 	refuse func(md metadata.MD) error
-	// gate, if set, holds off reading each call until it's closed.
-	gate chan struct{}
 }
 
 type relayCall struct {
@@ -44,16 +42,12 @@ type relayCall struct {
 	end  chan error
 }
 
-func startRelay(t *testing.T, opts ...func(*fakeRelay)) *fakeRelay {
+func startRelay(t *testing.T) *fakeRelay {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	r := &fakeRelay{url: "http://" + lis.Addr().String(), streams: make(chan *relayCall, 8)}
-	for _, o := range opts {
-		o(r)
-	}
-	// Fixed windows, so a relay that stops reading backs the client up soon.
-	srv := grpc.NewServer(grpc.InitialWindowSize(64<<10), grpc.InitialConnWindowSize(64<<10))
+	srv := grpc.NewServer()
 	devtunnel.RegisterTunnelServiceServer(srv, r)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
@@ -70,9 +64,6 @@ func (r *fakeRelay) Connect(call grpc.BidiStreamingServer[devtunnel.ConnectReque
 	s := &relayCall{md: md, call: call, recv: make(chan *devtunnel.ConnectRequest, 256), end: make(chan error, 1)}
 	go func() {
 		defer close(s.recv)
-		if r.gate != nil {
-			<-r.gate
-		}
 		for {
 			msg, err := call.Recv()
 			if err != nil {
@@ -156,6 +147,10 @@ func closeConn(id uint64) *devtunnel.ConnectResponse {
 	return &devtunnel.ConnectResponse{Frame: &devtunnel.ConnectResponse_Close{Close: &devtunnel.Close{ConnId: id}}}
 }
 
+func window(id uint64, n int) *devtunnel.ConnectResponse {
+	return &devtunnel.ConnectResponse{Frame: &devtunnel.ConnectResponse_Window{Window: &devtunnel.Window{ConnId: id, Bytes: uint32(n)}}}
+}
+
 // newTunnel runs a tunnel over a Backend for r.
 func newTunnel(t *testing.T, r *fakeRelay, token string, port int, tune ...func(*timings)) (*Backend, tunnel.Tunnel) {
 	t.Helper()
@@ -211,10 +206,15 @@ func TestIngressReachesTheApp(t *testing.T) {
 	s.send(t, open(1, port))
 	s.send(t, data(1, "hello"))
 	var echoed []byte
-	for len(echoed) < 5 {
+	granted := 0
+	for len(echoed) < 5 || granted < 5 {
 		msg := s.expect(t)
-		require.Nil(t, msg.GetWindow(), "pacing is the client's own")
-		echoed = append(echoed, msg.GetData().GetPayload()...)
+		if d := msg.GetData(); d != nil {
+			echoed = append(echoed, d.GetPayload()...)
+		}
+		if w := msg.GetWindow(); w != nil {
+			granted += int(w.GetBytes())
+		}
 	}
 	assert.Equal(t, "hello", string(echoed))
 
@@ -241,17 +241,16 @@ func TestIngressToAnotherPortIsReset(t *testing.T) {
 	assert.Equal(t, "bridge serves only port 3000", reset.GetReason())
 }
 
-func TestRelayDataIsTakenAsFastAsItComes(t *testing.T) {
+func TestIngressSendsNoMoreThanTheWindow(t *testing.T) {
 	r := startRelay(t)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = lis.Close() })
-	got := make(chan int, 1)
+	body := bytes.Repeat([]byte("x"), connWindow+frameBytes)
 	go func() {
 		nc, err := lis.Accept()
 		if err == nil {
-			n, _ := io.Copy(io.Discard, nc)
-			got <- int(n)
+			_, _ = nc.Write(body)
 		}
 	}()
 	port := lis.Addr().(*net.TCPAddr).Port
@@ -260,63 +259,17 @@ func TestRelayDataIsTakenAsFastAsItComes(t *testing.T) {
 	s.hold(t)
 	s.send(t, open(1, port))
 
-	// Far past what any window would allow, with nothing granted.
-	const total = 4 << 20
-	chunk := string(bytes.Repeat([]byte("x"), frameBytes))
-	for sent := 0; sent < total; sent += frameBytes {
-		s.send(t, data(1, chunk))
-	}
-	s.send(t, closeConn(1))
+	assert.Len(t, s.expectData(t, 1, connWindow), connWindow)
 	select {
-	case n := <-got:
-		assert.Equal(t, total, n)
-	case <-time.After(testTimeout):
-		t.Fatal("the app didn't get it all")
-	}
-}
-
-func TestADevServerOutrunningTheStreamIsHeldBack(t *testing.T) {
-	gate := make(chan struct{})
-	r := startRelay(t, func(r *fakeRelay) { r.gate = gate })
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = lis.Close() })
-	const total = 8 << 20
-	written := make(chan struct{})
-	go func() {
-		nc, err := lis.Accept()
-		if err == nil {
-			_, _ = nc.Write(bytes.Repeat([]byte("x"), total))
-			close(written)
+	case msg := <-s.recv:
+		if msg.GetData() != nil {
+			t.Fatal("sent past the window")
 		}
-	}()
-	port := lis.Addr().(*net.TCPAddr).Port
-	b, _ := newTunnel(t, r, "tok", port, func(tm *timings) { tm.silent = time.Minute })
-	s := r.next(t)
-	s.hold(t)
-	s.send(t, open(1, port))
-
-	// The relay isn't reading, so the conn's sends wait once it has a
-	// megabyte queued, and the dev server's writes back up.
-	unsent := func() (n int64) {
-		b.conns.Range(func(_ string, f *relayFrames) bool {
-			n = f.unsent.Load()
-			return true
-		})
-		return n
-	}
-	waitFor(t, func() bool { return unsent() >= maxUnsentBytes })
-	time.Sleep(200 * time.Millisecond)
-	assert.LessOrEqual(t, unsent(), int64(maxUnsentBytes+maxPayload))
-	select {
-	case <-written:
-		t.Fatal("the dev server wasn't held back")
-	default:
+	case <-time.After(200 * time.Millisecond):
 	}
 
-	close(gate)
-	assert.Len(t, s.expectData(t, 1, total), total)
-	<-written
+	s.send(t, window(1, frameBytes))
+	assert.Len(t, s.expectData(t, 1, frameBytes), frameBytes)
 }
 
 func TestEgressLeavesThroughTheDeployment(t *testing.T) {
@@ -390,14 +343,13 @@ func TestReconnectKeepsTheOldStreamsConns(t *testing.T) {
 }
 
 func TestRefusedTokenWaitsForANewOne(t *testing.T) {
-	r := startRelay(t, func(r *fakeRelay) {
-		r.refuse = func(md metadata.MD) error {
-			if md.Get("authorization")[0] == "Bearer old" {
-				return status.Error(codes.Unauthenticated, "missing or invalid dev tunnel token")
-			}
-			return nil
+	r := startRelay(t)
+	r.refuse = func(md metadata.MD) error {
+		if md.Get("authorization")[0] == "Bearer old" {
+			return status.Error(codes.Unauthenticated, "missing or invalid dev tunnel token")
 		}
-	})
+		return nil
+	}
 	c, _ := newTunnel(t, r, "old", 3000)
 	waitFor(t, func() bool { return c.Status().GetState() == bridgev1.TunnelState_TUNNEL_STATE_NEEDS_TOKEN })
 
@@ -421,11 +373,10 @@ func TestNoTokenWaitsForOne(t *testing.T) {
 }
 
 func TestFatalRefusalStops(t *testing.T) {
-	r := startRelay(t, func(r *fakeRelay) {
-		r.refuse = func(metadata.MD) error {
-			return status.Error(codes.PermissionDenied, "not allowed")
-		}
-	})
+	r := startRelay(t)
+	r.refuse = func(metadata.MD) error {
+		return status.Error(codes.PermissionDenied, "not allowed")
+	}
 	c, tun := newTunnel(t, r, "tok", 3000)
 
 	select {
