@@ -15,6 +15,7 @@ import (
 	"github.com/vercel/bridge/pkg/grpcutil"
 	"github.com/vercel/bridge/pkg/mitm"
 	"github.com/vercel/bridge/pkg/tunnel"
+	"github.com/vercel/bridge/pkg/tunnel/bridgestream"
 
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
 	"google.golang.org/grpc"
@@ -264,7 +265,7 @@ func (s *GRPCServer) TunnelNetwork(stream grpc.BidiStreamingServer[bridgev1.Tunn
 	if s.hijacker != nil {
 		opts = append(opts, tunnel.WithHijacker(s.hijacker))
 	}
-	tun := tunnel.New(&net.Dialer{Timeout: egressDialTimeout}, stream, opts...)
+	tun := tunnel.New(&net.Dialer{Timeout: egressDialTimeout}, bridgestream.New(stream), opts...)
 
 	s.tunnelMu.Lock()
 	s.tunnel = tun

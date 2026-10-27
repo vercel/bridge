@@ -9,7 +9,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
+	"github.com/vercel/bridge/pkg/devtunnel"
 	"github.com/vercel/bridge/pkg/probe"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // newTestInterceptServer binds the interceptServer to a free local port and
@@ -127,4 +130,27 @@ func TestInterceptServer_AllThreeMonitorsRouteIndependently(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+func TestInterceptServer_ReportsAndFeedsTheDevTunnel(t *testing.T) {
+	srv := newTestInterceptServer(t)
+	ctx := context.Background()
+
+	_, err := srv.SetTunnelToken(ctx, &bridgev1.SetTunnelTokenRequest{Token: "tok"})
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	resp, err := srv.GetStatus(ctx, &bridgev1.GetStatusRequest{})
+	require.NoError(t, err)
+	assert.Nil(t, resp.GetTunnel())
+
+	tun, err := devtunnel.New(devtunnel.Config{RelayURL: "http://127.0.0.1:1", Port: 3000})
+	require.NoError(t, err)
+	srv.SetTunnel(tun)
+
+	resp, err = srv.GetStatus(ctx, &bridgev1.GetStatusRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, bridgev1.TunnelState_TUNNEL_STATE_CONNECTING, resp.GetTunnel().GetState())
+	_, err = srv.SetTunnelToken(ctx, &bridgev1.SetTunnelTokenRequest{})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	_, err = srv.SetTunnelToken(ctx, &bridgev1.SetTunnelTokenRequest{Token: "tok"})
+	assert.NoError(t, err)
 }

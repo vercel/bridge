@@ -1,112 +1,79 @@
 package plumbing
 
 import (
-	"io"
 	"net"
 	"sync"
 	"time"
 )
 
-// TunnelConn wraps one side of a multiplexed tunnel connection as a net.Conn.
-//
-// Reads come from a channel fed by a central read loop (demuxed by connection
-// ID). Writes go through a caller-provided send function that handles stream
-// serialization and any mutex.
-type TunnelConn struct {
-	readCh    chan []byte
-	closeCh   chan struct{}
+// Stream carries one conn's bytes each way: a per-conn gRPC stream, or one
+// conn's frames on a multiplexed one.
+type Stream interface {
+	// Send sends p to the peer. It doesn't keep p after returning.
+	Send(p []byte) error
+	// Recv returns the peer's next bytes, or io.EOF once the peer has
+	// nothing more to send.
+	Recv() ([]byte, error)
+	// CloseSend tells the peer this side has nothing more to send.
+	CloseSend() error
+	// Close abandons the stream in both directions.
+	Close() error
+}
+
+// NewStreamConn turns s into a net.Conn, whose CloseWrite is s.CloseSend.
+// Deadlines aren't supported; Close unblocks a pending Read or Write.
+func NewStreamConn(s Stream, local, remote net.Addr) net.Conn {
+	c := &streamConn{stream: s, local: local, remote: remote, closed: make(chan struct{})}
+	c.done = c.closed
+	if d, ok := s.(interface{ Done() <-chan struct{} }); ok {
+		c.done = d.Done()
+	}
+	return c
+}
+
+type streamConn struct {
+	stream        Stream
+	local, remote net.Addr
+	// The rest of the last Recv; only Read touches it.
+	pending   []byte
+	closed    chan struct{}
 	closeOnce sync.Once
-	sendFn    func([]byte) error
-	onClose   func()
-
-	localAddr  net.Addr
-	remoteAddr net.Addr
-
-	buf []byte // leftover from a partial Read
+	// The stream's, if it has one, else closed.
+	done <-chan struct{}
 }
 
-// TunnelConnConfig configures a TunnelConn.
-type TunnelConnConfig struct {
-	// SendFn writes data onto the tunnel stream. The caller is responsible for
-	// any mutex and message framing.
-	SendFn func([]byte) error
-
-	// OnClose is called once when Close is invoked (e.g. to remove the conn
-	// from a tracking map). May be nil.
-	OnClose func()
-
-	LocalAddr  net.Addr
-	RemoteAddr net.Addr
-}
-
-// NewTunnelConn creates a TunnelConn ready for use with bidi.New.
-func NewTunnelConn(cfg TunnelConnConfig) *TunnelConn {
-	return &TunnelConn{
-		readCh:     make(chan []byte, 64),
-		closeCh:    make(chan struct{}),
-		sendFn:     cfg.SendFn,
-		onClose:    cfg.OnClose,
-		localAddr:  cfg.LocalAddr,
-		remoteAddr: cfg.RemoteAddr,
-	}
-}
-
-// Deliver pushes data into the read buffer. Called by the central read loop
-// when a message arrives for this connection's ID.
-func (tc *TunnelConn) Deliver(data []byte) {
-	select {
-	case tc.readCh <- data:
-	case <-tc.closeCh:
-	}
-}
-
-// SignalClose tears down the connection from the remote side.
-func (tc *TunnelConn) SignalClose() {
-	tc.closeOnce.Do(func() { close(tc.closeCh) })
-}
-
-// --- net.Conn implementation ---
-
-func (tc *TunnelConn) Read(b []byte) (int, error) {
-	if len(tc.buf) > 0 {
-		n := copy(b, tc.buf)
-		tc.buf = tc.buf[n:]
-		return n, nil
-	}
-	select {
-	case data, ok := <-tc.readCh:
-		if !ok {
-			return 0, io.EOF
+func (c *streamConn) Read(p []byte) (int, error) {
+	for len(c.pending) == 0 {
+		chunk, err := c.stream.Recv()
+		if err != nil {
+			return 0, err
 		}
-		n := copy(b, data)
-		if n < len(data) {
-			tc.buf = data[n:]
-		}
-		return n, nil
-	case <-tc.closeCh:
-		return 0, io.EOF
+		c.pending = chunk
 	}
+	n := copy(p, c.pending)
+	c.pending = c.pending[n:]
+	return n, nil
 }
 
-func (tc *TunnelConn) Write(b []byte) (int, error) {
-	if err := tc.sendFn(b); err != nil {
+func (c *streamConn) Write(p []byte) (int, error) {
+	if err := c.stream.Send(p); err != nil {
 		return 0, err
 	}
-	return len(b), nil
+	return len(p), nil
 }
 
-func (tc *TunnelConn) Close() error {
-	tc.closeOnce.Do(func() { close(tc.closeCh) })
-	if tc.onClose != nil {
-		tc.onClose()
-	}
-	return nil
+func (c *streamConn) CloseWrite() error { return c.stream.CloseSend() }
+
+func (c *streamConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return c.stream.Close()
 }
 
-func (tc *TunnelConn) LocalAddr() net.Addr                { return tc.localAddr }
-func (tc *TunnelConn) RemoteAddr() net.Addr               { return tc.remoteAddr }
-func (tc *TunnelConn) SetDeadline(_ time.Time) error      { return nil }
-func (tc *TunnelConn) SetReadDeadline(_ time.Time) error  { return nil }
-func (tc *TunnelConn) SetWriteDeadline(_ time.Time) error { return nil }
+// Done is closed once the conn is over.
+func (c *streamConn) Done() <-chan struct{} { return c.done }
 
-var _ net.Conn = (*TunnelConn)(nil)
+func (c *streamConn) LocalAddr() net.Addr              { return c.local }
+func (c *streamConn) RemoteAddr() net.Addr             { return c.remote }
+func (c *streamConn) SetDeadline(time.Time) error      { return nil }
+func (c *streamConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *streamConn) SetWriteDeadline(time.Time) error { return nil }

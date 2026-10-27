@@ -2,40 +2,42 @@ package tunnel
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
-	"strconv"
 	"sync"
 
 	"github.com/puzpuzpuz/xsync/v3"
-	bridgev1 "github.com/vercel/bridge/api/go/bridge/v1"
-	"github.com/vercel/bridge/pkg/ioutil"
 	"github.com/vercel/bridge/pkg/mitm"
 	"github.com/vercel/bridge/pkg/plumbing"
 )
 
-// Stream abstracts a bidirectional gRPC stream. Both the server-side
-// BidiStreamingServer and client-side TunnelNetworkClient satisfy this
-// interface directly since both directions use TunnelNetworkMessage.
-type Stream interface {
-	Send(*bridgev1.TunnelNetworkMessage) error
-	Recv() (*bridgev1.TunnelNetworkMessage, error)
-}
+const (
+	// Each direction of a conn copies through one buffer of this size.
+	copyBufferSize = 32 << 10
+	// Per Data message.
+	maxPayload = 64 << 10
+	// What a conn may have queued from a peer without flow control before the
+	// tunnel waits for it to be read.
+	queuedPayloads = 64
+)
 
-// Tunnel is a wrapper around a Tunnel gRPC stream that is responsible for managing the connections it is currently multiplexing. It is intended to be used by both client and server-side
+// Tunnel multiplexes conns over one Stream. It is used on both ends: the
+// intercept and the bridge server, or the intercept and a dev tunnel's relay.
 type Tunnel interface {
-	// AddConn Adds a connection to the map of connections that are tracked under this Tunnel. When a conn is added, it is placed into a sync map and a goroutine is spawned that reads from the conn. Whenever data is received from the conn, its data is forwarded to the underlying gRPC stream. A destination override may be provided to override the call for original destination from the Conn. The hostname is the DNS name associated with this connection (may be empty).
+	// AddConn sends conn through the tunnel, to destOverride if given or else
+	// where conn was headed. hostname is the DNS name the destination was
+	// looked up as (may be empty).
 	AddConn(conn net.Conn, destOverride string, hostname string)
 
-	// Start starts the pump for the Tunnel. It has a loop for receiving messages which are routed based on their connection ID.
+	// Start reads the stream, dialing a local conn for each the peer opens.
 	Start(ctx context.Context)
 
 	// Close cancels the tunnel context, closing all connections and stopping all goroutines.
 	Close() error
 
-	// Done returns a channel that is closed when the recv pump exits.
+	// Done returns a channel that is closed when the tunnel stops.
 	Done() <-chan struct{}
 }
 
@@ -48,15 +50,23 @@ func WithHijacker(h mitm.Hijacker) Option {
 	return func(t *tunnelImpl) { t.hijacker = h }
 }
 
-// New creates a Tunnel. When a message is received down the stream and a corresponding connection ID cannot be found, the dialer is called to instantiate that connection. The client-side uses the StaticPortDialer while the server-side uses a standard ContextDialer.
+// New creates a Tunnel over stream. A conn the peer opens is dialed with
+// dialer: the client side uses the StaticPortDialer while the server side uses
+// a standard ContextDialer.
 func New(dialer plumbing.ContextDialer, stream Stream, opts ...Option) Tunnel {
 	t := &tunnelImpl{
-		dialer: dialer,
-		stream: stream,
-		sendCh: make(chan *bridgev1.TunnelNetworkMessage, 64),
-		conns:  xsync.NewMapOf[string, io.ReadWriteCloser](),
-		done:   make(chan struct{}),
+		dialer:   dialer,
+		stream:   stream,
+		features: stream.Features(),
+		conns:    xsync.NewMapOf[string, *conn](),
+		done:     make(chan struct{}),
+		logger:   slog.Default(),
 	}
+	t.bufs.New = func() any {
+		buf := make([]byte, copyBufferSize)
+		return &buf
+	}
+	t.ctx, t.cancel = context.WithCancel(context.Background())
 	for _, o := range opts {
 		o(t)
 	}
@@ -67,8 +77,10 @@ type tunnelImpl struct {
 	dialer    plumbing.ContextDialer
 	hijacker  mitm.Hijacker
 	stream    Stream
-	sendCh    chan *bridgev1.TunnelNetworkMessage
-	conns     *xsync.MapOf[string, io.ReadWriteCloser]
+	features  Features
+	conns     *xsync.MapOf[string, *conn]
+	bufs      sync.Pool
+	logger    *slog.Logger
 	done      chan struct{}
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -77,229 +89,249 @@ type tunnelImpl struct {
 
 func (t *tunnelImpl) Done() <-chan struct{} { return t.done }
 
-func (t *tunnelImpl) AddConn(conn net.Conn, destOverride string, hostname string) {
-	srcAddr := conn.RemoteAddr().String()
-	dstAddr := conn.LocalAddr().String()
-	if destOverride != "" {
-		dstAddr = destOverride
-	}
-
-	srcHost, srcPortStr, _ := net.SplitHostPort(srcAddr)
-	srcPort, _ := strconv.Atoi(srcPortStr)
-
-	dstHost, dstPortStr, _ := net.SplitHostPort(dstAddr)
-	dstPort, _ := strconv.Atoi(dstPortStr)
-
-	connID := plumbing.ConnectionID(srcHost, srcPort, dstHost, dstPort)
-	src := &bridgev1.TunnelAddress{Ip: srcHost, Port: int32(srcPort)}
-	dst := &bridgev1.TunnelAddress{Ip: dstHost, Port: int32(dstPort)}
-
-	slog.Debug("Tunnel: adding connection", "conn_id", connID, "src", srcAddr, "dst", dstAddr, "hostname", hostname)
-
-	t.conns.Store(connID, conn)
-	go t.readFromConn(conn, connID, src, dst, hostname)
-}
-
-// readFromConn reads from a connection and forwards data to the stream via sendCh.
-func (t *tunnelImpl) readFromConn(conn io.ReadCloser, connID string, src, dst *bridgev1.TunnelAddress, hostname string) {
-	defer func() {
-		conn.Close()
-		t.conns.Delete(connID)
-	}()
-
-	buf := make([]byte, 32*1024)
-	for {
-		n, err := conn.Read(buf)
-		if n > 0 {
-			data := make([]byte, n)
-			copy(data, buf[:n])
+func (t *tunnelImpl) Start(ctx context.Context) {
+	stop := context.AfterFunc(ctx, t.cancel)
+	recv := make(chan *Message)
+	recvErr := make(chan error, 1)
+	go func() {
+		for {
+			m, err := t.stream.Recv()
+			if err != nil {
+				recvErr <- err
+				return
+			}
 			select {
-			case t.sendCh <- &bridgev1.TunnelNetworkMessage{
-				ConnectionId: connID,
-				Source:       src,
-				Dest:         dst,
-				Data:         data,
-				Hostname:     hostname,
-			}:
+			case recv <- m:
 			case <-t.ctx.Done():
 				return
 			}
 		}
-		if err != nil {
-			return
+	}()
+	go func() {
+		defer stop()
+		defer t.Close()
+		for {
+			select {
+			case m := <-recv:
+				t.handle(m)
+			case err := <-recvErr:
+				if errors.Is(err, io.EOF) {
+					t.logger.Info("Tunnel: stream closed (EOF)")
+				} else {
+					t.logger.Info("Tunnel: stream recv error", "error", err)
+				}
+				return
+			case <-t.ctx.Done():
+				return
+			}
 		}
-	}
+	}()
 }
 
 func (t *tunnelImpl) Close() error {
 	t.closeOnce.Do(func() {
 		t.cancel()
-		t.closeAll()
+		t.conns.Range(func(_ string, c *conn) bool {
+			c.stream.PeerReset()
+			return true
+		})
 		close(t.done)
 	})
 	return nil
 }
 
-func (t *tunnelImpl) Start(ctx context.Context) {
-	t.ctx, t.cancel = context.WithCancel(ctx)
+func (t *tunnelImpl) AddConn(local net.Conn, destOverride string, hostname string) {
+	srcAddr := local.RemoteAddr().String()
+	dstAddr := local.LocalAddr().String()
+	if destOverride != "" {
+		dstAddr = destOverride
+	}
+	info := &ConnInfo{Source: SplitAddr(srcAddr), Dest: SplitAddr(dstAddr), Hostname: hostname}
+	id := plumbing.ConnectionID(info.Source.Host, info.Source.Port, info.Dest.Host, info.Dest.Port)
+	logger := t.logger.With("conn_id", id, "src", srcAddr, "dst", dstAddr, "hostname", hostname)
+	logger.Debug("Tunnel: adding connection")
 
-	// Single goroutine drains the send channel onto the stream.
+	c := t.newConn(id, info)
 	go func() {
-		for {
-			select {
-			case msg, ok := <-t.sendCh:
-				if !ok {
-					return
-				}
-				if err := t.stream.Send(msg); err != nil {
-					slog.Info("Tunnel: stream send error", "conn_id", msg.GetConnectionId(), "error", err)
-					return
-				}
-				slog.Debug("Tunnel: sent", "conn_id", msg.GetConnectionId(), "bytes", len(msg.GetData()))
-			case <-t.ctx.Done():
-				return
-			}
+		if err := t.stream.Send(&Message{Kind: MessageOpen, ConnID: id, Conn: info}); err != nil {
+			logger.Info("Tunnel: open failed", "error", err)
+			c.stream.PeerReset()
+			_ = local.Close()
+			return
 		}
-	}()
-
-	// Recv pump runs until the stream closes or context is cancelled.
-	go func() {
-		defer t.Close()
-
-		recvCh := make(chan *bridgev1.TunnelNetworkMessage)
-		recvErr := make(chan error, 1)
-		go func() {
-			for {
-				msg, err := t.stream.Recv()
-				if err != nil {
-					recvErr <- err
-					return
-				}
-				recvCh <- msg
-			}
-		}()
-
-		for {
-			select {
-			case msg := <-recvCh:
-				connID := msg.GetConnectionId()
-
-				// Route to existing connection.
-				if conn, ok := t.conns.Load(connID); ok {
-					if msg.GetError() != "" {
-						conn.Close()
-						t.conns.Delete(connID)
-						continue
-					}
-					if data := msg.GetData(); len(data) > 0 {
-						if _, err := conn.Write(data); err != nil {
-							slog.Debug("Write to conn failed", "connection_id", connID, "error", err)
-							conn.Close()
-							t.conns.Delete(connID)
-						}
-					}
-					continue
-				}
-
-				// Unknown connection ID → this message opens it.
-				t.openConn(msg)
-
-			case err := <-recvErr:
-				if err != io.EOF {
-					slog.Info("Tunnel: stream recv error", "error", err)
-				} else {
-					slog.Info("Tunnel: stream closed (EOF)")
-				}
-				return
-
-			case <-t.ctx.Done():
-				return
-			}
-		}
+		t.pump(local, c)
 	}()
 }
 
-// openConn registers a buffered connection for msg's ID before dialing. The
-// peer has no explicit open message: the first chunk of a connection is what
-// opens it, and the next chunks can arrive before the dial completes. Storing
-// the buffer synchronously on the recv pump makes those chunks queue behind
-// the first one instead of each dialing a second connection under the same ID
-// and splitting the stream between them.
-func (t *tunnelImpl) openConn(msg *bridgev1.TunnelNetworkMessage) {
-	connID := msg.GetConnectionId()
-	if msg.GetDest() == nil {
-		slog.Info("Tunnel: ignoring message with no dest", "conn_id", connID)
+// handle routes one of the peer's messages to its conn.
+func (t *tunnelImpl) handle(m *Message) {
+	if m.Kind == MessageOpen {
+		t.open(m)
 		return
 	}
-
-	buffered := ioutil.NewBufferedReadWriteCloser()
-	t.conns.Store(connID, buffered)
-	if data := msg.GetData(); len(data) > 0 {
-		_, _ = buffered.Write(data)
+	c, ok := t.conns.Load(m.ConnID)
+	if !ok {
+		return
 	}
-	go t.dial(msg, buffered)
+	switch m.Kind {
+	case MessageData:
+		c.stream.Deliver(t.ctx, m.Payload)
+	case MessageCloseWrite:
+		c.stream.PeerClosed()
+	case MessageReset:
+		c.stream.PeerReset()
+	case MessageWindow:
+		c.stream.Conn().Grant(m.Bytes)
+	}
 }
 
-func (t *tunnelImpl) dial(msg *bridgev1.TunnelNetworkMessage, buffered ioutil.BufferedReadWriteCloser) {
-	connID := msg.GetConnectionId()
-	hostname := msg.GetHostname()
-	dest := msg.GetDest()
-
-	// Resolve the connection: hijacker gets first shot, then fall through to the dialer.
-	var conn net.Conn
-	var err error
-
-	if t.hijacker != nil && t.hijacker.ShouldHijack(msg) {
-		conn, err = t.hijacker.Hijack(t.ctx, msg)
+// open registers a conn the peer opened before dialing it, so its Data queues
+// on it during the dial.
+func (t *tunnelImpl) open(m *Message) {
+	if m.Conn == nil {
+		t.logger.Info("Tunnel: ignoring open with no dest", "conn_id", m.ConnID)
+		return
+	}
+	c := t.newConn(m.ConnID, m.Conn.Reply())
+	go func() {
+		local, err := t.dial(m.Conn)
 		if err != nil {
-			slog.Info("Tunnel: hijack failed, falling back to dialer", "conn_id", connID, "hostname", hostname, "error", err)
+			t.logger.Info("Tunnel: connect failed", "conn_id", m.ConnID, "hostname", m.Conn.Hostname, "error", err)
+			_ = c.stream.Close()
+			return
 		}
-	}
-
-	if conn == nil {
-		addr := fmt.Sprintf("%s:%d", dest.GetIp(), dest.GetPort())
-		conn, err = t.dialer.DialContext(t.ctx, "tcp", addr)
-	}
-
-	if err != nil {
-		slog.Info("Tunnel: connect failed", "conn_id", connID, "hostname", hostname, "error", err)
-		t.deleteIfSame(connID, buffered)
-		buffered.Close()
-		select {
-		case t.sendCh <- &bridgev1.TunnelNetworkMessage{
-			ConnectionId: connID,
-			Error:        err.Error(),
-		}:
-		case <-t.ctx.Done():
-		}
-		return
-	}
-
-	if err := buffered.Set(conn); err != nil {
-		slog.Debug("Tunnel: dropping dialed connection", "connection_id", connID, "error", err)
-		t.deleteIfSame(connID, buffered)
-		return
-	}
-
-	go t.readFromConn(buffered, connID, dest, msg.GetSource(), hostname)
+		t.pump(local, c)
+	}()
 }
 
-// deleteIfSame removes connID only while it still maps to conn, so a connection
-// the peer has since reopened under the same ID is left alone.
-func (t *tunnelImpl) deleteIfSame(connID string, conn ioutil.BufferedReadWriteCloser) {
-	t.conns.Compute(connID, func(cur io.ReadWriteCloser, loaded bool) (io.ReadWriteCloser, bool) {
+// dial gives the hijacker first shot at a conn the peer opened, then falls
+// through to the dialer.
+func (t *tunnelImpl) dial(info *ConnInfo) (net.Conn, error) {
+	dest := info.Dest.String()
+	if t.hijacker != nil && t.hijacker.ShouldHijack(info.Hostname) {
+		local, err := t.hijacker.Hijack(t.ctx, info.Hostname, dest)
+		if err == nil {
+			return local, nil
+		}
+		t.logger.Info("Tunnel: hijack failed, falling back to dialer", "hostname", info.Hostname, "error", err)
+	}
+	return t.dialer.DialContext(t.ctx, "tcp", dest)
+}
+
+// pump copies between local and c in both directions, each through a buffer
+// from the pool, then closes both. Either side's EOF half-closes the other; a
+// failure either way closes both, which resets c.
+func (t *tunnelImpl) pump(local net.Conn, c *conn) {
+	remote := c.stream.Conn()
+	toRemote := t.bufs.Get().(*[]byte)
+	fromRemote := t.bufs.Get().(*[]byte)
+	defer func() {
+		t.bufs.Put(toRemote)
+		t.bufs.Put(fromRemote)
+	}()
+
+	// Once the conn is over, reading remote fails and aborts too.
+	abort := sync.OnceFunc(func() {
+		_ = remote.Close()
+		_ = local.Close()
+	})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		copyHalf(remote, local, *toRemote, abort)
+	}()
+	go func() {
+		defer wg.Done()
+		copyHalf(local, remote, *fromRemote, abort)
+	}()
+	wg.Wait()
+	abort()
+
+	st := remote.Stats()
+	t.logger.Debug("Tunnel: connection closed",
+		"conn_id", c.id,
+		"bytes_sent", st.BytesWritten,
+		"bytes_received", st.BytesRead,
+		"window_wait", st.WriteWait,
+		"window_waits", st.WriteWaits,
+	)
+}
+
+// copyHalf copies src to dst until src ends, then half-closes dst.
+func copyHalf(dst, src net.Conn, buf []byte, abort func()) {
+	// Hides ReadFrom and WriteTo, which would copy through buffers of their own.
+	_, err := io.CopyBuffer(struct{ io.Writer }{dst}, struct{ io.Reader }{src}, buf)
+	if err != nil {
+		abort()
+		return
+	}
+	if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+	}
+}
+
+// conn is one of the tunnel's conns, as the plumbing.Frames its MuxStream
+// writes: each frame is a Message on the tunnel's Stream.
+type conn struct {
+	t      *tunnelImpl
+	id     string
+	stream *plumbing.MuxStream
+}
+
+// newConn registers a conn that sends as info addresses it.
+func (t *tunnelImpl) newConn(id string, info *ConnInfo) *conn {
+	c := &conn{t: t, id: id}
+	queue := 0
+	if t.features.Window == 0 {
+		queue = queuedPayloads
+	}
+	c.stream = plumbing.NewMuxStream(c, plumbing.MuxConfig{
+		MaxFrame: maxPayload,
+		Queue:    queue,
+		Window:   t.features.Window,
+		Local:    addr(info.Source.String()),
+		Remote:   addr(info.Dest.String()),
+	})
+	t.conns.Store(id, c)
+	return c
+}
+
+func (c *conn) Data(payload []byte) error {
+	return c.t.stream.Send(&Message{Kind: MessageData, ConnID: c.id, Payload: payload})
+}
+
+func (c *conn) CloseWrite() error {
+	err := c.t.stream.Send(&Message{Kind: MessageCloseWrite, ConnID: c.id})
+	if !c.t.features.HalfClose {
+		return errors.ErrUnsupported
+	}
+	return err
+}
+
+func (c *conn) Reset(reason string) error {
+	return c.t.stream.Send(&Message{Kind: MessageReset, ConnID: c.id, Reason: reason})
+}
+
+func (c *conn) Window(n int) error {
+	if c.t.features.Window == 0 {
+		return nil
+	}
+	return c.t.stream.Send(&Message{Kind: MessageWindow, ConnID: c.id, Bytes: n})
+}
+
+// Release forgets the conn, unless another has since taken its id.
+func (c *conn) Release() {
+	c.t.conns.Compute(c.id, func(cur *conn, loaded bool) (*conn, bool) {
 		if !loaded {
 			return nil, true
 		}
-		b, ok := cur.(ioutil.BufferedReadWriteCloser)
-		return cur, ok && b == conn
+		return cur, cur == c
 	})
 }
 
-func (t *tunnelImpl) closeAll() {
-	t.conns.Range(func(key string, conn io.ReadWriteCloser) bool {
-		conn.Close()
-		t.conns.Delete(key)
-		return true
-	})
-}
+type addr string
+
+func (a addr) Network() string { return "tunnel" }
+func (a addr) String() string  { return string(a) }
