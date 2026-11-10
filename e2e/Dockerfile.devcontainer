@@ -3,7 +3,12 @@ FROM alpine:3.20
 # Install runtime dependencies
 # iptables is needed for traffic interception
 # openssh-client is needed for SSH connections
-RUN apk add --no-cache ca-certificates iptables openssh-client busybox-extras curl
+# shadow-login provides sg, which the bridge feature runs intercept under
+RUN apk add --no-cache ca-certificates iptables openssh-client busybox-extras curl shadow-login
+
+# The group the bridge feature runs intercept as, so iptables can tell
+# bridge's own traffic apart from the app's.
+RUN addgroup -S _bridge
 
 # Copy the pre-built binary
 COPY bridge /usr/local/bin/bridge

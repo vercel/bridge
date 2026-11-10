@@ -136,6 +136,17 @@ func (d *Dialer) Close() error {
 	return d.conn.Close()
 }
 
+// Closed reports whether the SPDY connection has gone away, e.g. because the
+// API server or kubelet dropped it. A closed Dialer can't create streams.
+func (d *Dialer) Closed() bool {
+	select {
+	case <-d.conn.CloseChan():
+		return true
+	default:
+		return false
+	}
+}
+
 // spdyConn wraps an SPDY data stream as a net.Conn.
 type spdyConn struct {
 	dataStream  httpstream.Stream
