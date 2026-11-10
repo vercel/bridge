@@ -346,6 +346,75 @@ func (s *InterceptSuite) TestIngress() {
 	require.Contains(t, wgetOutput, "ok", "expected 'ok' from test server via ingress tunnel")
 }
 
+// startWitness starts a container on the bridge network under the alias
+// "witness", a name the intercept container's own Docker DNS can answer
+// without the tunnel. It returns the witness's IP.
+func (s *InterceptSuite) startWitness(t *testing.T) string {
+	witnessC, err := testcontainers.GenericContainer(s.ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:    s.interceptImg,
+			Cmd:      []string{"sleep", "300"},
+			Networks: []string{s.bridgeNet.Name},
+			NetworkAliases: map[string][]string{
+				s.bridgeNet.Name: {"witness"},
+			},
+		},
+		Started: true,
+	})
+	require.NoError(t, err, "failed to start witness container")
+	t.Cleanup(func() { testcontainers.TerminateContainer(witnessC) })
+
+	inspect, err := witnessC.Inspect(s.ctx)
+	require.NoError(t, err, "failed to inspect witness container")
+	ip := inspect.NetworkSettings.Networks[s.bridgeNet.Name].IPAddress
+	require.NotEmpty(t, ip, "witness container has no IP on bridge network")
+	return ip
+}
+
+// TestBridgeResolvesWhileTunnelIsDown drops the tunnel under a running
+// intercept. Redialing the proxy needs real DNS (in a cluster: the API server,
+// then aws eks get-token → STS), so bridge's own group must still resolve
+// names while the tunnel is down, or the redial asks the broken tunnel and the
+// intercept never recovers. The app must not: its names belong to the tunnel.
+func (s *InterceptSuite) TestBridgeResolvesWhileTunnelIsDown() {
+	t := s.T()
+
+	proxyC, proxyIP := s.startProxy(t, []string{"bridge", "--log-paths", "stderr", "server", "--addr", ":9090"})
+	interceptC := s.startIntercept(t)
+	witnessIP := s.startWitness(t)
+
+	// Run intercept the way the bridge feature does: as root, under _bridge.
+	exitCode, reader, err := interceptC.Exec(s.ctx, []string{
+		"sh", "-c",
+		fmt.Sprintf(`sg _bridge -c 'bridge --log-paths stderr intercept --server-addr %s:9090 --forward-domains "*"' > /tmp/bridge-intercept.log 2>&1 &`, proxyIP),
+	})
+	require.NoError(t, err, "failed to exec bridge intercept")
+	io.Copy(io.Discard, reader)
+	require.Equal(t, 0, exitCode, "bridge intercept exec failed")
+
+	ct := container.NewDockerClient()
+	require.NoError(t, intercept.WaitForReady(s.ctx, ct, interceptC.GetContainerID()), "bridge intercept did not become ready")
+
+	stopTimeout := 5 * time.Second
+	require.NoError(t, proxyC.Stop(s.ctx, &stopTimeout), "failed to stop proxy")
+	t.Log("Proxy stopped; the tunnel is down")
+
+	lookup := func(cmd string) string {
+		_, reader, err := interceptC.Exec(s.ctx, []string{"sh", "-c", cmd})
+		require.NoError(t, err, "lookup exec failed: %s", cmd)
+		data, _ := io.ReadAll(reader)
+		t.Logf("[%s]\n%s", cmd, strings.TrimSpace(string(data)))
+		return string(data)
+	}
+
+	// The trailing dot stops busybox nslookup from trying only the host's
+	// search domain (GitHub runners inherit an Azure one).
+	require.Contains(t, lookup(`sg _bridge -c 'nslookup witness.'`), witnessIP,
+		"bridge's own lookups must not depend on the tunnel")
+	require.NotContains(t, lookup(`nslookup witness.`), witnessIP,
+		"the app's lookups must still go through the tunnel, not around it")
+}
+
 func TestInterceptSuite(t *testing.T) {
 	suite.Run(t, new(InterceptSuite))
 }

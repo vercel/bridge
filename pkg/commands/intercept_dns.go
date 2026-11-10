@@ -47,6 +47,33 @@ func StartDNS(cfg DNSConfig) (*DNSComponent, error) {
 	}, nil
 }
 
+// StartBypassDNS starts a DNS server on a random loopback port that only asks
+// upstream, never the tunnel. SetupIptables sends the intercept's own group's
+// DNS here, so re-establishing a dropped tunnel never waits on that tunnel.
+func StartBypassDNS(upstream string) (*DNSComponent, error) {
+	dnsServer, err := bridgedns.New(bridgedns.Config{
+		ListenAddr: "127.0.0.1:0",
+		Client:     bridgedns.NewSystemExchangeClient(upstream),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create bypass DNS server: %w", err)
+	}
+
+	go func() {
+		if err := dnsServer.ListenAndServe(); err != nil {
+			slog.Error("Bypass DNS server error", "error", err)
+		}
+	}()
+
+	port := dnsServer.Port()
+	slog.Info("Bypass DNS enabled for bridge's own lookups", "port", port, "upstream", upstream)
+
+	return &DNSComponent{
+		server: dnsServer,
+		port:   port,
+	}, nil
+}
+
 // Port returns the port the DNS server is listening on.
 func (d *DNSComponent) Port() int {
 	return d.port

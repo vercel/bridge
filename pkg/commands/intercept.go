@@ -212,7 +212,7 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	registry := conntrack.New(pool)
 
 	// Start DNS (optional)
-	var dns *DNSComponent
+	var dns, bypassDNS *DNSComponent
 	var originalResolvConf []byte
 	if len(forwardDomains) > 0 {
 		// Read the original nameserver before we modify /etc/resolv.conf
@@ -228,6 +228,13 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 			return fmt.Errorf("failed to start DNS: %w", err)
 		}
 
+		bypassDNS, err = StartBypassDNS(originalNS)
+		if err != nil {
+			dns.Stop()
+			registry.Stop()
+			return fmt.Errorf("failed to start bypass DNS: %w", err)
+		}
+
 		// Point /etc/resolv.conf at our DNS server
 		originalResolvConf, err = updateResolvConf("127.0.0.1")
 		if err != nil {
@@ -236,21 +243,25 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	}
 
 	// Start proxy (transparent proxy + tunnel)
-	var dnsPortForIPTables int
+	var dnsPortForIPTables, bypassDNSPort int
 	if dns != nil {
 		dnsPortForIPTables = dns.Port()
 	}
+	if bypassDNS != nil {
+		bypassDNSPort = bypassDNS.Port()
+	}
 
-	// Pass the current process GID so iptables can exclude bridge's own DNS
-	// traffic from the UDP redirect. This prevents a circular dependency when
+	// Pass the current process GID so iptables can send bridge's own DNS
+	// traffic to the bypass server. This prevents a circular dependency when
 	// gRPC reconnects and needs real DNS for EKS auth. GID 0 (root) is not
 	// excluded since that would bypass the redirect for most container processes.
 	proxyComp, err := StartProxy(ProxyConfig{
-		Tunnel:     tun,
-		ProxyPort:  proxyPort,
-		Registry:   registry,
-		DNSPort:    dnsPortForIPTables,
-		ExcludeGID: os.Getgid(),
+		Tunnel:        tun,
+		ProxyPort:     proxyPort,
+		Registry:      registry,
+		DNSPort:       dnsPortForIPTables,
+		ExcludeGID:    os.Getgid(),
+		BypassDNSPort: bypassDNSPort,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to start proxy listener: %w", err)
@@ -316,6 +327,9 @@ func doIntercept(ctx context.Context, c *cli.Command) error {
 	// Cleanup in order: DNS → resolv.conf → registry → proxy → FUSE mounts
 	if dns != nil {
 		dns.Stop()
+	}
+	if bypassDNS != nil {
+		bypassDNS.Stop()
 	}
 	restoreResolvConf(originalResolvConf)
 	registry.Stop()

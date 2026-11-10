@@ -19,21 +19,23 @@ const (
 
 // ProxyComponent manages the transparent proxy listener, tunnel client, and iptables rules.
 type ProxyComponent struct {
-	tunnel     tunnel.Tunnel
-	listener   net.Listener
-	port       int
-	registry   *conntrack.Registry
-	dnsPort    int
-	excludeGID int
+	tunnel        tunnel.Tunnel
+	listener      net.Listener
+	port          int
+	registry      *conntrack.Registry
+	dnsPort       int
+	excludeGID    int
+	bypassDNSPort int
 }
 
 // ProxyConfig holds configuration for starting the proxy component.
 type ProxyConfig struct {
-	Tunnel     tunnel.Tunnel
-	ProxyPort  int // 0 = random
-	Registry   *conntrack.Registry
-	DNSPort    int // If >0, redirect all UDP :53 traffic to this port
-	ExcludeGID int // If >0, exclude this GID from DNS redirect
+	Tunnel        tunnel.Tunnel
+	ProxyPort     int // 0 = random
+	Registry      *conntrack.Registry
+	DNSPort       int // If >0, redirect all UDP :53 traffic to this port
+	ExcludeGID    int // If >0, send this GID's UDP :53 traffic to BypassDNSPort instead
+	BypassDNSPort int // Upstream-only DNS server for ExcludeGID
 }
 
 // StartProxy creates a transparent proxy listener and initializes the tunnel client.
@@ -46,12 +48,13 @@ func StartProxy(cfg ProxyConfig) (*ProxyComponent, error) {
 	addr := listener.Addr().(*net.TCPAddr)
 
 	p := &ProxyComponent{
-		tunnel:     cfg.Tunnel,
-		listener:   listener,
-		port:       addr.Port,
-		registry:   cfg.Registry,
-		dnsPort:    cfg.DNSPort,
-		excludeGID: cfg.ExcludeGID,
+		tunnel:        cfg.Tunnel,
+		listener:      listener,
+		port:          addr.Port,
+		registry:      cfg.Registry,
+		dnsPort:       cfg.DNSPort,
+		excludeGID:    cfg.ExcludeGID,
+		bypassDNSPort: cfg.BypassDNSPort,
 	}
 
 	return p, nil
@@ -69,6 +72,19 @@ func (p *ProxyComponent) SetupIptables() error {
 		return fmt.Errorf("iptables not found: %w", err)
 	}
 
+	for _, args := range p.iptablesRules() {
+		cmd := exec.Command(args[0], args[1:]...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("iptables %v failed: %w: %s", args[1:], err, output)
+		}
+	}
+
+	slog.Info("iptables rules configured", "proxy_port", p.port, "proxy_cidr", proxyCIDR)
+	return nil
+}
+
+// iptablesRules returns the iptables commands SetupIptables runs, in order.
+func (p *ProxyComponent) iptablesRules() [][]string {
 	cmds := [][]string{
 		// Create a new chain for our rules
 		{"iptables", "-t", "nat", "-N", "BRIDGE_INTERCEPT"},
@@ -85,17 +101,19 @@ func (p *ProxyComponent) SetupIptables() error {
 	// instead of /etc/resolv.conf. The DNS server's own fallback queries use
 	// TCP, so they are not affected by this rule.
 	if p.dnsPort > 0 {
-		// Exclude bridge's own GID from the DNS redirect. When the gRPC
-		// connection drops and reconnects, the k8spf dialer calls
+		// Send bridge's own GID to the bypass DNS server instead. When the
+		// gRPC connection drops and reconnects, the k8spf dialer calls
 		// resolvePod → K8s API → aws eks get-token, which needs real DNS
-		// to reach sts.amazonaws.com. Without this exclusion, the query
-		// loops back to our DNS server which depends on the broken tunnel.
-		if p.excludeGID > 0 {
+		// for the API server and sts.amazonaws.com. /etc/resolv.conf names
+		// only our DNS server, which asks the broken tunnel, so a RETURN
+		// here isn't enough: the query still reaches 127.0.0.1:53 and the
+		// intercept never recovers.
+		if p.excludeGID > 0 && p.bypassDNSPort > 0 {
 			cmds = append(cmds,
 				[]string{"iptables", "-t", "nat", "-A", "BRIDGE_INTERCEPT",
 					"-p", "udp", "--dport", "53",
 					"-m", "owner", "--gid-owner", fmt.Sprintf("%d", p.excludeGID),
-					"-j", "RETURN"},
+					"-j", "REDIRECT", "--to-ports", fmt.Sprintf("%d", p.bypassDNSPort)},
 			)
 		}
 		cmds = append(cmds,
@@ -104,15 +122,7 @@ func (p *ProxyComponent) SetupIptables() error {
 		)
 	}
 
-	for _, args := range cmds {
-		cmd := exec.Command(args[0], args[1:]...)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("iptables %v failed: %w: %s", args[1:], err, output)
-		}
-	}
-
-	slog.Info("iptables rules configured", "proxy_port", p.port, "proxy_cidr", proxyCIDR)
-	return nil
+	return cmds
 }
 
 // Start begins the transparent proxy accept loop in the background.
