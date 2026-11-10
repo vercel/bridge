@@ -14,13 +14,14 @@ import (
 // ShouldHijack for each new connection; if it returns true the tunnel calls
 // Hijack instead of dialing the real destination.
 type Hijacker interface {
-	// ShouldHijack returns true if the hijacker wants to handle this connection.
-	ShouldHijack(msg *bridgev1.TunnelNetworkMessage) bool
+	// ShouldHijack returns true if the hijacker wants to handle a connection
+	// to hostname (may be empty).
+	ShouldHijack(hostname string) bool
 
 	// Hijack returns a net.Conn that the tunnel reads from and writes to,
-	// just like a dialed connection. The hijacker is responsible for
-	// servicing the other end (e.g. via a net.Pipe goroutine).
-	Hijack(ctx context.Context, msg *bridgev1.TunnelNetworkMessage) (net.Conn, error)
+	// just like a connection dialed to dest ("host:port"). The hijacker is
+	// responsible for servicing the other end (e.g. via a net.Pipe goroutine).
+	Hijack(ctx context.Context, hostname, dest string) (net.Conn, error)
 }
 
 // FacadeHijacker implements Hijacker by matching incoming connections against
@@ -54,10 +55,9 @@ func NewFacadeHijacker(facades []*bridgev1.ServerFacade, certPEM, keyPEM []byte)
 	return &FacadeHijacker{ca: ca, facades: compiled}, nil
 }
 
-// ShouldHijack returns true if the message's hostname matches any facade's
-// host glob pattern.
-func (h *FacadeHijacker) ShouldHijack(msg *bridgev1.TunnelNetworkMessage) bool {
-	hostname := msg.GetHostname()
+// ShouldHijack returns true if hostname matches any facade's host glob
+// pattern.
+func (h *FacadeHijacker) ShouldHijack(hostname string) bool {
 	if hostname == "" {
 		return false
 	}
@@ -71,9 +71,7 @@ func (h *FacadeHijacker) ShouldHijack(msg *bridgev1.TunnelNetworkMessage) bool {
 
 // Hijack returns a net.Conn for the tunnel to read/write. It finds all facades
 // matching the hostname and creates a Handler to serve the connection.
-func (h *FacadeHijacker) Hijack(ctx context.Context, msg *bridgev1.TunnelNetworkMessage) (net.Conn, error) {
-	hostname := msg.GetHostname()
-
+func (h *FacadeHijacker) Hijack(ctx context.Context, hostname, dest string) (net.Conn, error) {
 	matched := h.matchingFacades(hostname)
 	if len(matched) == 0 {
 		return nil, fmt.Errorf("no matching facades for hostname %q", hostname)
@@ -81,13 +79,10 @@ func (h *FacadeHijacker) Hijack(ctx context.Context, msg *bridgev1.TunnelNetwork
 
 	tunnelConn, handlerConn := net.Pipe()
 
-	dest := msg.GetDest()
-	destAddr := fmt.Sprintf("%s:%d", dest.GetIp(), dest.GetPort())
-
 	handler := &Handler{
-		CA:      h.ca,
-		Facades: matched,
-		DestAddr: destAddr,
+		CA:       h.ca,
+		Facades:  matched,
+		DestAddr: dest,
 	}
 
 	go func() {

@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	InterceptorService_GetStatus_FullMethodName = "/bridge.v1.InterceptorService/GetStatus"
-	InterceptorService_Probe_FullMethodName     = "/bridge.v1.InterceptorService/Probe"
+	InterceptorService_GetStatus_FullMethodName      = "/bridge.v1.InterceptorService/GetStatus"
+	InterceptorService_Probe_FullMethodName          = "/bridge.v1.InterceptorService/Probe"
+	InterceptorService_SetTunnelToken_FullMethodName = "/bridge.v1.InterceptorService/SetTunnelToken"
 )
 
 // InterceptorServiceClient is the client API for InterceptorService service.
@@ -43,6 +44,11 @@ type InterceptorServiceClient interface {
 	// immediate check passed. Useful as a "is the app healthy right now?"
 	// primitive that ignores any stale state from a previous dev session.
 	Probe(ctx context.Context, in *ProbeRequest, opts ...grpc.CallOption) (*ProbeResponse, error)
+	// SetTunnelToken gives an intercept on a dev tunnel
+	// (--tunnel-protocol=dev-tunnel) its client token, from create-session. One
+	// started without a token, or whose token the relay refused
+	// (TUNNEL_STATE_NEEDS_TOKEN), connects with it.
+	SetTunnelToken(ctx context.Context, in *SetTunnelTokenRequest, opts ...grpc.CallOption) (*SetTunnelTokenResponse, error)
 }
 
 type interceptorServiceClient struct {
@@ -73,6 +79,16 @@ func (c *interceptorServiceClient) Probe(ctx context.Context, in *ProbeRequest, 
 	return out, nil
 }
 
+func (c *interceptorServiceClient) SetTunnelToken(ctx context.Context, in *SetTunnelTokenRequest, opts ...grpc.CallOption) (*SetTunnelTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetTunnelTokenResponse)
+	err := c.cc.Invoke(ctx, InterceptorService_SetTunnelToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InterceptorServiceServer is the server API for InterceptorService service.
 // All implementations must embed UnimplementedInterceptorServiceServer
 // for forward compatibility.
@@ -93,6 +109,11 @@ type InterceptorServiceServer interface {
 	// immediate check passed. Useful as a "is the app healthy right now?"
 	// primitive that ignores any stale state from a previous dev session.
 	Probe(context.Context, *ProbeRequest) (*ProbeResponse, error)
+	// SetTunnelToken gives an intercept on a dev tunnel
+	// (--tunnel-protocol=dev-tunnel) its client token, from create-session. One
+	// started without a token, or whose token the relay refused
+	// (TUNNEL_STATE_NEEDS_TOKEN), connects with it.
+	SetTunnelToken(context.Context, *SetTunnelTokenRequest) (*SetTunnelTokenResponse, error)
 	mustEmbedUnimplementedInterceptorServiceServer()
 }
 
@@ -108,6 +129,9 @@ func (UnimplementedInterceptorServiceServer) GetStatus(context.Context, *GetStat
 }
 func (UnimplementedInterceptorServiceServer) Probe(context.Context, *ProbeRequest) (*ProbeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Probe not implemented")
+}
+func (UnimplementedInterceptorServiceServer) SetTunnelToken(context.Context, *SetTunnelTokenRequest) (*SetTunnelTokenResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetTunnelToken not implemented")
 }
 func (UnimplementedInterceptorServiceServer) mustEmbedUnimplementedInterceptorServiceServer() {}
 func (UnimplementedInterceptorServiceServer) testEmbeddedByValue()                            {}
@@ -166,6 +190,24 @@ func _InterceptorService_Probe_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InterceptorService_SetTunnelToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetTunnelTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InterceptorServiceServer).SetTunnelToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InterceptorService_SetTunnelToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InterceptorServiceServer).SetTunnelToken(ctx, req.(*SetTunnelTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // InterceptorService_ServiceDesc is the grpc.ServiceDesc for InterceptorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -180,6 +222,10 @@ var InterceptorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Probe",
 			Handler:    _InterceptorService_Probe_Handler,
+		},
+		{
+			MethodName: "SetTunnelToken",
+			Handler:    _InterceptorService_SetTunnelToken_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

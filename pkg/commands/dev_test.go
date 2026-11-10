@@ -37,6 +37,10 @@ func (f *fakeInterceptor) Probe(_ context.Context, _ *bridgev1.ProbeRequest, _ .
 	return v.(*bridgev1.ProbeResponse), nil
 }
 
+func (f *fakeInterceptor) SetTunnelToken(_ context.Context, _ *bridgev1.SetTunnelTokenRequest, _ ...grpc.CallOption) (*bridgev1.SetTunnelTokenResponse, error) {
+	return &bridgev1.SetTunnelTokenResponse{}, nil
+}
+
 func passing() *bridgev1.ProbeCheckResult  { return &bridgev1.ProbeCheckResult{Passed: true} }
 func failing() *bridgev1.ProbeCheckResult  { return &bridgev1.ProbeCheckResult{Passed: false, Error: "boom"} }
 

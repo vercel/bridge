@@ -4,6 +4,10 @@ managed:
   override:
     - file_option: go_package_prefix
       value: github.com/vercel/bridge/api/go
+    # Vendored from vercel/api, which names it vercel.api.dev_tunnel.v1.
+    - file_option: go_package
+      path: vercel/api/dev_tunnel/v1/tunnel.proto
+      value: github.com/vercel/bridge/api/go/vercel/api/dev_tunnel/v1;devtunnel
   disable:
     - file_option: go_package_prefix
       module: buf.build/bufbuild/protovalidate
