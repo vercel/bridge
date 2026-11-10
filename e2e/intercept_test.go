@@ -407,9 +407,11 @@ func (s *InterceptSuite) TestBridgeResolvesWhileTunnelIsDown() {
 		return string(data)
 	}
 
-	require.Contains(t, lookup(`sg _bridge -c 'nslookup witness'`), witnessIP,
+	// The trailing dot stops busybox nslookup from trying only the host's
+	// search domain (GitHub runners inherit an Azure one).
+	require.Contains(t, lookup(`sg _bridge -c 'nslookup witness.'`), witnessIP,
 		"bridge's own lookups must not depend on the tunnel")
-	require.NotContains(t, lookup(`nslookup witness`), witnessIP,
+	require.NotContains(t, lookup(`nslookup witness.`), witnessIP,
 		"the app's lookups must still go through the tunnel, not around it")
 }
 
