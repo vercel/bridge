@@ -74,6 +74,15 @@ func Mount(ctx context.Context, mountpoint, remoteRoot string, client bridgev1.B
 			// user; AllowOther + default permissions let all users in the
 			// container read the mount.
 			DisableXAttrs: true,
+			// Call mount(2) directly when running as root, falling back to
+			// fusermount otherwise. Ubuntu 25.04+ hosts (including GitHub's
+			// ubuntu-latest runners) ship an AppArmor profile that attaches to
+			// the fusermount3 binary by path, even inside a container started
+			// with apparmor=unconfined, and it denies these mounts with
+			// "fusermount3: mount failed: Permission denied". The interceptor
+			// runs as root with CAP_SYS_ADMIN, so it doesn't need the setuid
+			// helper. See https://github.com/moby/moby/issues/50013.
+			DirectMount: os.Geteuid() == 0,
 		},
 	}
 
